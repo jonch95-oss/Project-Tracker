@@ -1,0 +1,182 @@
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
+import { ErrorState } from "@/components/ui/architecture";
+import { Meter, PageHeader, Panel, Skeleton, StatusPill, type Tone } from "@/components/ui/primitives";
+import { formatBytes, formatUsage, type UsageLevel } from "@/core/freeTier";
+import { formatDateTimeET } from "@/core/time";
+import { useTRPC } from "@/lib/trpc";
+
+const LEVEL: Record<UsageLevel, { tone: Tone; label: string }> = {
+  ok: { tone: "done", label: "Within free tier" },
+  warn: { tone: "attention", label: "Over 70%" },
+  critical: { tone: "blocked", label: "Over 90%" },
+  exceeded: { tone: "blocked", label: "At limit" },
+};
+
+export function SystemView() {
+  const trpc = useTRPC();
+  const q = useQuery({ ...trpc.system.overview.queryOptions(), refetchInterval: 60_000 });
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Owner"
+        title="System"
+        description="Running cost is $0/month. Every service stays on its free tier; you are emailed at 70% of any limit and nothing upgrades automatically."
+      />
+      {q.isPending ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {Array.from({ length: 6 }, (_, i) => (
+            <Skeleton key={i} className="h-28 rounded-card" />
+          ))}
+        </div>
+      ) : q.isError ? (
+        <ErrorState onRetry={() => q.refetch()} />
+      ) : (
+        <div className="flex flex-col gap-8">
+          <section aria-labelledby="usage-h">
+            <h2 id="usage-h" className="serif mb-4 text-[28px] leading-8">
+              Free-tier usage
+            </h2>
+            <ul className="grid gap-6 sm:grid-cols-2">
+              {q.data.usage.map((u) => {
+                const lvl = u.used === null ? { tone: "neutral" as Tone, label: "Not connected" } : LEVEL[u.level];
+                return (
+                  <li key={u.key} className="rounded-card border border-border bg-surface p-6">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="eyebrow">{u.service}</p>
+                        <p className="mt-1 text-[15px] font-medium">{u.metric}</p>
+                      </div>
+                      <StatusPill tone={lvl.tone}>{lvl.label}</StatusPill>
+                    </div>
+                    {u.used === null ? (
+                      <p className="mt-4 text-sm text-muted">
+                        Limit {formatUsage(u.limit, u.unit)}. Needs a read-only Cloudflare analytics token to measure; far below the limit at this team&apos;s size.
+                      </p>
+                    ) : (
+                      <p className="num mt-4 text-sm">
+                        <span className="serif text-[28px] leading-8">{formatUsage(u.used, u.unit)}</span>
+                        <span className="text-muted"> of {formatUsage(u.limit, u.unit)}</span>
+                      </p>
+                    )}
+                    <div className="mt-3">
+                      <Meter valueBps={u.bps} tone={lvl.tone} label={`${u.service} ${u.metric}`} />
+                    </div>
+                    <p className="mt-3 text-[12px] text-faint">
+                      {u.period === "total" ? "Total" : u.period === "day" ? "Resets daily (UTC)" : "Resets monthly"} ·{" "}
+                      <a href={u.source} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                        limit source
+                      </a>
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+
+          <div className="grid gap-6 xl:grid-cols-2">
+            <Panel title="Scheduled jobs" description="Run by GitHub Actions. Failures email the owner and appear here.">
+              {q.data.jobs.length === 0 ? (
+                <p className="text-sm text-muted">No job runs recorded yet.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[12px] text-muted">
+                      <th className="pb-2 font-medium">Job</th>
+                      <th className="pb-2 font-medium">When</th>
+                      <th className="pb-2 text-right font-medium">Min</th>
+                      <th className="pb-2 text-right font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {q.data.jobs.map((j) => (
+                      <tr key={j.id}>
+                        <td className="py-2.5 pr-2">{j.job}</td>
+                        <td className="py-2.5 pr-2 text-muted">{formatDateTimeET(j.startedAt)}</td>
+                        <td className="py-2.5 text-right">{j.billableMinutes}</td>
+                        <td className="py-2.5 text-right">
+                          <StatusPill tone={j.status === "succeeded" ? "done" : j.status === "failed" ? "blocked" : "attention"}>{j.status}</StatusPill>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Panel>
+
+            <Panel title="Errors, last 7 days" description="Grouped by cause. A summary is emailed daily when there are any.">
+              {q.data.errors.length === 0 ? (
+                <p className="text-sm text-muted">No errors recorded. </p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {q.data.errors.map((e) => (
+                    <li key={e.fingerprint} className="py-3">
+                      <p className="text-sm font-medium">
+                        <span className="num">{e.count}×</span> {e.message}
+                      </p>
+                      <p className="text-[12px] text-muted">
+                        {e.source}
+                        {e.path ? ` · ${e.path}` : ""} · last {e.lastAt ? formatDateTimeET(new Date(e.lastAt)) : "—"}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+
+            <Panel title="Email" description="Resend free plan: 100/day, 3,000/month. Non-urgent mail is held above 80/day and folded into the next digest.">
+              <dl className="grid grid-cols-4 gap-4 text-center">
+                {(["sent", "queued", "held", "failed"] as const).map((s) => (
+                  <div key={s}>
+                    <dt className="text-[12px] capitalize text-muted">{s}</dt>
+                    <dd className="serif num text-[28px] leading-8">{q.data.outbox[s] ?? 0}</dd>
+                  </div>
+                ))}
+              </dl>
+              {q.data.heldEmails.length > 0 && (
+                <ul className="mt-6 divide-y divide-border border-t border-border">
+                  {q.data.heldEmails.map((m) => (
+                    <li key={m.id} className="py-3 text-sm">
+                      <StatusPill tone={m.status === "failed" ? "blocked" : "attention"}>{m.status}</StatusPill> <span className="ml-2">{m.subject}</span>
+                      <p className="text-[12px] text-muted">
+                        to {m.to} · {formatDateTimeET(m.createdAt)}
+                        {m.error ? ` · ${m.error}` : ""}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+
+            <Panel title="Backups" description="Nightly pg_dump to R2, 30 kept. Neon's free restore window is only 6 hours, so these are the real backups.">
+              {q.data.backups.length === 0 ? (
+                <p className="text-sm text-muted">No backups reported yet. The nightly workflow starts once the database and R2 credentials are connected.</p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {q.data.backups.map((b) => (
+                    <li key={b.id} className="flex justify-between py-2.5 text-sm">
+                      <span>{formatDateTimeET(b.createdAt)}</span>
+                      <span className="num text-muted">
+                        {formatBytes(b.sizeBytes)} · {b.kind}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          </div>
+
+          <p className="text-[13px] text-muted">
+            Updated {formatDateTimeET(q.data.generatedAt)} ·{" "}
+            <Link href="/system/design" className="underline underline-offset-2">
+              Design system
+            </Link>
+          </p>
+        </div>
+      )}
+    </>
+  );
+}

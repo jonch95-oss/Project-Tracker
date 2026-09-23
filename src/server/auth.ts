@@ -25,7 +25,6 @@ function clientIp(headers: Headers | undefined | null): string | null {
 
 function createAuth() {
   const appUrl = new URL(env().APP_URL);
-  const isProd = env().NODE_ENV === "production";
 
   return betterAuth({
     appName: APP_NAME,
@@ -90,12 +89,13 @@ function createAuth() {
     },
 
     rateLimit: {
-      enabled: env().NODE_ENV !== "test",
+      // Off only for automated tests; E2E_DISABLE_RATE_LIMIT is ignored unless the app runs on localhost.
+      enabled: env().NODE_ENV !== "test" && !(process.env.E2E_DISABLE_RATE_LIMIT === "1" && appUrl.hostname === "localhost"),
       storage: "database",
       window: 60,
       max: 60,
       customRules: {
-        "/sign-in/email": { window: 60, max: 5 },
+        "/sign-in/email": { window: 60, max: 10 }, // per IP; the office may share one
         "/request-password-reset": { window: 300, max: 3 },
         "/reset-password": { window: 300, max: 5 },
         "/two-factor/verify-totp": { window: 60, max: 5 },
@@ -105,7 +105,7 @@ function createAuth() {
     },
 
     advanced: {
-      useSecureCookies: isProd,
+      useSecureCookies: appUrl.protocol === "https:",
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for", "x-real-ip"] },
       database: { generateId: () => crypto.randomUUID() },
     },

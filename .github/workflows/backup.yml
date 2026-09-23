@@ -1,0 +1,45 @@
+name: Nightly backup
+
+# pg_dump → gzip → Cloudflare R2, keeping the newest 30 dumps.
+# Neon's free plan only keeps a 6-hour restore window, so this is the real backup.
+on:
+  schedule:
+    - cron: "15 8 * * *" # ~3–4am New York
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      APP_URL: ${{ secrets.APP_URL }}
+      JOB_SECRET: ${{ secrets.JOB_SECRET }}
+    steps:
+      - run: echo "RUN_START=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ops
+      - name: Install PostgreSQL 17 client (matches Neon)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-17
+      - name: Dump, upload, prune
+        run: scripts/ops/backup.sh
+      - name: Report runner minutes
+        if: always()
+        run: scripts/ops/report-run.sh nightly-backup "${{ job.status }}"

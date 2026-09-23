@@ -1,0 +1,37 @@
+name: Scheduled jobs
+
+# One hourly run calls the app's tick endpoint, which runs everything due
+# (usage check, daily summaries; later: nudges, digest, weekly report).
+# Each run bills ~1 minute: ~744 of the 2,000 free private-repo minutes/month.
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-jobs
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "RUN_START=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ops
+      - name: Run due jobs
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}
+        run: scripts/ops/call-job.sh tick
+      - name: Report runner minutes
+        if: always()
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}
+        run: scripts/ops/report-run.sh jobs-tick "${{ job.status }}"

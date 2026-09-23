@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { db, schema } from "@/server/db";
 import { recordAudit } from "@/server/services/audit";
 import { budgetDecision, sendEmail, setMailerForTests, type Mailer } from "@/server/services/email";
+import { tickJob } from "@/server/services/jobs";
 import { runUsageCheck } from "@/server/services/usage";
 import { POST as jobRoute } from "@/app/api/jobs/[job]/route";
 import { callerFor, createUser } from "../support/fixtures";
@@ -145,5 +146,33 @@ describe("job endpoints", () => {
     const [run] = await db().select().from(schema.jobRun).where(eq(schema.jobRun.job, "actions:nightly-backup"));
     expect(run?.billableMinutes).toBe(2);
     expect((await req("report-run", process.env.JOB_SECRET, { workflow: "x", durationSeconds: -1, status: "ok" })).status).toBe(400);
+  });
+});
+
+describe("hourly tick", () => {
+  it("runs daily jobs once per New York day, only after their hour", async () => {
+    const before7 = new Date("2030-01-15T11:30:00Z"); // 6:30 ET
+    const after7 = new Date("2030-01-15T12:30:00Z"); // 7:30 ET
+    // runJob stamps real "now", so simulate by checking what the tick decides.
+    const early = await tickJob(before7);
+    expect(early.ran).toEqual(["usage-check"]);
+    const first = await tickJob(after7);
+    expect(first.ran).toContain("error-summary");
+    const second = await tickJob(after7);
+    expect(second.ran).not.toContain("error-summary");
+  });
+
+  it("records backups reported by the workflow", async () => {
+    const res = await jobRoute(
+      new Request("http://localhost:3000/api/jobs/record-backup", {
+        method: "POST",
+        headers: { authorization: `Bearer ${process.env.JOB_SECRET}`, "content-type": "application/json" },
+        body: JSON.stringify({ objectKey: "backups/2030-01-15.sql.gz", sizeBytes: 123456, kind: "nightly" }),
+      }),
+      { params: Promise.resolve({ job: "record-backup" }) },
+    );
+    expect(res.status).toBe(200);
+    const rows = await db().select().from(schema.backupRecord).where(eq(schema.backupRecord.objectKey, "backups/2030-01-15.sql.gz"));
+    expect(rows[0]?.sizeBytes).toBe(123456);
   });
 });

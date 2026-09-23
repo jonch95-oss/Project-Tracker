@@ -1,0 +1,149 @@
+/*
+ * Project Command design tokens: "architectural luxury".
+ * Warm neutrals, hairline borders, restrained motion. Light is the default;
+ * dark mirrors it. Components use only the semantic tokens below.
+ *
+ * Contrast notes (WCAG AA): bronze, sage and ochre are too light for small
+ * text on limestone, so each has a darker "-text" variant used for labels.
+ */
+
+:root {
+  /* Palette (brief §11) */
+  --limestone: #f5f2ec;
+  --paper: #fbfaf7;
+  --travertine: #e4ddd1;
+  --ink: #1d1b18;
+  --ink-secondary: #6b645a;
+  --bronze: #8a6a45;
+  --sage: #6f7f62;
+  --ochre: #b8893a;
+  --oxblood: #8e3b32;
+
+  /* Semantic */
+  --bg: var(--limestone);
+  --surface: var(--paper);
+  --surface-sunken: #efeae2;
+  --stone: #e9e3d8; /* photo placeholder ground */
+  --border: var(--travertine);
+  --border-strong: #cfc6b7;
+  --text: var(--ink);
+  --text-muted: var(--ink-secondary);
+  --text-faint: #8f877b;
+  --accent: var(--bronze);
+  --accent-text: #74573a;
+  --accent-tint: #efe6da;
+  --on-accent: #fbfaf7;
+  --primary: var(--ink);
+  --on-primary: var(--paper);
+
+  --status-done: var(--sage);
+  --status-done-text: #4f5d44;
+  --status-done-tint: #e8ebe2;
+  --status-attention: var(--ochre);
+  --status-attention-text: #7d5a1e;
+  --status-attention-tint: #f4ead7;
+  --status-blocked: var(--oxblood);
+  --status-blocked-text: #8e3b32;
+  --status-blocked-tint: #f3e3df;
+  --status-neutral: #9a9185;
+  --status-neutral-text: #5d574e;
+  --status-neutral-tint: #ece7df;
+
+  --focus: #8a6a45;
+  --scrim: rgb(29 27 24 / 0.32);
+  --sh-lift: 0 1px 2px rgb(29 27 24 / 0.04), 0 8px 24px rgb(29 27 24 / 0.06);
+  --sh-overlay: 0 24px 64px rgb(29 27 24 / 0.18);
+
+  /* Shape */
+  --r-card: 20px;
+  --r-panel: 14px;
+  --r-control: 8px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --dur-slow: 250ms;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141311;
+    --surface: #1b1a17;
+    --surface-sunken: #11100e;
+    --stone: #25221e;
+    --border: #2f2b26;
+    --border-strong: #3f3a33;
+    --text: #ede8df;
+    --text-muted: #aaa194;
+    --text-faint: #7f776b;
+    --accent: #c29b6c;
+    --accent-text: #d2ae82;
+    --accent-tint: #2c241b;
+    --on-accent: #141311;
+    --primary: #ede8df;
+    --on-primary: #141311;
+    --status-done: #93a386;
+    --status-done-text: #a9b89c;
+    --status-done-tint: #1f241b;
+    --status-attention: #d4a857;
+    --status-attention-text: #e0bb74;
+    --status-attention-tint: #2b2415;
+    --status-blocked: #c0665a;
+    --status-blocked-text: #d98476;
+    --status-blocked-tint: #2e1a17;
+    --status-neutral: #8a8276;
+    --status-neutral-text: #b3aa9d;
+    --status-neutral-tint: #23211d;
+    --focus: #d2ae82;
+    --scrim: rgb(0 0 0 / 0.55);
+    --sh-lift: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+    --sh-overlay: 0 24px 64px rgb(0 0 0 / 0.5);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #141311;
+  --surface: #1b1a17;
+  --surface-sunken: #11100e;
+  --stone: #25221e;
+  --border: #2f2b26;
+  --border-strong: #3f3a33;
+  --text: #ede8df;
+  --text-muted: #aaa194;
+  --text-faint: #7f776b;
+  --accent: #c29b6c;
+  --accent-text: #d2ae82;
+  --accent-tint: #2c241b;
+  --on-accent: #141311;
+  --primary: #ede8df;
+  --on-primary: #141311;
+  --status-done: #93a386;
+  --status-done-text: #a9b89c;
+  --status-done-tint: #1f241b;
+  --status-attention: #d4a857;
+  --status-attention-text: #e0bb74;
+  --status-attention-tint: #2b2415;
+  --status-blocked: #c0665a;
+  --status-blocked-text: #d98476;
+  --status-blocked-tint: #2e1a17;
+  --status-neutral: #8a8276;
+  --status-neutral-text: #b3aa9d;
+  --status-neutral-tint: #23211d;
+  --focus: #d2ae82;
+  --scrim: rgb(0 0 0 / 0.55);
+  --sh-lift: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+  --sh-overlay: 0 24px 64px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

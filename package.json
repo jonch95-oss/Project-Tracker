@@ -15,7 +15,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "bootstrap:owner": "tsx scripts/bootstrap-owner.ts",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "seed:demo": "DEMO_SEED=1 tsx --conditions=react-server scripts/seed-demo.ts"
   },
   "dependencies": {
     "@better-auth/passkey": "^1.7.5",

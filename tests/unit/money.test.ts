@@ -134,8 +134,8 @@ describe("allocate", () => {
     const rand = () => (seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) / 2 ** 31;
     for (let i = 0; i < 500; i++) {
       const total = Math.floor(rand() * 10_000_000_000) - 5_000_000_000;
-      const weights = Array.from({ length: 1 + Math.floor(rand() * 8) }, () => Math.floor(rand() * 1000));
-      if (weights.every((w) => w === 0)) weights[0] = 1;
+      const weights: number[] = Array.from({ length: 1 + Math.floor(rand() * 8) }, () => Math.floor(rand() * 1000));
+      if (!weights.some((w) => w > 0)) weights[0] = 1;
       const parts = allocate(total, weights);
       expect(parts.reduce((a, b) => a + b, 0)).toBe(total);
     }

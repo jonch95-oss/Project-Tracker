@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { env } from "@/server/env";
-import { errorSummaryJob, reportActionsRun, runJob, usageCheckJob } from "@/server/services/jobs";
+import { errorSummaryJob, recordBackup, reportActionsRun, runJob, tickJob, usageCheckJob } from "@/server/services/jobs";
 
 /**
  * Scheduled-job endpoints, called by GitHub Actions cron workflows with
  * `Authorization: Bearer $JOB_SECRET`. Each job is idempotent.
  */
 const JOBS = {
+  tick: () => tickJob(),
   "usage-check": usageCheckJob,
   "error-summary": errorSummaryJob,
 } as const;
@@ -28,6 +29,13 @@ const reportSchema = z.object({
   status: z.enum(["succeeded", "failed"]),
 });
 
+const backupSchema = z.object({
+  objectKey: z.string().min(1).max(300),
+  sizeBytes: z.number().int().min(0),
+  kind: z.enum(["nightly", "restore-drill"]),
+  note: z.string().max(500).optional(),
+});
+
 export async function POST(req: Request, ctx: RouteContext<"/api/jobs/[job]">) {
   if (!authorized(req)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { job } = await ctx.params;
@@ -36,6 +44,13 @@ export async function POST(req: Request, ctx: RouteContext<"/api/jobs/[job]">) {
     const parsed = reportSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) return Response.json({ error: "Invalid body" }, { status: 400 });
     await reportActionsRun(parsed.data);
+    return Response.json({ ok: true });
+  }
+
+  if (job === "record-backup") {
+    const parsed = backupSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) return Response.json({ error: "Invalid body" }, { status: 400 });
+    await recordBackup(parsed.data);
     return Response.json({ ok: true });
   }
 
