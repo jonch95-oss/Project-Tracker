@@ -10,6 +10,7 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
   // Read request headers before touching env/auth: this marks the route as
   // dynamic, so the build never tries to prerender signed-in pages.
   const requestHeaders = await headers();
+  if (!databaseConfigured()) return null;
   const session = await auth().api.getSession({ headers: requestHeaders });
   if (!session) return null;
   const viewer = await loadViewer(session.user.id);
@@ -27,4 +28,9 @@ export async function requireOwner(): Promise<Viewer> {
   const viewer = await requireViewer();
   if (viewer.role !== "owner") redirect("/");
   return viewer;
+}
+
+/** False until the Neon database is connected to the deployment. */
+export function databaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL);
 }
