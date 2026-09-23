@@ -36,6 +36,7 @@ export interface AuditEntryContent {
   seq: number;
   occurredAt: string; // ISO instant
   actorId: string | null;
+  actorName: string | null;
   action: string;
   entityType: string;
   entityId: string | null;

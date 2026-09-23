@@ -9,7 +9,7 @@ import { formatDateTimeET } from "@/core/time";
 import { useTRPC } from "@/lib/trpc";
 
 const LEVEL: Record<UsageLevel, { tone: Tone; label: string }> = {
-  ok: { tone: "done", label: "Within free tier" },
+  ok: { tone: "done", label: "Within limit" },
   warn: { tone: "attention", label: "Over 70%" },
   critical: { tone: "blocked", label: "Over 90%" },
   exceeded: { tone: "blocked", label: "At limit" },
@@ -24,7 +24,7 @@ export function SystemView() {
       <PageHeader
         eyebrow="Owner"
         title="System"
-        description="Running cost is $0/month. Every service stays on its free tier; you are emailed at 70% of any limit and nothing upgrades automatically."
+        description="No added monthly cost: free tiers plus what Vercel Pro already includes. Anything past 70% of a limit shows below, and nothing upgrades automatically."
       />
       {q.isPending ? (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -36,8 +36,31 @@ export function SystemView() {
         <ErrorState onRetry={() => q.refetch()} />
       ) : (
         <div className="flex flex-col gap-8">
+          <section aria-labelledby="alerts-h">
+            <h2 id="alerts-h" className="serif mb-4 text-heading">
+              Needs attention
+            </h2>
+            {q.data.alerts.length === 0 ? (
+              <p className="flex items-center gap-2 rounded-card border border-border bg-surface px-6 py-5 text-sm text-muted">
+                <StatusPill tone="done">All clear</StatusPill> Every service is within its limits, jobs are running and backups are current.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border overflow-hidden rounded-card border border-border bg-surface">
+                {q.data.alerts.map((a) => (
+                  <li key={a.title} className="flex flex-col gap-1 px-6 py-4 sm:flex-row sm:items-start sm:gap-4">
+                    <StatusPill tone={a.tone}>{a.tone === "blocked" ? "Action needed" : "Watch"}</StatusPill>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{a.title}</p>
+                      <p className="text-[13px] text-muted">{a.detail}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <section aria-labelledby="usage-h">
-            <h2 id="usage-h" className="serif mb-4 text-[28px] leading-8">
+            <h2 id="usage-h" className="serif mb-4 text-heading">
               Free-tier usage
             </h2>
             <ul className="grid gap-6 sm:grid-cols-2">
@@ -58,7 +81,7 @@ export function SystemView() {
                       </p>
                     ) : (
                       <p className="num mt-4 text-sm">
-                        <span className="serif text-[28px] leading-8">{formatUsage(u.used, u.unit)}</span>
+                        <span className="serif text-heading">{formatUsage(u.used, u.unit)}</span>
                         <span className="text-muted"> of {formatUsage(u.limit, u.unit)}</span>
                       </p>
                     )}
@@ -79,7 +102,7 @@ export function SystemView() {
           </section>
 
           <div className="grid gap-6 xl:grid-cols-2">
-            <Panel title="Scheduled jobs" description="Vercel Cron runs the hourly tick; GitHub Actions runs CI and the nightly backup. Failures appear here and in the daily error email.">
+            <Panel title="Scheduled jobs" description="Vercel Cron runs the hourly tick; GitHub Actions runs CI and the nightly backup. Failures appear here and under Needs attention.">
               {q.data.jobs.length === 0 ? (
                 <p className="text-sm text-muted">No job runs recorded yet.</p>
               ) : (
@@ -108,7 +131,7 @@ export function SystemView() {
               )}
             </Panel>
 
-            <Panel title="Errors, last 7 days" description="Grouped by cause. A summary is emailed daily when there are any.">
+            <Panel title="Errors, last 7 days" description="Grouped by cause, from server requests, API calls and jobs.">
               {q.data.errors.length === 0 ? (
                 <p className="text-sm text-muted">No errors recorded. </p>
               ) : (
@@ -128,12 +151,20 @@ export function SystemView() {
               )}
             </Panel>
 
-            <Panel title="Email" description="Resend free plan: 100 per UTC day (midnight–midnight UTC), 3,000/month; sent and received mail both count. Above 80 in a UTC day, non-urgent mail is held for the next digest; stop-work and vacate alerts always send.">
+            <Panel
+              title="Email"
+              description={
+                q.data.emailEnabled
+                  ? "100 per UTC day (midnight–midnight UTC), 3,000/month; sent and received mail both count. Above 80 in a UTC day, non-urgent mail is held for the next digest; stop-work and vacate alerts always send."
+                  : "On hold: no sender is configured yet. Invitations and password resets are shared as on-screen links; notifications will go by push and in-app. Messages that would have been emailed are listed as skipped."
+              }
+              actions={q.data.emailEnabled ? <StatusPill tone="done">On</StatusPill> : <StatusPill tone="neutral">On hold</StatusPill>}
+            >
               <dl className="grid grid-cols-4 gap-4 text-center">
-                {(["sent", "queued", "held", "failed"] as const).map((s) => (
+                {(q.data.emailEnabled ? (["sent", "queued", "held", "failed"] as const) : (["skipped", "sent", "held", "failed"] as const)).map((s) => (
                   <div key={s}>
                     <dt className="text-[12px] capitalize text-muted">{s}</dt>
-                    <dd className="serif num text-[28px] leading-8">{q.data.outbox[s] ?? 0}</dd>
+                    <dd className="serif num text-heading">{q.data.outbox[s] ?? 0}</dd>
                   </div>
                 ))}
               </dl>
@@ -152,7 +183,15 @@ export function SystemView() {
               )}
             </Panel>
 
-            <Panel title="Backups" description="Nightly pg_dump to Vercel Blob (private), 30 kept. Neon's free restore window is only 6 hours, so these are the real backups.">
+            <Panel
+              title="Backups"
+              description={
+                <>
+                  Nightly encrypted pg_dump to a separate private Vercel Blob store, 30 kept. Neon&apos;s free restore window is only 6 hours, so these are the real backups.{" "}
+                  {q.data.lastRestoreDrill ? `Last restore drill: ${formatDateTimeET(new Date(q.data.lastRestoreDrill))}.` : "No restore drill recorded yet."}
+                </>
+              }
+            >
               {q.data.backups.length === 0 ? (
                 <p className="text-sm text-muted">No backups reported yet. The nightly workflow starts once the production database and Blob store are connected.</p>
               ) : (

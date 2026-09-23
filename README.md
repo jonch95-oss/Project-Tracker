@@ -9,7 +9,7 @@ See `PLAN.md` for the architecture and milestones, and `PROGRESS.md` for what ha
 
 ## Stack
 
-Next.js 16 (App Router) · tRPC 11 · Better Auth (invite-only, 2FA, passkeys) · Drizzle + Postgres (Neon Free) · Vercel Pro (hosting, Blob, Cron) · Resend Free · GitHub Actions for CI and the nightly backup. There is **no added monthly cost**. The owner-only System page shows live usage against every limit.
+Next.js 16 (App Router) · tRPC 11 · Better Auth (invite-only, 2FA, passkeys) · Drizzle + Postgres (Neon Free) · Vercel Pro (hosting, Blob, Cron) · GitHub Actions for CI and the nightly backup. Email is on hold behind an interface. There is **no added monthly cost**. The owner-only System page shows live usage against every limit.
 
 ## Develop
 
@@ -45,12 +45,21 @@ npm run test:e2e          # Playwright; set E2E_WEBKIT=1 for the iPhone WebKit p
 
 ## Production setup (first time)
 
-1. **Vercel project** `project-tracker` (team "jonch95-oss' projects"):
-   - Connect the Neon database under Storage. This sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
-   - Connect a **private** Blob store. This sets `BLOB_READ_WRITE_TOKEN`.
-   - Set `BETTER_AUTH_SECRET`, `CRON_SECRET`, `APP_URL` (`https://projects.liandev.com` once DNS is live), `EMAIL_FROM` and, once Resend is set up, `RESEND_API_KEY`.
-2. **GitHub repository secrets**, for the backup workflow: `DATABASE_URL_UNPOOLED`, `BLOB_READ_WRITE_TOKEN`, `APP_URL`, `CRON_SECRET`.
-3. **Migrate:** `DATABASE_URL=<unpooled url> npm run db:migrate`. The production database starts empty; never run the demo seed on it.
-4. **First owner:** `DATABASE_URL=… APP_URL=https://projects.liandev.com npm run bootstrap:owner -- --email you@liandev.com --name "Jon"`. Open the printed link. Invite everyone else from **Team**.
-5. **Spend management:** in Vercel → Team Settings → Billing → Spend Management, set a cap and turn on "pause production deployments" at the cap. In GitHub → Billing, keep the Actions budget at $0 with "stop usage".
-6. **Restore drill:** see `docs/RESTORE.md`.
+Production is **https://ariel-dev-projects.vercel.app** (Vercel project `project-tracker`, team "jonch95-oss' projects"). There is no custom domain.
+
+1. **Vercel environment variables:**
+   - Neon (Storage integration) provides `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
+   - `APP_URL=https://ariel-dev-projects.vercel.app` for **Production only**. Previews derive their own URL. Production redirects any other host to this one, so passkeys and links always match.
+   - `BETTER_AUTH_SECRET`, `CRON_SECRET` (Vercel Cron), `SETUP_KEY` (one-time owner setup), `SOCRATA_APP_TOKEN`.
+   - Connect a **private** Blob store for app files (`project-tracker-files`). It adds `BLOB_READ_WRITE_TOKEN`.
+   - Email is **on hold**. Leave `RESEND_API_KEY` unset; invites and resets are shared as on-screen links.
+2. **Migrations** run automatically on every production build (`scripts/vercel-build.mjs`), serialized with an advisory lock. Keep migrations **additive** (expand, then contract in a later release): the old deployment may run briefly against the new schema, and Instant Rollback must keep working.
+3. **First owner:** open `/setup` on the production URL and enter your name, email and the `SETUP_KEY`. The page works once, while the database is empty. Invite everyone else from **Team**.
+4. **Backups:** create a **second** private Blob store (`project-tracker-backups`) and don't connect it to the project. Add these GitHub repository secrets:
+   - `DATABASE_URL_UNPOOLED`
+   - `BACKUP_BLOB_READ_WRITE_TOKEN`: the backup store's token
+   - `BACKUP_PASSPHRASE`: long and random; keep a copy offline, because without it dumps can't be restored
+   - `APP_URL`
+   - `CRON_SECRET`
+5. **Spend management:** in Vercel → Team Settings → Billing → Spend Management, set a cap and pause production at the cap. In GitHub → Billing, keep the Actions budget at $0 with "stop usage".
+6. **Restore drill:** GitHub → Actions → "Restore drill" → Run (see `docs/RESTORE.md`).

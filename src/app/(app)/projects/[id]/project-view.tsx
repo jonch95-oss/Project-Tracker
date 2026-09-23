@@ -2,11 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AddressPlaceholder, EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconArrowLeft } from "@/components/ui/icons";
 import { Badge, Skeleton, StatusPill } from "@/components/ui/primitives";
-import { Tabs } from "@/components/ui/tabs";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
 import { useTRPC } from "@/lib/trpc";
 import { TeamTab } from "./team-tab";
@@ -16,7 +16,12 @@ type TabKey = "overview" | "team";
 export function ProjectView({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
   const project = useQuery(trpc.projects.get.queryOptions({ projectId }));
-  const [tab, setTab] = useState<TabKey>("overview");
+  // The tab lives in the URL so it survives reloads and can be linked to.
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const tab: TabKey = params.get("tab") === "team" ? "team" : "overview";
+  const setTab = (next: TabKey) => router.replace(next === "overview" ? pathname : `${pathname}?tab=${next}`, { scroll: false });
 
   if (project.isPending) {
     return (
@@ -57,7 +62,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
       <header className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <p className="eyebrow mb-2">{p.companyName}</p>
-          <h1 className="serif text-[40px] leading-[44px] sm:text-[48px] sm:leading-[52px]">{p.name}</h1>
+          <h1 className="serif text-title sm:text-display">{p.name}</h1>
           <p className="mt-2 text-[15px] text-muted">
             {PROJECT_TYPE_LABEL[p.type as ProjectTypeKey]}
             {p.bbl && <span className="num"> · BBL {p.bbl}</span>}
@@ -70,6 +75,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
       </header>
 
       <Tabs<TabKey>
+        idBase="project-tabs"
+        label="Project sections"
         className="mt-10"
         value={tab}
         onChange={setTab}
@@ -79,7 +86,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
         ]}
       />
 
-      <div className="mt-8">
+      <TabPanel idBase="project-tabs" tab={tab} className="mt-8 focus-visible:outline-offset-8">
         {tab === "overview" ? (
           <EmptyState
             title="The project is set up"
@@ -88,7 +95,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
         ) : (
           <TeamTab projectId={projectId} canManage={p.access.canManageMembers} />
         )}
-      </div>
+      </TabPanel>
     </article>
   );
 }

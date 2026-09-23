@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * Backup storage on Vercel Blob (private). Used by the nightly workflow and
- * the restore drill. Needs BLOB_READ_WRITE_TOKEN.
+ * Backup storage on a dedicated private Vercel Blob store (separate from app
+ * files; its token lives only in GitHub secrets). Used by the nightly workflow
+ * and the restore drill. Needs BLOB_READ_WRITE_TOKEN (the backup store's token).
  *
- *   node scripts/ops/blob-backup.mjs upload <file>     → uploads to backups/, prunes to 30, prints JSON
- *   node scripts/ops/blob-backup.mjs latest <outfile>  → downloads the newest dump
+ *   node scripts/ops/blob-backup.mjs upload <file>          → uploads to backups/, prunes to 30, prints JSON
+ *   node scripts/ops/blob-backup.mjs anchor <file>          → uploads an audit-head anchor to anchors/ (never pruned)
+ *   node scripts/ops/blob-backup.mjs latest <outfile>       → downloads the newest dump
+ *   node scripts/ops/blob-backup.mjs latest-anchor <outfile>
  *   node scripts/ops/blob-backup.mjs list
  */
 import { createWriteStream, readFileSync, statSync } from "node:fs";
@@ -15,17 +18,18 @@ import { del, get, list, put } from "@vercel/blob";
 
 const KEEP = 30;
 const PREFIX = "backups/";
+const ANCHORS = "anchors/";
 const token = process.env.BLOB_READ_WRITE_TOKEN;
 if (!token) {
   console.error("BLOB_READ_WRITE_TOKEN is not set");
   process.exit(1);
 }
 
-async function all() {
+async function all(prefix = PREFIX) {
   const out = [];
   let cursor;
   do {
-    const page = await list({ prefix: PREFIX, cursor, limit: 1000, token });
+    const page = await list({ prefix, cursor, limit: 1000, token });
     out.push(...page.blobs);
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor);
@@ -42,8 +46,12 @@ if (cmd === "upload") {
   const stale = blobs.slice(0, Math.max(0, blobs.length - KEEP)).map((b) => b.url);
   if (stale.length) await del(stale, { token });
   console.log(JSON.stringify({ objectKey: pathname, sizeBytes: size, pruned: stale.length, kept: Math.min(blobs.length, KEEP) }));
-} else if (cmd === "latest") {
-  const blobs = await all();
+} else if (cmd === "anchor") {
+  const pathname = `${ANCHORS}${basename(arg)}`;
+  await put(pathname, readFileSync(arg), { access: "private", token, contentType: "text/plain" });
+  console.log(JSON.stringify({ anchor: pathname }));
+} else if (cmd === "latest" || cmd === "latest-anchor") {
+  const blobs = await all(cmd === "latest" ? PREFIX : ANCHORS);
   const newest = blobs.at(-1);
   if (!newest) {
     console.error("No backups found");

@@ -57,7 +57,7 @@ test.describe("owner flows", () => {
     await page.getByLabel("Name").fill("Dana Expediter");
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Role").selectOption("external");
-    await page.getByRole("button", { name: "Send invitation" }).click();
+    await page.getByRole("button", { name: "Create invitation" }).click();
     await expect(page.getByText("Invitation ready")).toBeVisible();
     const url = await page.locator("code").innerText();
 
@@ -93,8 +93,9 @@ test.describe("owner flows", () => {
     await page.getByRole("button", { name: "Continue" }).click();
     await page.getByRole("switch", { name: "Can approve" }).click();
     await page.getByRole("button", { name: "Add to project" }).click();
-    await expect(page.getByText("Ariel Cohen")).toBeVisible();
-    await expect(page.getByText("Approver")).toBeVisible();
+    const row = page.getByRole("listitem").filter({ hasText: "ariel@demo.test" });
+    await expect(row).toBeVisible();
+    await expect(row.getByText("Approver")).toBeVisible();
 
     await page.goto("/audit");
     await expect(page.getByText("created project Halsey Street Conversion")).toBeVisible();

@@ -10,7 +10,7 @@ export default function AuthLayout({ children }: LayoutProps<"/">) {
         </div>
         <Elevation className="absolute right-12 top-28 h-[58%] text-accent/30" />
         <div className="relative max-w-md">
-          <h1 className="serif text-[64px] leading-[64px]">Project Command</h1>
+          <h1 className="serif text-[64px] leading-[1]">Project Command</h1>
           <p className="mt-6 text-[15px] text-muted">
             Every project, every phase, and exactly what needs doing today.
           </p>

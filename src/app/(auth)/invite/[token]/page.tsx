@@ -23,7 +23,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
     }[invite.state];
     return (
       <div className="flex flex-col gap-6">
-        <h1 className="serif text-[40px] leading-[44px]">{copy[0]}</h1>
+        <h1 className="serif text-title">{copy[0]}</h1>
         <p className="text-[15px] text-muted">{copy[1]}</p>
         <Link href="/login" className="text-sm underline underline-offset-4">
           Go to sign in

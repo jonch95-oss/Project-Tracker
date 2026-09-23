@@ -2,7 +2,13 @@
 
 ## What is backed up
 
-- **Database:** `.github/workflows/backup.yml` runs nightly (~3–4am New York). It runs `pg_dump` (custom format, compressed) against the production database, checks the archive with `pg_restore --list`, uploads it to the private Vercel Blob store under `backups/` (`scripts/ops/blob-backup.mjs`), keeps the newest 30 dumps and reports the backup to the System page.
+- **Database:** `.github/workflows/backup.yml` runs nightly (~3–4am New York). Each run:
+  1. Records an **anchor**: the audit log's latest `seq` and `hash`, stored under `anchors/`.
+  2. Runs `pg_dump` (custom format, compressed) and checks the archive with `pg_restore --list`.
+  3. Encrypts the dump with **AES-256** (`gpg`, passphrase `BACKUP_PASSPHRASE`).
+  4. Uploads it to a **dedicated private Vercel Blob store** under `backups/`. The app has no token for that store.
+  5. Keeps the newest 30 dumps and reports the backup to the System page.
+- **Anchors** are never pruned. A drill checks that the restored audit log still contains the latest anchored entry, which catches entries cut from the end of the log.
 - Neon's free plan keeps only a 6-hour restore window, so these dumps are the real backups.
 - **Files (M5+):** stored in the same private Blob store. The app keeps every version.
 
@@ -12,19 +18,21 @@
 
 Manual alternative:
 
-1. Fetch the newest dump from Vercel Blob and restore it into a scratch database:
-   `BLOB_READ_WRITE_TOKEN=… scripts/ops/restore-drill.sh --latest-from-blob postgres://USER:PASS@HOST/postgres`
-   (or pass a local `.dump` file instead of `--latest-from-blob`)
+1. Fetch, decrypt and restore the newest dump into a scratch database:
+   `BLOB_READ_WRITE_TOKEN=<backup store token> BACKUP_PASSPHRASE=… scripts/ops/restore-drill.sh --latest-from-blob postgres://USER:PASS@HOST/postgres`
+   (or pass a local `.dump` / `.dump.gpg` file instead of `--latest-from-blob`)
    The script creates `pc_restore_drill_<ts>`, restores into it, prints row counts, and confirms the audit log still rejects UPDATE.
-2. Verify the audit hash chain:
-   `DATABASE_URL=<drill db url> npx tsx --conditions=react-server scripts/verify-audit.ts`
+2. Verify the audit hash chain against the latest anchor:
+   `DATABASE_URL=<drill db url> npx tsx --conditions=react-server scripts/verify-audit.ts --anchor "<seq> <hash>"`
 3. Drop the drill database.
 
 ### Drill log
 
 | Date | Source | Result |
 |---|---|---|
-| 2026-09-23 | Local dev database (M1), local file. Superseded by the Blob drill below | Restored 4 users, 3 projects, 2 audit entries, 2 migrations. Audit trigger intact after restore. Hash chain verified |
+| 2026-09-23 | Local dev database (M1), unencrypted file | Superseded |
+| 2026-09-23 | Local dev database, **encrypted** dump (AES-256), local file | Decrypted and restored: 4 users, 3 projects, 5 audit entries, 3 migrations. Triggers present. Chain verified. Anchor #5 matched. A simulated truncated log was rejected |
+| pending | Production → Vercel Blob (GitHub "Restore drill" workflow) | Waiting on the backup Blob store and GitHub secrets | Restored 4 users, 3 projects, 2 audit entries, 2 migrations. Audit trigger intact after restore. Hash chain verified |
 
 ## Full production restore
 

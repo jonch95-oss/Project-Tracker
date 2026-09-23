@@ -20,7 +20,7 @@ function ResetForm() {
   if (!token || tokenError) {
     return (
       <div className="flex flex-col gap-6">
-        <h1 className="serif text-[40px] leading-[44px]">Link expired</h1>
+        <h1 className="serif text-title">Link expired</h1>
         <p className="text-[15px] text-muted">This reset link is invalid or has expired. Ask the owner for a new one.</p>
         <Link href="/forgot-password" className="text-sm underline underline-offset-4">
           How to get a new link
@@ -45,7 +45,7 @@ function ResetForm() {
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
       <div>
-        <h1 className="serif text-[40px] leading-[44px]">Choose a new password</h1>
+        <h1 className="serif text-title">Choose a new password</h1>
         <p className="mt-2 text-[15px] text-muted">{PASSWORD_HINT}</p>
       </div>
       <Field label="New password" htmlFor="password">

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { IconFaceId, IconKey, IconPhone, IconShield, IconSignOut } from "@/components/ui/icons";
-import { Dialog, useToast } from "@/components/ui/overlay";
+import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Button, Field, Input, PageHeader, Panel, StatusPill } from "@/components/ui/primitives";
 import { ROLE_LABEL } from "@/core/labels";
 import type { GlobalRole } from "@/core/permissions";
@@ -31,7 +31,7 @@ export function SettingsView({ viewer, welcome }: { viewer: ViewerProps; welcome
       {welcome && (
         <div className="mb-8 flex flex-col gap-4 rounded-card border border-accent/30 bg-accent-tint px-6 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div>
-            <h2 className="serif text-[26px] leading-8">You&apos;re in.</h2>
+            <h2 className="serif text-heading">You&apos;re in.</h2>
             <p className="mt-1 text-sm text-muted">On iPhone, install the app to your Home Screen and turn on Face ID sign-in below.</p>
           </div>
           <Link href="/install" className="inline-flex h-10 items-center gap-2 rounded-control bg-primary px-4 text-sm font-medium text-on-primary">
@@ -228,7 +228,7 @@ function TwoFactorPanel({ enabled: initial }: { enabled: boolean }) {
         </div>
       </div>
 
-      <Dialog open={mode !== null} onClose={close} title={mode === "disable" ? "Turn off two-factor" : stage === "codes" ? "Save your backup codes" : "Set up two-factor"}>
+      <Dialog open={mode !== null} onClose={close} dismissible={stage !== "codes"} title={mode === "disable" ? "Turn off two-factor" : stage === "codes" ? "Save your backup codes" : "Set up two-factor"}>
         {stage === "password" && (
           <form onSubmit={start} className="flex flex-col gap-5">
             <Field label="Confirm your password" htmlFor="tf-pw" error={error}>
@@ -294,6 +294,7 @@ function PasskeyPanel() {
   const toast = useToast();
   const [passkeys, setPasskeys] = useState<PasskeyRow[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<PasskeyRow | null>(null);
   const supported = useClientFlag(hasPasskeySupport);
 
   const load = useCallback(async () => {
@@ -309,8 +310,7 @@ function PasskeyPanel() {
 
   async function add() {
     setBusy(true);
-    const isiPhone = /iPhone|iPad/.test(navigator.userAgent);
-    const res = await authClient.passkey.addPasskey({ name: isiPhone ? "iPhone (Face ID)" : "This device" });
+    const res = await authClient.passkey.addPasskey({ name: deviceName(navigator.userAgent) });
     setBusy(false);
     if (res?.error) return toast("error", "Passkey setup was cancelled.");
     toast("success", "Passkey added. You can sign in with Face ID or Touch ID now.");
@@ -318,6 +318,7 @@ function PasskeyPanel() {
   }
 
   async function remove(id: string) {
+    setRemoving(null);
     const res = await authClient.passkey.deletePasskey({ id });
     if (res.error) return toast("error", "Couldn't remove that passkey.");
     toast("success", "Passkey removed");
@@ -340,7 +341,7 @@ function PasskeyPanel() {
                     </p>
                   </div>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => remove(p.id)}>
+                <Button size="sm" variant="ghost" onClick={() => setRemoving(p)}>
                   Remove
                 </Button>
               </li>
@@ -356,6 +357,25 @@ function PasskeyPanel() {
           {!supported && <p className="mt-2 text-[13px] text-muted">This browser doesn&apos;t support passkeys.</p>}
         </div>
       </div>
+      <ConfirmDialog
+        open={removing !== null}
+        title={`Remove "${removing?.name || "Passkey"}"?`}
+        body="You won't be able to sign in with it any more. Your password and other passkeys still work."
+        confirmLabel="Remove passkey"
+        danger
+        onConfirm={() => removing && remove(removing.id)}
+        onCancel={() => setRemoving(null)}
+      />
     </Panel>
   );
+}
+
+/** A human name for the device a passkey was created on. */
+function deviceName(ua: string): string {
+  if (/iPhone/.test(ua)) return "iPhone (Face ID)";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Macintosh/.test(ua)) return "Mac (Touch ID)";
+  if (/Windows/.test(ua)) return "Windows (Hello)";
+  if (/Android/.test(ua)) return "Android phone";
+  return "This device";
 }

@@ -1,7 +1,11 @@
 name: Nightly backup
 
-# pg_dump → Vercel Blob (private store), keeping the newest 30 dumps.
-# Neon's free plan only keeps a 6-hour restore window, so this is the real backup.
+# pg_dump → AES-256 (gpg) → a dedicated private Vercel Blob store, keeping 30.
+# The backup store's token and the passphrase exist only as GitHub secrets, so
+# nothing in the app can read or delete backups. Neon's free plan only keeps a
+# 6-hour restore window, so this is the real backup.
+# Each night also stores an "anchor" (the audit log's latest seq + hash) so a
+# truncated audit log can be detected later.
 on:
   schedule:
     - cron: "15 8 * * *" # ~3–4am New York
@@ -21,7 +25,8 @@ jobs:
     env:
       # Direct (unpooled) Neon connection string; Vercel's Neon integration names it DATABASE_URL_UNPOOLED.
       DATABASE_URL: ${{ secrets.DATABASE_URL_UNPOOLED }}
-      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BACKUP_BLOB_READ_WRITE_TOKEN }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
       APP_URL: ${{ secrets.APP_URL }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
@@ -39,13 +44,20 @@ jobs:
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-17
           npm install --no-save --no-package-lock @vercel/blob@2
-      - name: Dump, verify, upload, prune
+      - name: Dump, verify, encrypt, upload, prune
         run: |
           set -euo pipefail
-          file="project-command-$(date -u +%Y-%m-%dT%H%M%SZ).dump"
+          : "${BACKUP_PASSPHRASE:?BACKUP_PASSPHRASE secret is not set}"
+          stamp=$(date -u +%Y-%m-%dT%H%M%SZ)
+          file="project-command-${stamp}.dump"
+          # Anchor first: the dump taken a moment later must contain this entry.
+          psql "$DATABASE_URL" -Atc "select coalesce(max(seq),0) || ' ' || coalesce((select hash from audit_log order by seq desc limit 1), 'none') from audit_log" > "audit-anchor-${stamp}.txt"
           pg_dump --format=custom --compress=9 --no-owner --no-privileges --file="$file" "$DATABASE_URL"
           pg_restore --list "$file" > /dev/null   # the archive is readable
-          result=$(node scripts/ops/blob-backup.mjs upload "$file")
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" --symmetric --cipher-algo AES256 -o "${file}.gpg" "$file"
+          rm -f "$file"
+          node scripts/ops/blob-backup.mjs anchor "audit-anchor-${stamp}.txt"
+          result=$(node scripts/ops/blob-backup.mjs upload "${file}.gpg")
           echo "$result"
           body=$(echo "$result" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(JSON.stringify({objectKey:r.objectKey,sizeBytes:r.sizeBytes,kind:"nightly"}))')
           curl -sS --fail --max-time 60 -X POST -H "Authorization: Bearer ${CRON_SECRET}" -H "content-type: application/json" \

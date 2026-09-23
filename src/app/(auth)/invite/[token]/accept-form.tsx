@@ -38,7 +38,7 @@ export function AcceptInviteForm({ token, email, defaultName, roleLabel }: { tok
     <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
       <div>
         <p className="eyebrow mb-3">Invitation · {roleLabel}</p>
-        <h1 className="serif text-[40px] leading-[44px]">Welcome to Project Command</h1>
+        <h1 className="serif text-title">Welcome to Project Command</h1>
         <p className="mt-2 text-[15px] text-muted">
           Set up your account for <span className="text-text">{email}</span>.
         </p>

@@ -109,6 +109,7 @@ describe("audit chain", () => {
         seq: i,
         occurredAt: new Date(Date.UTC(2026, 0, i)).toISOString(),
         actorId: "u1",
+        actorName: "Jon",
         action: "update",
         entityType: "task",
         entityId: `t${i}`,

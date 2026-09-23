@@ -19,7 +19,7 @@ export default function InstallGuide() {
     <main className="mx-auto max-w-2xl px-4 py-16 sm:px-8">
       <Elevation className="mb-8 h-20 text-accent/60" />
       <p className="eyebrow mb-3">iPhone</p>
-      <h1 className="serif text-[44px] leading-[48px] sm:text-[56px] sm:leading-[60px]">Install Project Command</h1>
+      <h1 className="serif text-title sm:text-display">Install Project Command</h1>
       <p className="mt-4 text-[15px] text-muted">It takes about a minute. There is no App Store download.</p>
       <ol className="mt-12 flex flex-col gap-8">
         {STEPS.map((s, i) => (

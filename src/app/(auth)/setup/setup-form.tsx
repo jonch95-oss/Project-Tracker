@@ -11,7 +11,7 @@ export function SetupForm() {
   if (state?.ok) {
     return (
       <div className="flex flex-col gap-6">
-        <h1 className="serif text-[40px] leading-[44px]">One step left</h1>
+        <h1 className="serif text-title">One step left</h1>
         <p className="text-[15px] text-muted">Open this link to choose the owner password. It works once and expires in 48 hours.</p>
         <Link href={state.inviteUrl} className="inline-flex h-12 items-center justify-center rounded-control bg-primary px-6 text-[15px] font-medium text-on-primary">
           Set the owner password
@@ -24,7 +24,7 @@ export function SetupForm() {
     <form action={action} className="flex flex-col gap-6">
       <div>
         <p className="eyebrow mb-3">First run</p>
-        <h1 className="serif text-[40px] leading-[44px]">Create the owner</h1>
+        <h1 className="serif text-title">Create the owner</h1>
         <p className="mt-2 text-[15px] text-muted">This page works once, while the database is empty. Everyone else is invited from Team.</p>
       </div>
       <Field label="Your name" htmlFor="setup-name">

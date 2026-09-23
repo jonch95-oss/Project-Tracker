@@ -24,15 +24,15 @@ The source of truth is `docs/BRIEF.md` (updated by Change Order 01). This plan b
 
 | Layer | Choice |
 |---|---|
-| Hosting | Vercel Pro, project `project-tracker` on team "jonch95-oss' projects". Domain `projects.liandev.com` |
+| Hosting | Vercel Pro, project `project-tracker` on team "jonch95-oss' projects". Production URL `https://ariel-dev-projects.vercel.app` (no custom domain) |
 | App | Next.js 16 (App Router, TypeScript), React 19, installable PWA |
 | API | tRPC 11, TanStack Query 5, superjson, zod 4 |
 | Auth | Better Auth 1.7: invite-only email/password, reset, TOTP 2FA, passkeys |
 | DB | Neon Postgres Free, connected through Vercel Storage; Drizzle ORM and migrations |
 | Files | Vercel Blob, private store. Uploads go direct from the client with signed tokens, and files are read via server-authorized short-lived access. `src/server/storage` holds the interface plus Blob and memory adapters |
-| Email | Resend Free: outbox table, budget guard per UTC day, console adapter in dev |
+| Email | **On hold** (no sender yet). Mailer port with a no-op adapter that records "skipped" rows without bodies; invites and resets are on-screen links; notifications go by push and in-app. When a sender is chosen: Resend Free or Gmail SMTP, with the UTC-day budget guard already built |
 | Scheduled jobs | Vercel Cron → `GET /api/jobs/tick` hourly. The tick runs what is due: nudges, digest, weekly report, records sync, expiry checks. Jobs are batched so each run stays under `maxDuration` |
-| CI and backup | GitHub Actions: CI on PRs and main, plus a nightly `pg_dump` → Vercel Blob (30 kept) |
+| CI and backup | GitHub Actions: CI on PRs and main, plus a nightly encrypted `pg_dump` → a separate private Vercel Blob store (30 kept, plus audit anchors), and an on-demand restore-drill workflow |
 | Errors | `error_log` table and a daily owner summary. The Sentry free plan allows business use for one user; its adapter is optional |
 | Tests | Vitest (unit, and integration against real Postgres); Playwright (desktop Chromium and iPhone WebKit) |
 

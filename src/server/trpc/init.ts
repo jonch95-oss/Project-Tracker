@@ -69,8 +69,11 @@ export async function createContext(opts: { headers: Headers }): Promise<Context
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
+    const internal = error.code === "INTERNAL_SERVER_ERROR";
     return {
       ...shape,
+      // Never leak database or library messages; the details are in error_log.
+      message: internal ? "Something went wrong on our side. It has been logged." : shape.message,
       data: {
         ...shape.data,
         // Never leak stack traces to the client.

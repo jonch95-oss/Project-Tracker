@@ -12,14 +12,21 @@ const bblSchema = z
   .regex(/^[1-5]\d{9}$/, "BBL is 10 digits: borough (1–5), 5-digit block, 4-digit lot")
   .nullable();
 
-const projectInput = z.object({
-  name: z.string().trim().min(1).max(160),
-  address: z.string().trim().min(3).max(200),
-  borough: z.enum(["Brooklyn", "Manhattan", "Queens", "Bronx", "Staten Island"]).default("Brooklyn"),
-  bbl: bblSchema.optional(),
-  type: z.enum(schema.PROJECT_TYPES),
-  companyId: z.uuid(),
-});
+const BOROUGH_CODE = { Manhattan: "1", Bronx: "2", Brooklyn: "3", Queens: "4", "Staten Island": "5" } as const;
+
+const projectInput = z
+  .object({
+    name: z.string().trim().min(1).max(160),
+    address: z.string().trim().min(3).max(200),
+    borough: z.enum(["Brooklyn", "Manhattan", "Queens", "Bronx", "Staten Island"]).default("Brooklyn"),
+    bbl: bblSchema.optional(),
+    type: z.enum(schema.PROJECT_TYPES),
+    companyId: z.uuid(),
+  })
+  .refine((p) => !p.bbl || p.bbl.startsWith(BOROUGH_CODE[p.borough]), {
+    path: ["bbl"],
+    message: "The BBL's first digit is the borough (1 Manhattan, 2 Bronx, 3 Brooklyn, 4 Queens, 5 Staten Island) and doesn't match the borough chosen.",
+  });
 
 const flagsInput = z.object({
   projectRole: z.string().trim().min(1).max(60),

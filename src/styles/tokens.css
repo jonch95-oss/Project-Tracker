@@ -26,9 +26,10 @@
   --stone: #e9e3d8; /* photo placeholder ground */
   --border: var(--travertine);
   --border-strong: #cfc6b7;
+  --control-border: #8f877b; /* form-control outline, ≥3:1 on paper (WCAG 1.4.11) */
   --text: var(--ink);
   --text-muted: var(--ink-secondary);
-  --text-faint: #8f877b;
+  --text-faint: #746c61; /* ≥4.5:1 on limestone and paper */
   --accent: var(--bronze);
   --accent-text: #74573a;
   --accent-tint: #efe6da;
@@ -76,9 +77,10 @@
     --stone: #25221e;
     --border: #2f2b26;
     --border-strong: #3f3a33;
+    --control-border: #756d61;
     --text: #ede8df;
     --text-muted: #aaa194;
-    --text-faint: #7f776b;
+    --text-faint: #968d80;
     --accent: #c29b6c;
     --accent-text: #d2ae82;
     --accent-tint: #2c241b;
@@ -112,9 +114,10 @@
   --stone: #25221e;
   --border: #2f2b26;
   --border-strong: #3f3a33;
+  --control-border: #756d61;
   --text: #ede8df;
   --text-muted: #aaa194;
-  --text-faint: #7f776b;
+  --text-faint: #968d80;
   --accent: #c29b6c;
   --accent-text: #d2ae82;
   --accent-tint: #2c241b;

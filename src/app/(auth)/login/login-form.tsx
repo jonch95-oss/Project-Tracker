@@ -86,7 +86,7 @@ export function LoginForm({ next, justReset }: { next: string; justReset: boolea
     return (
       <form onSubmit={onCode} className="flex flex-col gap-6" noValidate>
         <div>
-          <h1 className="serif text-[40px] leading-[44px]">Two-step check</h1>
+          <h1 className="serif text-title">Two-step check</h1>
           <p className="mt-2 text-[15px] text-muted">
             {step === "totp" ? "Enter the 6-digit code from your authenticator app." : "Enter one of your saved backup codes."}
           </p>
@@ -134,7 +134,7 @@ export function LoginForm({ next, justReset }: { next: string; justReset: boolea
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="serif text-[40px] leading-[44px]">Sign in</h1>
+        <h1 className="serif text-title">Sign in</h1>
         <p className="mt-2 text-[15px] text-muted">Access is by invitation only.</p>
       </div>
       {justReset && (

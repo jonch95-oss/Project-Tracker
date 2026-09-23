@@ -4,8 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { ErrorState } from "@/components/ui/architecture";
-import { IconCopy, IconPlus } from "@/components/ui/icons";
-import { Dialog, useToast } from "@/components/ui/overlay";
+import { ShareLinkDialog } from "@/components/share-link";
+import { IconPlus } from "@/components/ui/icons";
+import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Avatar, Badge, Button, Field, Input, PageHeader, Panel, Select, Skeleton, StatusPill } from "@/components/ui/primitives";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/core/labels";
 import { GLOBAL_ROLES, type GlobalRole } from "@/core/permissions";
@@ -102,11 +103,13 @@ function PendingInvite({ invite }: { invite: { id: string; email: string; name: 
   const qc = useQueryClient();
   const toast = useToast();
   const refresh = () => qc.invalidateQueries({ queryKey: trpc.users.invitations.queryKey() });
+  const [link, setLink] = useState<string | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
   const resend = useMutation(
     trpc.users.resendInvite.mutationOptions({
       onSuccess: async (r) => {
         await refresh();
-        toast(r.delivery === "sent" ? "success" : "error", r.delivery === "sent" ? "Invitation sent again" : "Email held or failed. Copy the link from a new invitation instead.");
+        setLink(r.inviteUrl);
       },
       onError: (e) => toast("error", errorMessage(e)),
     }),
@@ -114,6 +117,7 @@ function PendingInvite({ invite }: { invite: { id: string; email: string; name: 
   const revoke = useMutation(
     trpc.users.revokeInvite.mutationOptions({
       onSuccess: async () => {
+        setConfirmRevoke(false);
         await refresh();
         toast("success", "Invitation revoked");
       },
@@ -133,12 +137,31 @@ function PendingInvite({ invite }: { invite: { id: string; email: string; name: 
       </div>
       <div className="flex gap-2">
         <Button size="sm" variant="secondary" loading={resend.isPending} onClick={() => resend.mutate({ invitationId: invite.id })}>
-          Resend
+          New link
         </Button>
-        <Button size="sm" variant="ghost" loading={revoke.isPending} onClick={() => revoke.mutate({ invitationId: invite.id })}>
+        <Button size="sm" variant="ghost" onClick={() => setConfirmRevoke(true)}>
           Revoke
         </Button>
       </div>
+      {link && (
+        <ShareLinkDialog
+          title="New invitation link"
+          intro={<>The previous link no longer works. This one works once and expires in 7 days.</>}
+          url={link}
+          whatsappText="You're invited to Project Command. Set up your account here:"
+          onClose={() => setLink(null)}
+        />
+      )}
+      <ConfirmDialog
+        open={confirmRevoke}
+        title={`Revoke ${invite.name}'s invitation?`}
+        body="The link stops working immediately. You can invite them again later."
+        confirmLabel="Revoke invitation"
+        danger
+        busy={revoke.isPending}
+        onConfirm={() => revoke.mutate({ invitationId: invite.id })}
+        onCancel={() => setConfirmRevoke(false)}
+      />
     </li>
   );
 }
@@ -149,7 +172,6 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
   const [role, setRole] = useState<GlobalRole>("member");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ url: string; delivery: string; email: string } | null>(null);
-  const toast = useToast();
   const invite = useMutation(
     trpc.users.invite.mutationOptions({
       onSuccess: async (r, vars) => {
@@ -174,34 +196,20 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
   }
 
   if (result) {
-    const whatsapp = `https://wa.me/?text=${encodeURIComponent(`You're invited to Project Command. Set up your account here: ${result.url}`)}`;
     return (
-      <Dialog open onClose={onClose} title="Invitation ready" footer={<Button onClick={onClose}>Done</Button>}>
-        <div className="flex flex-col gap-5">
-          {result.delivery === "sent" ? (
-            <StatusPill tone="done">Emailed to {result.email}</StatusPill>
+      <ShareLinkDialog
+        title="Invitation ready"
+        intro={
+          result.delivery === "sent" ? (
+            <>Emailed to {result.email}. You can also share the link yourself. It works once and expires in 7 days.</>
           ) : (
-            <StatusPill tone="attention">Email {result.delivery}; share the link below instead</StatusPill>
-          )}
-          <p className="text-sm text-muted">You can also share the link yourself. It works once and expires in 7 days.</p>
-          <div className="flex items-center gap-2 rounded-control border border-border bg-sunken p-3">
-            <code className="min-w-0 flex-1 truncate font-mono text-[12px]">{result.url}</code>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={async () => {
-                await navigator.clipboard.writeText(result.url);
-                toast("success", "Link copied");
-              }}
-            >
-              <IconCopy size={16} /> Copy
-            </Button>
-          </div>
-          <a href={whatsapp} target="_blank" rel="noopener noreferrer" className="text-sm underline underline-offset-4">
-            Share on WhatsApp
-          </a>
-        </div>
-      </Dialog>
+            <>Send this link to {result.email} by WhatsApp or text. It works once and expires in 7 days. The iPhone install guide is linked on the page it opens.</>
+          )
+        }
+        url={result.url}
+        whatsappText="You're invited to Project Command. Set up your account here:"
+        onClose={onClose}
+      />
     );
   }
 
@@ -210,14 +218,14 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
       open
       onClose={onClose}
       title="Invite someone"
-      description="They'll get an email with a link to set their password, plus the iPhone install guide."
+      description="You'll get a one-time link to send them by WhatsApp or text."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button type="submit" form="invite-form" loading={invite.isPending}>
-            Send invitation
+            Create invitation
           </Button>
         </>
       }
@@ -282,6 +290,16 @@ function UserDialog({
       onError: (e) => toast("error", errorMessage(e)),
     }),
   );
+  const [pendingRole, setPendingRole] = useState<GlobalRole | null>(null);
+  const [confirmStatus, setConfirmStatus] = useState(false);
+  const [resetUrl, setResetUrl] = useState<string | null>(null);
+  const resetLink = useMutation(
+    trpc.users.createResetLink.mutationOptions({
+      onSuccess: (r) => setResetUrl(r.resetUrl),
+      onError: (e) => toast("error", errorMessage(e)),
+    }),
+  );
+  const firstName = user.name.split(" ")[0];
 
   return (
     <Dialog
@@ -296,20 +314,23 @@ function UserDialog({
         </>
       }
       footer={
-        !isSelf && (
-          <Button
-            variant={user.status === "active" ? "danger" : "secondary"}
-            loading={setStatus.isPending}
-            onClick={() => setStatus.mutate({ userId: user.id, status: user.status === "active" ? "deactivated" : "active" })}
-          >
-            {user.status === "active" ? "Deactivate" : "Reactivate"}
-          </Button>
-        )
+        <>
+          {user.status === "active" && (
+            <Button variant="secondary" className="mr-auto" loading={resetLink.isPending} onClick={() => resetLink.mutate({ userId: user.id })}>
+              Create password reset link
+            </Button>
+          )}
+          {!isSelf && (
+            <Button variant={user.status === "active" ? "danger" : "secondary"} onClick={() => setConfirmStatus(true)}>
+              {user.status === "active" ? "Deactivate" : "Reactivate"}
+            </Button>
+          )}
+        </>
       }
     >
       <div className="flex flex-col gap-8">
         <Field label="Role" htmlFor="user-role" hint={isSelf ? "You can't change your own owner role." : ROLE_DESCRIPTION[user.role]}>
-          <Select id="user-role" value={user.role} disabled={isSelf || setRole.isPending} onChange={(e) => setRole.mutate({ userId: user.id, role: e.target.value as GlobalRole })}>
+          <Select id="user-role" value={user.role} disabled={isSelf || setRole.isPending} onChange={(e) => setPendingRole(e.target.value as GlobalRole)}>
             {GLOBAL_ROLES.map((r) => (
               <option key={r} value={r}>
                 {ROLE_LABEL[r]}
@@ -346,6 +367,48 @@ function UserDialog({
           <p className="mt-3 text-[13px] text-muted">Workload across tasks appears here once tasks are live.</p>
         </div>
       </div>
+      <ConfirmDialog
+        open={pendingRole !== null}
+        title={`Make ${firstName} ${pendingRole ? ROLE_LABEL[pendingRole].toLowerCase() : ""}?`}
+        body={
+          pendingRole === "owner"
+            ? "Owners can do everything, including managing users, the audit log and the System page."
+            : pendingRole === "external"
+              ? "Outside collaborators only see projects they're added to, only their own or shared tasks, and never other people's emails."
+              : pendingRole
+                ? ROLE_DESCRIPTION[pendingRole]
+                : null
+        }
+        confirmLabel="Change role"
+        busy={setRole.isPending}
+        onConfirm={() => {
+          if (pendingRole) setRole.mutate({ userId: user.id, role: pendingRole }, { onSettled: () => setPendingRole(null) });
+        }}
+        onCancel={() => setPendingRole(null)}
+      />
+      <ConfirmDialog
+        open={confirmStatus}
+        title={user.status === "active" ? `Deactivate ${firstName}?` : `Reactivate ${firstName}?`}
+        body={
+          user.status === "active"
+            ? `${firstName} is signed out on every device immediately and can't sign in again until reactivated. Their project history stays.`
+            : `${firstName} can sign in again with their existing password and passkeys.`
+        }
+        confirmLabel={user.status === "active" ? "Deactivate" : "Reactivate"}
+        danger={user.status === "active"}
+        busy={setStatus.isPending}
+        onConfirm={() => setStatus.mutate({ userId: user.id, status: user.status === "active" ? "deactivated" : "active" })}
+        onCancel={() => setConfirmStatus(false)}
+      />
+      {resetUrl && (
+        <ShareLinkDialog
+          title={`Reset link for ${firstName}`}
+          intro={<>Send this to {firstName} by WhatsApp or text. It works once, for one hour, and signs them out of other devices when used.</>}
+          url={resetUrl}
+          whatsappText="Here is your Project Command password reset link (valid for one hour):"
+          onClose={() => setResetUrl(null)}
+        />
+      )}
     </Dialog>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { IconAlert, IconCheckCircle, IconClose } from "./icons";
 
@@ -16,6 +16,7 @@ export function Dialog({
   children,
   footer,
   size = "md",
+  dismissible = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -24,8 +25,11 @@ export function Dialog({
   children: ReactNode;
   footer?: ReactNode;
   size?: "sm" | "md" | "lg";
+  /** When false, Esc and backdrop clicks don't close it (e.g. one-time backup codes). */
+  dismissible?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
@@ -38,10 +42,13 @@ export function Dialog({
     <dialog
       ref={ref}
       onClose={onClose}
-      onClick={(e) => {
-        if (e.target === ref.current) onClose();
+      onCancel={(e) => {
+        if (!dismissible) e.preventDefault();
       }}
-      aria-labelledby="dialog-title"
+      onClick={(e) => {
+        if (dismissible && e.target === ref.current) onClose();
+      }}
+      aria-labelledby={titleId}
       className={cn(
         "m-auto w-[calc(100%-32px)] rounded-card border border-border bg-surface p-0 text-text shadow-overlay",
         "max-sm:mb-0 max-sm:w-full max-sm:max-w-none max-sm:rounded-b-none",
@@ -51,19 +58,75 @@ export function Dialog({
       <div className="flex max-h-[85dvh] flex-col">
         <header className="flex items-start justify-between gap-4 px-6 pb-4 pt-6 sm:px-8 sm:pt-8">
           <div>
-            <h2 id="dialog-title" className="serif text-[28px] leading-8">
+            <h2 id={titleId} className="serif text-heading">
               {title}
             </h2>
             {description && <p className="mt-2 text-sm text-muted">{description}</p>}
           </div>
-          <button type="button" onClick={onClose} className="-mr-2 -mt-1 rounded-control p-2 text-muted hover:bg-sunken hover:text-text" aria-label="Close">
-            <IconClose size={18} />
-          </button>
+          {dismissible && (
+            <button type="button" onClick={onClose} className="-mr-2 -mt-1 rounded-control p-2 text-muted hover:bg-sunken hover:text-text" aria-label="Close">
+              <IconClose size={20} />
+            </button>
+          )}
         </header>
         <div className="overflow-y-auto px-6 pb-6 sm:px-8">{children}</div>
         {footer && <footer className="safe-bottom flex flex-wrap justify-end gap-2 border-t border-border px-6 py-4 sm:px-8">{footer}</footer>}
       </div>
     </dialog>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Confirm: names the consequence before a high-impact action           */
+/* ------------------------------------------------------------------ */
+
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  danger = false,
+  busy = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  body: ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onClose={onCancel}
+      size="sm"
+      title={title}
+      footer={
+        <>
+          <button type="button" onClick={onCancel} className="h-10 rounded-control px-4 text-sm font-medium hover:bg-sunken">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className={
+              danger
+                ? "h-10 rounded-control border border-blocked/40 bg-blocked px-4 text-sm font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+                : "h-10 rounded-control bg-primary px-4 text-sm font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+            }
+          >
+            {confirmLabel}
+          </button>
+        </>
+      }
+    >
+      <div className="text-[15px] text-muted">{body}</div>
+    </Dialog>
   );
 }
 

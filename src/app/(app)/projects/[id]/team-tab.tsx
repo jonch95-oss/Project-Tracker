@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconPlus } from "@/components/ui/icons";
-import { Dialog, useToast } from "@/components/ui/overlay";
+import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Avatar, Button, Field, Select, Skeleton, StatusPill, Switch } from "@/components/ui/primitives";
 import { PROJECT_ROLES } from "@/core/permissions";
 import { errorMessage, useTRPC } from "@/lib/trpc";
@@ -32,7 +32,7 @@ export function TeamTab({ projectId, canManage }: { projectId: string; canManage
   return (
     <section>
       <div className="mb-6 flex items-center justify-between gap-4">
-        <h2 className="serif text-[28px] leading-8">Team</h2>
+        <h2 className="serif text-heading">Team</h2>
         {canManage && (
           <Button variant="secondary" onClick={() => setAdding(true)}>
             <IconPlus size={18} /> Add person
@@ -164,6 +164,7 @@ function AccessDialog({ projectId, state, onClose }: { projectId: string; state:
   const toast = useToast();
   const [s, setS] = useState(state);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const invalidate = () => qc.invalidateQueries({ queryKey: trpc.members.list.queryKey({ projectId }) });
 
   const upsert = useMutation(
@@ -195,7 +196,7 @@ function AccessDialog({ projectId, state, onClose }: { projectId: string; state:
       footer={
         <>
           {!state.isNew && (
-            <Button variant="danger" className="mr-auto" loading={remove.isPending} onClick={() => remove.mutate({ projectId, userId: s.userId })}>
+            <Button variant="danger" className="mr-auto" onClick={() => setConfirmRemove(true)}>
               Remove from project
             </Button>
           )}
@@ -250,6 +251,16 @@ function AccessDialog({ projectId, state, onClose }: { projectId: string; state:
           </p>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmRemove}
+        title={`Remove ${s.name} from this project?`}
+        body="They lose access to its tasks, files and team immediately. Their past activity stays in the history."
+        confirmLabel="Remove"
+        danger
+        busy={remove.isPending}
+        onConfirm={() => remove.mutate({ projectId, userId: s.userId })}
+        onCancel={() => setConfirmRemove(false)}
+      />
     </Dialog>
   );
 }

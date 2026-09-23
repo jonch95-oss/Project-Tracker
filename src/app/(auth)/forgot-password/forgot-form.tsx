@@ -28,7 +28,7 @@ export function ForgotForm() {
   if (sent) {
     return (
       <div className="flex flex-col gap-6">
-        <h1 className="serif text-[40px] leading-[44px]">Check your email</h1>
+        <h1 className="serif text-title">Check your email</h1>
         <p className="text-[15px] text-muted">If {email} has an account, a reset link is on its way. It works for one hour.</p>
         <Link href="/login" className="text-sm text-muted underline underline-offset-4 hover:text-text">
           Back to sign in
@@ -40,7 +40,7 @@ export function ForgotForm() {
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
       <div>
-        <h1 className="serif text-[40px] leading-[44px]">Reset password</h1>
+        <h1 className="serif text-title">Reset password</h1>
         <p className="mt-2 text-[15px] text-muted">We&apos;ll email you a link to choose a new one.</p>
       </div>
       <Field label="Email" htmlFor="email" error={error}>

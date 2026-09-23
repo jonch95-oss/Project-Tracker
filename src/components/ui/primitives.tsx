@@ -15,13 +15,13 @@ const buttonBase =
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-primary text-on-primary hover:opacity-90",
   accent: "bg-accent text-on-accent hover:opacity-90",
-  secondary: "border border-border-strong bg-surface text-text hover:border-text/40 hover:bg-sunken",
+  secondary: "border border-control bg-surface text-text hover:border-text/40 hover:bg-sunken",
   ghost: "text-text hover:bg-sunken",
   danger: "border border-blocked/40 bg-surface text-blocked-text hover:bg-blocked-tint",
 };
 
 const buttonSizes: Record<ButtonSize, string> = {
-  sm: "h-8 rounded-control px-3 text-[13px]",
+  sm: "h-10 rounded-control px-3 text-[13px] lg:h-8",
   md: "h-10 rounded-control px-4 text-sm",
   lg: "h-12 rounded-control px-6 text-[15px]",
 };
@@ -69,7 +69,7 @@ export function Spinner({ className }: { className?: string }) {
 /* ------------------------------------------------------------------ */
 
 const controlBase =
-  "w-full rounded-control border border-border-strong bg-surface px-3 text-[15px] text-text placeholder:text-faint transition-colors duration-150 hover:border-text/30 focus:border-accent focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-focus aria-[invalid=true]:border-blocked";
+  "w-full rounded-control border border-control bg-surface px-3 text-[15px] text-text placeholder:text-faint transition-colors duration-150 hover:border-text/30 focus:border-accent focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-focus aria-[invalid=true]:border-blocked";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...props }, ref) {
   return <input ref={ref} className={cn(controlBase, "h-11", className)} {...props} />;
@@ -158,7 +158,7 @@ export function Switch({
         onClick={() => onChange(!checked)}
         className={cn(
           "relative mt-0.5 inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors duration-200 ease-quiet disabled:opacity-50",
-          checked ? "border-primary bg-primary" : "border-border-strong bg-sunken",
+          checked ? "border-primary bg-primary" : "border-control bg-sunken",
         )}
       >
         <span
@@ -186,7 +186,7 @@ export function Panel({ title, description, actions, children, className }: { ti
     <section className={cn("rounded-card border border-border bg-surface", className)}>
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-6 py-5 sm:px-8">
         <div className="min-w-0">
-          <h2 className="serif text-[22px] leading-7">{title}</h2>
+          <h2 className="serif text-subheading">{title}</h2>
           {description && <p className="mt-1 text-[13px] text-muted">{description}</p>}
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
@@ -201,7 +201,7 @@ export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?:
     <header className="mb-8 flex flex-col gap-6 sm:mb-12 sm:flex-row sm:items-end sm:justify-between">
       <div className="min-w-0">
         {eyebrow && <p className="eyebrow mb-3">{eyebrow}</p>}
-        <h1 className="serif text-[40px] leading-[44px] sm:text-[56px] sm:leading-[60px]">{title}</h1>
+        <h1 className="serif text-title sm:text-display">{title}</h1>
         {description && <p className="mt-3 max-w-2xl text-[15px] text-muted">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -296,13 +296,7 @@ export function Skeleton({ className }: { className?: string }) {
   return (
     <div
       aria-hidden="true"
-      className={cn("rounded-control bg-sunken", className)}
-      style={{
-        backgroundImage: "linear-gradient(90deg, transparent, color-mix(in oklab, var(--surface) 70%, transparent), transparent)",
-        backgroundSize: "400px 100%",
-        backgroundRepeat: "no-repeat",
-        animation: "shimmer 1.4s var(--ease) infinite",
-      }}
+      className={cn("shimmer rounded-control bg-sunken", className)}
     />
   );
 }
@@ -312,5 +306,5 @@ export function Divider({ className }: { className?: string }) {
 }
 
 export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border-strong bg-surface px-1 font-mono text-[11px] text-muted">{children}</kbd>;
+  return <kbd className="inline-flex h-6 min-w-6 items-center justify-center rounded-control border border-border-strong bg-surface px-1 font-mono text-[11px] text-muted">{children}</kbd>;
 }

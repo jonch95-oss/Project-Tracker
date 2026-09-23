@@ -42,7 +42,7 @@ export function DesignKit() {
         </Panel>
         <Panel title="Type">
           <p className="serif text-[56px] leading-[60px]">412 Sterling Place</p>
-          <p className="serif mt-2 text-[28px] leading-8">Design &amp; Zoning</p>
+          <p className="serif mt-2 text-heading">Design &amp; Zoning</p>
           <p className="mt-4 text-[15px]">Geist for interface and data. Numbers are tabular: <span className="num">$4,250,000.00 · 03/14/2026 · 118 tasks</span></p>
           <p className="eyebrow mt-4">Eyebrow label</p>
         </Panel>

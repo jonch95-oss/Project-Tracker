@@ -21,7 +21,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BACKUP_BLOB_READ_WRITE_TOKEN }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
       APP_URL: ${{ secrets.APP_URL }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
@@ -44,10 +45,11 @@ jobs:
           out=$(scripts/ops/restore-drill.sh --latest-from-blob postgres://postgres:postgres@localhost:5432/postgres)
           echo "$out"
           echo "DRILL_DB=$(echo "$out" | sed -n 's/^Restored into \([a-z0-9_]*\)\..*/\1/p')" >> "$GITHUB_ENV"
-      - name: Verify the audit hash chain
+      - name: Verify the audit hash chain against the latest anchor
         run: |
+          node scripts/ops/blob-backup.mjs latest-anchor anchor.txt
           DATABASE_URL="postgres://postgres:postgres@localhost:5432/${DRILL_DB}" BETTER_AUTH_SECRET=drill-drill-drill-drill-drill-drill-00 \
-            npx tsx --conditions=react-server scripts/verify-audit.ts
+            npx tsx --conditions=react-server scripts/verify-audit.ts --anchor "$(cat anchor.txt)"
       - name: Record the drill on the System page
         if: success()
         run: |

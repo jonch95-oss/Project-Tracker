@@ -13,7 +13,7 @@ export default async function SetupPage() {
   if (!databaseConfigured()) {
     return (
       <div className="flex flex-col gap-4">
-        <h1 className="serif text-[40px] leading-[44px]">Connect the database first</h1>
+        <h1 className="serif text-title">Connect the database first</h1>
         <p className="text-[15px] text-muted">Connect the Neon database to this Vercel project, redeploy, then return here.</p>
       </div>
     );
@@ -22,7 +22,7 @@ export default async function SetupPage() {
   if (!setupKeyConfigured()) {
     return (
       <div className="flex flex-col gap-4">
-        <h1 className="serif text-[40px] leading-[44px]">Setup isn&apos;t enabled</h1>
+        <h1 className="serif text-title">Setup isn&apos;t enabled</h1>
         <p className="text-[15px] text-muted">
           Add a SETUP_KEY environment variable to this Vercel project (any long random value), redeploy, then return here and enter it.
         </p>

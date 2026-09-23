@@ -1,5 +1,5 @@
 /** Verify the audit hash chain of DATABASE_URL (used by the restore drill). */
-import { asc, gte } from "drizzle-orm";
+import { asc, eq, gte } from "drizzle-orm";
 import { GENESIS_HASH, verifyAuditChain } from "../src/core/audit";
 
 async function main() {
@@ -19,6 +19,20 @@ async function main() {
     checked += r.checked;
     prev = r.lastHash;
     seq += rows.length;
+  }
+  // Optional anchor "<seq> <hash>" recorded off-database by the backup job:
+  // the chain must still contain it, which detects entries cut from the end.
+  const i = process.argv.indexOf("--anchor");
+  if (i >= 0) {
+    const [aSeq, aHash] = (process.argv[i + 1] ?? "").trim().split(/\s+/);
+    if (Number(aSeq) > 0) {
+      const [row] = await db().select().from(schema.auditLog).where(eq(schema.auditLog.seq, Number(aSeq)));
+      if (!row || row.hash !== aHash) {
+        console.error(`ANCHOR MISMATCH: entry #${aSeq} is missing or altered (log truncated or rewritten).`);
+        process.exit(1);
+      }
+      console.log(`Anchor #${aSeq} matches.`);
+    }
   }
   console.log(`Audit chain intact: ${checked} entries.`);
   await closeDb();

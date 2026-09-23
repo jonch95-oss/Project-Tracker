@@ -12,7 +12,7 @@ export default async function ForgotPasswordPage() {
   // Email is on hold: the owner issues reset links from Team instead.
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="serif text-[40px] leading-[44px]">Reset password</h1>
+      <h1 className="serif text-title">Reset password</h1>
       <p className="text-[15px] text-muted">
         Ask the owner for a reset link. They can create one for you from the Team page and send it by WhatsApp or text. It works once, for one hour.
       </p>

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AUDIT_ACTIONS, GENESIS_HASH, verifyAuditChain } from "@/core/audit";
 import { schema } from "../../db";
 import { recordAudit, rowToEntry } from "../../services/audit";
+import { emailEnabled } from "../../services/email";
 import { readUsage } from "../../services/usage";
 import { globalProcedure, router } from "../init";
 
@@ -127,10 +128,46 @@ export const systemRouter = router({
       .orderBy(desc(schema.backupRecord.createdAt))
       .limit(5);
 
+    const [lastBackup] = await ctx.db
+      .select({ at: max(schema.backupRecord.createdAt) })
+      .from(schema.backupRecord)
+      .where(eq(schema.backupRecord.kind, "nightly"));
+    const [lastDrill] = await ctx.db
+      .select({ at: max(schema.backupRecord.createdAt) })
+      .from(schema.backupRecord)
+      .where(eq(schema.backupRecord.kind, "restore-drill"));
+    const failedJobs = await ctx.db
+      .select({ job: schema.jobRun.job, n: count(), lastAt: max(schema.jobRun.startedAt), error: max(schema.jobRun.error) })
+      .from(schema.jobRun)
+      .where(and(eq(schema.jobRun.status, "failed"), gte(schema.jobRun.startedAt, new Date(Date.now() - 86_400_000))))
+      .groupBy(schema.jobRun.job);
+
+    // While email is on hold, this panel is where the owner sees what would have been emailed.
+    const alerts: { tone: "attention" | "blocked"; title: string; detail: string }[] = [];
+    for (const u of usage) {
+      if (u.level === "ok" || u.used === null) continue;
+      alerts.push({
+        tone: u.level === "warn" ? "attention" : "blocked",
+        title: `${u.service}: ${u.metric} at ${((u.bps ?? 0) / 100).toFixed(0)}%`,
+        detail: u.note ?? "Approaching the limit. Nothing is charged automatically.",
+      });
+    }
+    const backupAt = lastBackup?.at ?? null;
+    if (!backupAt || Date.now() - backupAt.getTime() > 36 * 3_600_000) {
+      alerts.push({
+        tone: "blocked",
+        title: backupAt ? "No nightly backup in the last 36 hours" : "No nightly backup has run yet",
+        detail: "Check the Nightly backup workflow and its GitHub secrets (DATABASE_URL_UNPOOLED, BACKUP_BLOB_READ_WRITE_TOKEN, BACKUP_PASSPHRASE, APP_URL, CRON_SECRET).",
+      });
+    }
+    for (const j of failedJobs) {
+      alerts.push({ tone: "blocked", title: `${j.job} failed ${j.n}× in the last 24 hours`, detail: j.error ?? "See Scheduled jobs below." });
+    }
+
     const heldEmails = await ctx.db
       .select({ id: schema.emailOutbox.id, to: schema.emailOutbox.toAddress, subject: schema.emailOutbox.subject, createdAt: schema.emailOutbox.createdAt, status: schema.emailOutbox.status, error: schema.emailOutbox.error })
       .from(schema.emailOutbox)
-      .where(sql`${schema.emailOutbox.status} in ('held','failed')`)
+      .where(sql`${schema.emailOutbox.status} in ('held','failed','skipped')`)
       .orderBy(desc(schema.emailOutbox.createdAt))
       .limit(10);
 
@@ -138,7 +175,10 @@ export const systemRouter = router({
       usage,
       jobs,
       errors,
-      outbox: Object.fromEntries(outbox.map((o) => [o.status, o.n])) as Partial<Record<"queued" | "sent" | "held" | "failed", number>>,
+      outbox: Object.fromEntries(outbox.map((o) => [o.status, o.n])) as Partial<Record<"queued" | "sent" | "held" | "failed" | "skipped", number>>,
+      emailEnabled: emailEnabled(),
+      alerts,
+      lastRestoreDrill: lastDrill?.at ?? null,
       heldEmails,
       backups,
       generatedAt: new Date(),

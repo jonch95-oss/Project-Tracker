@@ -92,9 +92,12 @@ function NewProjectDialog({ open, onClose }: { open: boolean; onClose: () => voi
   const toast = useToast();
   const companies = useQuery({ ...trpc.companies.list.queryOptions(), enabled: open });
   const [error, setError] = useState<string | null>(null);
+  // Bumped after each create so the next open starts with an empty form.
+  const [formKey, setFormKey] = useState(0);
   const create = useMutation(
     trpc.projects.create.mutationOptions({
       onSuccess: async ({ id }) => {
+        setFormKey((k) => k + 1);
         await qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() });
         toast("success", "Project created");
         onClose();
@@ -136,7 +139,7 @@ function NewProjectDialog({ open, onClose }: { open: boolean; onClose: () => voi
         </>
       }
     >
-      <form id="new-project" onSubmit={onSubmit} className="grid gap-5 sm:grid-cols-2">
+      <form key={formKey} id="new-project" onSubmit={onSubmit} className="grid gap-5 sm:grid-cols-2">
         <Field label="Project name" htmlFor="np-name" className="sm:col-span-2">
           <Input id="np-name" name="name" required maxLength={160} placeholder="e.g. Sterling Place Townhouse" />
         </Field>

@@ -15,13 +15,19 @@ export function Tabs<K extends string>({
   value,
   onChange,
   className,
+  idBase,
+  label,
 }: {
   items: TabItem<K>[];
   value: K;
   onChange: (key: K) => void;
   className?: string;
+  /** Stable id prefix, so a <TabPanel idBase=…> can point back at its tab. */
+  idBase?: string;
+  label?: string;
 }) {
-  const id = useId();
+  const generated = useId();
+  const id = idBase ?? generated;
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKey = (e: KeyboardEvent, i: number) => {
     const delta = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
@@ -32,7 +38,7 @@ export function Tabs<K extends string>({
     onChange(items[next]!.key);
   };
   return (
-    <div role="tablist" className={cn("flex gap-6 overflow-x-auto border-b border-border [scrollbar-width:none]", className)}>
+    <div role="tablist" aria-label={label} className={cn("flex gap-6 overflow-x-auto border-b border-border [scrollbar-width:none]", className)}>
       {items.map((t, i) => {
         const selected = t.key === value;
         return (
@@ -45,6 +51,7 @@ export function Tabs<K extends string>({
             role="tab"
             type="button"
             aria-selected={selected}
+            aria-controls={`${id}-panel-${t.key}`}
             tabIndex={selected ? 0 : -1}
             onKeyDown={(e) => onKey(e, i)}
             onClick={() => onChange(t.key)}
@@ -58,6 +65,15 @@ export function Tabs<K extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** The content region for the selected tab. */
+export function TabPanel({ idBase, tab, children, className }: { idBase: string; tab: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div role="tabpanel" id={`${idBase}-panel-${tab}`} aria-labelledby={`${idBase}-${tab}`} tabIndex={0} className={className}>
+      {children}
     </div>
   );
 }
