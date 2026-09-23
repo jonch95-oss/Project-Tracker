@@ -1,0 +1,261 @@
+/**
+ * Permission matrix: every tRPC procedure × every role × assigned/unassigned
+ * × canViewFinancials on/off (+ anonymous and deactivated).
+ *
+ * The inventory check at the bottom fails when a procedure is added without
+ * a matrix row, so new endpoints cannot ship unchecked.
+ */
+import { TRPCError } from "@trpc/server";
+import { eq } from "drizzle-orm";
+import { beforeAll, describe, expect, it } from "vitest";
+import { db, schema } from "@/server/db";
+import { appRouter } from "@/server/trpc/root";
+import { addMember, callerFor, companyId, createProject, createUser, deactivate } from "../support/fixtures";
+
+type Scenario =
+  | "anon"
+  | "owner"
+  | "admin+fin"
+  | "admin"
+  | "admin-unassigned"
+  | "member+fin"
+  | "member"
+  | "member-unassigned"
+  | "external+fin"
+  | "external"
+  | "external-unassigned"
+  | "deactivated";
+
+const SCENARIOS: Scenario[] = [
+  "anon",
+  "owner",
+  "admin+fin",
+  "admin",
+  "admin-unassigned",
+  "member+fin",
+  "member",
+  "member-unassigned",
+  "external+fin",
+  "external",
+  "external-unassigned",
+  "deactivated",
+];
+
+const ACTIVE: Scenario[] = SCENARIOS.filter((s) => s !== "anon" && s !== "deactivated");
+const ASSIGNED: Scenario[] = ["owner", "admin+fin", "admin", "member+fin", "member", "external+fin", "external"];
+const OWNER_ONLY: Scenario[] = ["owner"];
+
+interface Fixture {
+  projectId: string;
+  otherUserId: string;
+  companyId: string;
+}
+
+type Caller = Awaited<ReturnType<typeof callerFor>>;
+
+interface Row {
+  allowed: Scenario[];
+  call: (c: Caller, f: Fixture) => Promise<unknown>;
+}
+
+const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const MATRIX: Record<string, Row | "public"> = {
+  "invites.lookup": "public",
+  "invites.accept": "public",
+
+  "me.get": { allowed: ACTIVE, call: (c) => c.me.get() },
+  "me.updateProfile": {
+    allowed: ACTIVE,
+    call: async (c) => {
+      const me = await c.me.get();
+      return c.me.updateProfile({ name: me.name, title: null });
+    },
+  },
+
+  "users.list": { allowed: OWNER_ONLY, call: (c) => c.users.list() },
+  "users.invitations": { allowed: OWNER_ONLY, call: (c) => c.users.invitations() },
+  "users.invite": {
+    allowed: OWNER_ONLY,
+    call: (c) => c.users.invite({ email: `m-${uid()}@example.com`, name: "Matrix", role: "member" }),
+  },
+  "users.resendInvite": {
+    allowed: OWNER_ONLY,
+    call: async (c) => {
+      const [inv] = await db()
+        .insert(schema.invitation)
+        .values({ email: `r-${uid()}@example.com`, name: "R", role: "member", tokenHash: uid(), expiresAt: new Date(Date.now() + 86_400_000) })
+        .returning();
+      return c.users.resendInvite({ invitationId: inv!.id });
+    },
+  },
+  "users.revokeInvite": {
+    allowed: OWNER_ONLY,
+    call: async (c) => {
+      const [inv] = await db()
+        .insert(schema.invitation)
+        .values({ email: `v-${uid()}@example.com`, name: "V", role: "member", tokenHash: uid(), expiresAt: new Date(Date.now() + 86_400_000) })
+        .returning();
+      return c.users.revokeInvite({ invitationId: inv!.id });
+    },
+  },
+  "users.setRole": { allowed: OWNER_ONLY, call: (c, f) => c.users.setRole({ userId: f.otherUserId, role: "member" }) },
+  "users.setStatus": { allowed: OWNER_ONLY, call: (c, f) => c.users.setStatus({ userId: f.otherUserId, status: "active" }) },
+  "users.access": { allowed: OWNER_ONLY, call: (c, f) => c.users.access({ userId: f.otherUserId }) },
+
+  "companies.list": { allowed: ACTIVE, call: (c) => c.companies.list() },
+  "projects.list": { allowed: ACTIVE, call: (c) => c.projects.list() },
+  "projects.get": { allowed: ASSIGNED, call: (c, f) => c.projects.get({ projectId: f.projectId }) },
+  "projects.create": {
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
+    call: (c, f) => c.projects.create({ name: `M ${uid()}`, address: "1 Matrix Pl", type: "gut_renovation", companyId: f.companyId, bbl: null }),
+  },
+
+  "members.list": { allowed: ASSIGNED, call: (c, f) => c.members.list({ projectId: f.projectId }) },
+  "members.candidates": { allowed: ["owner", "admin+fin", "admin"], call: (c, f) => c.members.candidates({ projectId: f.projectId }) },
+  "members.upsert": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: (c, f) =>
+      c.members.upsert({
+        projectId: f.projectId,
+        userId: f.otherUserId,
+        projectRole: "Consultant",
+        canViewFinancials: false,
+        canEditChecklist: false,
+        canApprove: false,
+      }),
+  },
+  "members.remove": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: async (c, f) => {
+      const temp = await createUser("member");
+      await addMember(f.projectId, temp.id);
+      return c.members.remove({ projectId: f.projectId, userId: temp.id });
+    },
+  },
+
+  "audit.list": { allowed: OWNER_ONLY, call: (c) => c.audit.list({ limit: 5 }) },
+  "audit.verify": { allowed: OWNER_ONLY, call: (c) => c.audit.verify() },
+  "system.overview": { allowed: OWNER_ONLY, call: (c) => c.system.overview() },
+};
+
+const DENIED_CODES = new Set(["UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND"]);
+
+describe("permission matrix", () => {
+  const users = {} as Record<Scenario, string | null>;
+  const fixture = {} as Fixture;
+
+  beforeAll(async () => {
+    const owner = await createUser("owner");
+    users.owner = owner.id;
+    users.anon = null;
+    const p = await createProject(owner.id, "Matrix Project");
+    fixture.projectId = p.id;
+    fixture.companyId = await companyId();
+    fixture.otherUserId = (await createUser("member")).id;
+    await addMember(fixture.projectId, fixture.otherUserId);
+
+    for (const role of ["admin", "member", "external"] as const) {
+      const withFin = await createUser(role);
+      await addMember(p.id, withFin.id, { canViewFinancials: true });
+      users[`${role}+fin`] = withFin.id;
+      const noFin = await createUser(role);
+      await addMember(p.id, noFin.id);
+      users[role] = noFin.id;
+      users[`${role}-unassigned`] = (await createUser(role)).id;
+    }
+    const d = await createUser("member");
+    await addMember(p.id, d.id, { canViewFinancials: true });
+    await deactivate(d.id);
+    users.deactivated = d.id;
+  });
+
+  for (const [path, row] of Object.entries(MATRIX)) {
+    if (row === "public") continue;
+    describe(path, () => {
+      for (const scenario of SCENARIOS) {
+        const expectAllowed = row.allowed.includes(scenario);
+        it(`${scenario}: ${expectAllowed ? "allowed" : "denied"}`, async () => {
+          const caller = await callerFor(users[scenario]);
+          let error: unknown = null;
+          try {
+            await row.call(caller, fixture);
+          } catch (e) {
+            error = e;
+          }
+          if (expectAllowed) {
+            expect(error, `${path} should succeed for ${scenario}: ${String(error)}`).toBeNull();
+          } else {
+            expect(error).toBeInstanceOf(TRPCError);
+            expect(DENIED_CODES.has((error as TRPCError).code), `unexpected code ${(error as TRPCError).code}`).toBe(true);
+          }
+        });
+      }
+    });
+  }
+
+  it("covers every procedure in the router", () => {
+    const procedures = Object.keys((appRouter._def as unknown as { procedures: Record<string, unknown> }).procedures).sort();
+    expect(procedures.length).toBeGreaterThan(10);
+    expect(Object.keys(MATRIX).sort()).toEqual(procedures);
+  });
+
+  it("unassigned users get NOT_FOUND, so project existence does not leak", async () => {
+    for (const s of ["admin-unassigned", "member-unassigned", "external-unassigned"] as const) {
+      const c = await callerFor(users[s]);
+      await expect(c.projects.get({ projectId: fixture.projectId })).rejects.toMatchObject({ code: "NOT_FOUND" });
+      const list = await c.projects.list();
+      expect(list.find((p) => p.id === fixture.projectId)).toBeUndefined();
+    }
+  });
+
+  it("project access reports financial visibility exactly as flagged", async () => {
+    const expectations: [Scenario, boolean][] = [
+      ["owner", true],
+      ["admin+fin", true],
+      ["admin", false],
+      ["member+fin", true],
+      ["member", false],
+      ["external+fin", true],
+      ["external", false],
+    ];
+    for (const [s, fin] of expectations) {
+      const c = await callerFor(users[s]);
+      const p = await c.projects.get({ projectId: fixture.projectId });
+      expect(p.access.canViewFinancials, s).toBe(fin);
+    }
+  });
+
+  it("externals do not see other members' emails or permission flags", async () => {
+    const c = await callerFor(users.external);
+    const members = await c.members.list({ projectId: fixture.projectId });
+    expect(members.length).toBeGreaterThan(3);
+    for (const m of members) {
+      expect(m.email).toBeNull();
+      expect(m.flags).toBeNull();
+      expect(m.globalRole).toBeNull();
+    }
+    const asMember = await (await callerFor(users.member)).members.list({ projectId: fixture.projectId });
+    expect(asMember.every((m) => m.flags === null)).toBe(true);
+  });
+
+  it("admins cannot grant financial visibility they do not have", async () => {
+    const target = await createUser("member");
+    const admin = await callerFor(users.admin);
+    await expect(
+      admin.members.upsert({ projectId: fixture.projectId, userId: target.id, projectRole: "PM", canViewFinancials: true, canEditChecklist: false, canApprove: false }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const adminFin = await callerFor(users["admin+fin"]);
+    await adminFin.members.upsert({ projectId: fixture.projectId, userId: target.id, projectRole: "PM", canViewFinancials: true, canEditChecklist: false, canApprove: false });
+    const [row] = await db().select().from(schema.projectMember).where(eq(schema.projectMember.userId, target.id));
+    expect(row?.canViewFinancials).toBe(true);
+  });
+
+  it("externals can never be given checklist editing", async () => {
+    const ext = await createUser("external");
+    const owner = await callerFor(users.owner);
+    await expect(
+      owner.members.upsert({ projectId: fixture.projectId, userId: ext.id, projectRole: "Architect", canViewFinancials: false, canEditChecklist: true, canApprove: false }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
