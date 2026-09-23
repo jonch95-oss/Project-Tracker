@@ -9,7 +9,7 @@ now=$(date +%s)
 # +30s approximates runner setup before the first step.
 duration=$(( now - ${RUN_START:-$now} + 30 ))
 status=$([ "$status_in" = "success" ] && echo succeeded || echo failed)
-curl -sS --max-time 30 -X POST -H "Authorization: Bearer ${CRON_SECRET}" -H "content-type: application/json" \
+curl -sS --fail-with-body --max-time 30 -X POST -H "Authorization: Bearer ${CRON_SECRET}" -H "content-type: application/json" \
   -d "{\"workflow\":\"${workflow}\",\"durationSeconds\":${duration},\"status\":\"${status}\"}" \
-  "${APP_URL}/api/jobs/report-run" || true
+  "${APP_URL%/}/api/jobs/report-run" || echo "Reporting failed (not fatal)"
 echo
