@@ -1,0 +1,387 @@
+/**
+ * Templates (brief §5.1): a project type, ordered phases, and task templates
+ * inside each phase. This module turns a template plus a project's toggles
+ * into a checklist, schedules relative due dates, previews what a toggle
+ * would add or remove, diffs a template update against a live project, and
+ * turns a live project back into a template. Pure: no I/O, no clock.
+ */
+import { offsetDate, type OffsetUnit } from "./calendar";
+import { findCycle } from "./deps";
+import type { ProjectTypeKey } from "./labels";
+import { conditionsMet, type Conditions } from "./toggles";
+import { daysBetween } from "./time";
+
+export type DueFrom = "phase_start" | { task: string };
+
+export interface DueRule {
+  days: number;
+  unit: OffsetUnit;
+  from: DueFrom;
+}
+
+export const RECURRENCE_FREQS = ["weekly", "biweekly", "monthly"] as const;
+export type RecurrenceFreq = (typeof RECURRENCE_FREQS)[number];
+export interface Recurrence {
+  freq: RecurrenceFreq;
+}
+
+export interface TemplatePhaseDef extends Conditions {
+  key: string;
+  name: string;
+}
+
+export interface TemplateTaskDef extends Conditions {
+  key: string;
+  phaseKey: string;
+  title: string;
+  description?: string | null;
+  role: string;
+  due: DueRule;
+  requiresApproval?: boolean;
+  approverRole?: string | null;
+  dependsOn?: readonly string[];
+  subItems?: readonly string[];
+  requiredAttachment?: string | null;
+  recurrence?: Recurrence | null;
+  /** A pipeline check that can kill the deal on its own. */
+  killScreen?: boolean;
+  milestone?: boolean;
+}
+
+export interface TemplateDef {
+  name: string;
+  projectType: ProjectTypeKey;
+  description?: string | null;
+  phases: readonly TemplatePhaseDef[];
+  tasks: readonly TemplateTaskDef[];
+  /** Default folders for Files (brief §14). */
+  folders?: readonly string[];
+}
+
+export interface GeneratedPhase {
+  key: string;
+  name: string;
+  sortOrder: number;
+}
+
+export interface GeneratedTask {
+  key: string;
+  phaseKey: string;
+  title: string;
+  description: string | null;
+  role: string;
+  due: DueRule;
+  requiresApproval: boolean;
+  approverRole: string | null;
+  dependsOn: string[];
+  subItems: string[];
+  requiredAttachment: string | null;
+  recurrence: Recurrence | null;
+  killScreen: boolean;
+  milestone: boolean;
+  sortOrder: number;
+  /** The toggles that made this task appear (for "added by: Excavation"). */
+  toggleSource: string[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Validation                                                          */
+/* ------------------------------------------------------------------ */
+
+export interface TemplateProblem {
+  where: string;
+  message: string;
+}
+
+export function validateTemplate(t: TemplateDef): TemplateProblem[] {
+  const out: TemplateProblem[] = [];
+  if (!t.name.trim()) out.push({ where: "template", message: "The template needs a name." });
+  if (t.phases.length === 0) out.push({ where: "template", message: "Add at least one phase." });
+  const phaseKeys = new Set<string>();
+  for (const p of t.phases) {
+    if (!p.name.trim()) out.push({ where: `phase ${p.key}`, message: "Every phase needs a name." });
+    if (phaseKeys.has(p.key)) out.push({ where: `phase ${p.key}`, message: `Two phases share the key "${p.key}".` });
+    phaseKeys.add(p.key);
+  }
+  const taskKeys = new Set<string>();
+  for (const k of t.tasks) {
+    if (taskKeys.has(k.key)) out.push({ where: `task ${k.key}`, message: `Two tasks share the key "${k.key}".` });
+    taskKeys.add(k.key);
+  }
+  for (const k of t.tasks) {
+    const where = `task "${k.title || k.key}"`;
+    if (!k.title.trim()) out.push({ where, message: "Every task needs a title." });
+    if (!phaseKeys.has(k.phaseKey)) out.push({ where, message: "It's in a phase that doesn't exist." });
+    if (!Number.isInteger(k.due.days) || k.due.days < 0 || k.due.days > 3650) out.push({ where, message: "Due offset must be 0–3650 days." });
+    if (typeof k.due.from === "object") {
+      if (!taskKeys.has(k.due.from.task)) out.push({ where, message: "Its due date is relative to a task that doesn't exist." });
+      if (k.due.from.task === k.key) out.push({ where, message: "Its due date can't be relative to itself." });
+    }
+    for (const d of k.dependsOn ?? []) if (!taskKeys.has(d)) out.push({ where, message: `It depends on a task that doesn't exist (${d}).` });
+    if (k.requiresApproval && !k.approverRole?.trim()) out.push({ where, message: "It requires approval but has no approver role." });
+  }
+  const deps = new Map(t.tasks.map((k) => [k.key, [...(k.dependsOn ?? [])]]));
+  const cycle = findCycle(t.tasks.map((k) => k.key), deps);
+  if (cycle) out.push({ where: "dependencies", message: `Dependencies go in a circle: ${cycle.map((c) => t.tasks.find((x) => x.key === c)?.title ?? c).join(" → ")}.` });
+  const anchors = new Map(t.tasks.map((k) => [k.key, typeof k.due.from === "object" ? [k.due.from.task] : []]));
+  const aCycle = findCycle(t.tasks.map((k) => k.key), anchors);
+  if (aCycle) out.push({ where: "due dates", message: "Relative due dates go in a circle." });
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Generation                                                          */
+/* ------------------------------------------------------------------ */
+
+export function includedPhases(t: TemplateDef, toggles: ReadonlySet<string>): GeneratedPhase[] {
+  return t.phases.filter((p) => conditionsMet(p, toggles)).map((p, i) => ({ key: p.key, name: p.name, sortOrder: i }));
+}
+
+function taskIncluded(k: TemplateTaskDef, phases: ReadonlySet<string>, toggles: ReadonlySet<string>): boolean {
+  return phases.has(k.phaseKey) && conditionsMet(k, toggles);
+}
+
+function toGenerated(k: TemplateTaskDef, sortOrder: number, included: ReadonlySet<string>): GeneratedTask {
+  return {
+    key: k.key,
+    phaseKey: k.phaseKey,
+    title: k.title,
+    description: k.description ?? null,
+    role: k.role,
+    due: k.due,
+    requiresApproval: !!k.requiresApproval,
+    approverRole: k.requiresApproval ? (k.approverRole ?? null) : null,
+    // Dependencies on tasks that aren't in this project are dropped.
+    dependsOn: (k.dependsOn ?? []).filter((d) => included.has(d)),
+    subItems: [...(k.subItems ?? [])],
+    requiredAttachment: k.requiredAttachment ?? null,
+    recurrence: k.recurrence ?? null,
+    killScreen: !!k.killScreen,
+    milestone: !!k.milestone,
+    sortOrder,
+    toggleSource: [...(k.showIf ?? [])],
+  };
+}
+
+/** The checklist a new project gets: included phases and tasks, in template order. */
+export function generateChecklist(t: TemplateDef, toggles: ReadonlySet<string>): { phases: GeneratedPhase[]; tasks: GeneratedTask[] } {
+  const phases = includedPhases(t, toggles);
+  const phaseSet = new Set(phases.map((p) => p.key));
+  const kept = t.tasks.filter((k) => taskIncluded(k, phaseSet, toggles));
+  const keys = new Set(kept.map((k) => k.key));
+  return { phases, tasks: kept.map((k, i) => toGenerated(k, i, keys)) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Due dates                                                           */
+/* ------------------------------------------------------------------ */
+
+export interface SchedulableTask {
+  key: string;
+  phaseKey: string;
+  due: DueRule | null;
+  /** Current due date. */
+  dueOn: string | null;
+  /** Set by a person; never recomputed. */
+  dueManual: boolean;
+  completedOn: string | null;
+}
+
+/**
+ * Fill in due dates that can be known now. A phase-relative rule needs its
+ * phase to have started; a task-relative rule needs the anchor task's
+ * completion date (or, failing that, its due date). Manually set dates are
+ * left alone. Returns only the tasks whose date changed.
+ */
+export function scheduleDueDates(tasks: readonly SchedulableTask[], phaseStarts: ReadonlyMap<string, string>): Map<string, string> {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  const resolved = new Map<string, string | null>();
+  const visiting = new Set<string>();
+  const compute = (t: SchedulableTask): string | null => {
+    if (resolved.has(t.key)) return resolved.get(t.key)!;
+    if (t.dueManual || !t.due) {
+      resolved.set(t.key, t.dueOn);
+      return t.dueOn;
+    }
+    if (visiting.has(t.key)) return t.dueOn; // anchor cycle: leave as is
+    visiting.add(t.key);
+    let anchor: string | null = null;
+    if (t.due.from === "phase_start") anchor = phaseStarts.get(t.phaseKey) ?? null;
+    else {
+      const a = byKey.get(t.due.from.task);
+      anchor = a ? (a.completedOn ?? compute(a)) : null;
+    }
+    visiting.delete(t.key);
+    const d = anchor ? offsetDate(anchor, t.due.days, t.due.unit) : t.dueOn;
+    resolved.set(t.key, d);
+    return d;
+  };
+  const changed = new Map<string, string>();
+  for (const t of tasks) {
+    const d = compute(t);
+    if (d && d !== t.dueOn) changed.set(t.key, d);
+  }
+  return changed;
+}
+
+/* ------------------------------------------------------------------ */
+/* Toggles on a live project                                           */
+/* ------------------------------------------------------------------ */
+
+export interface LiveTask {
+  id: string;
+  templateKey: string | null;
+  title: string;
+  phaseKey: string;
+  /** Anything other than "not started" counts as started. */
+  started: boolean;
+}
+
+export interface LivePhase {
+  key: string;
+  status: "pending" | "active" | "done" | "skipped";
+}
+
+export interface ToggleImpact {
+  add: GeneratedTask[];
+  /** Not-started tasks that will be removed. */
+  remove: LiveTask[];
+  /** Started tasks the toggle no longer calls for: the user decides. */
+  ask: LiveTask[];
+  phasesAdded: GeneratedPhase[];
+  phasesRemoved: string[];
+}
+
+/**
+ * What changes when the project's toggles go from `before` to `after`. Only
+ * tasks that came from the template are touched; tasks people added by hand
+ * never move.
+ */
+export function toggleImpact(t: TemplateDef, before: ReadonlySet<string>, after: ReadonlySet<string>, live: readonly LiveTask[], livePhases: readonly LivePhase[]): ToggleImpact {
+  const phasesBefore = new Set(includedPhases(t, before).map((p) => p.key));
+  const phasesAfterList = includedPhases(t, after);
+  const phasesAfter = new Set(phasesAfterList.map((p) => p.key));
+  const livePhaseKeys = new Set(livePhases.filter((p) => p.status !== "skipped").map((p) => p.key));
+  const present = new Set(live.map((l) => l.templateKey).filter(Boolean) as string[]);
+  const after_ = generateChecklist(t, after);
+  const nowIncluded = new Set(after_.tasks.map((k) => k.key));
+  const wasIncluded = new Set(generateChecklist(t, before).tasks.map((k) => k.key));
+  const add = after_.tasks.filter((k) => !wasIncluded.has(k.key) && !present.has(k.key));
+  const leaving = live.filter((l) => l.templateKey && wasIncluded.has(l.templateKey) && !nowIncluded.has(l.templateKey));
+  return {
+    add,
+    remove: leaving.filter((l) => !l.started),
+    ask: leaving.filter((l) => l.started),
+    phasesAdded: phasesAfterList.filter((p) => !phasesBefore.has(p.key) && !livePhaseKeys.has(p.key)),
+    phasesRemoved: [...phasesBefore].filter((k) => !phasesAfter.has(k)),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Template updates → live projects                                    */
+/* ------------------------------------------------------------------ */
+
+export interface TemplateUpdateDiff {
+  add: GeneratedTask[];
+  remove: LiveTask[];
+  rename: { task: LiveTask; to: string }[];
+  /** Started tasks the new template dropped or renamed: left exactly as they are. */
+  kept: LiveTask[];
+}
+
+/**
+ * What "apply template update to this project" would do. Only not-started
+ * template tasks change; anything started or added by hand is kept.
+ */
+export function templateUpdateDiff(next: TemplateDef, toggles: ReadonlySet<string>, live: readonly LiveTask[]): TemplateUpdateDiff {
+  const gen = generateChecklist(next, toggles);
+  const wanted = new Map(gen.tasks.map((k) => [k.key, k]));
+  const present = new Set(live.map((l) => l.templateKey).filter(Boolean) as string[]);
+  const out: TemplateUpdateDiff = { add: gen.tasks.filter((k) => !present.has(k.key)), remove: [], rename: [], kept: [] };
+  for (const l of live) {
+    if (!l.templateKey) continue;
+    const w = wanted.get(l.templateKey);
+    if (!w) (l.started ? out.kept : out.remove).push(l);
+    else if (w.title !== l.title) {
+      if (l.started) out.kept.push(l);
+      else out.rename.push({ task: l, to: w.title });
+    }
+  }
+  return out;
+}
+
+export function diffIsEmpty(d: TemplateUpdateDiff): boolean {
+  return d.add.length + d.remove.length + d.rename.length === 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Save a live project as a template                                   */
+/* ------------------------------------------------------------------ */
+
+export interface ProjectSnapshotTask {
+  id: string;
+  templateKey: string | null;
+  phaseKey: string;
+  title: string;
+  description: string | null;
+  role: string;
+  dueOn: string | null;
+  due: DueRule | null;
+  requiresApproval: boolean;
+  approverRole: string | null;
+  dependsOnIds: string[];
+  subItems: string[];
+  requiredAttachment: string | null;
+  recurrence: Recurrence | null;
+  toggleSource: string[];
+}
+
+/** Keys that are safe, readable and unique. */
+export function slugKey(text: string, taken: Set<string>): string {
+  const base =
+    text
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48) || "task";
+  let k = base;
+  for (let n = 2; taken.has(k); n++) k = `${base}_${n}`;
+  taken.add(k);
+  return k;
+}
+
+export function projectToTemplate(
+  input: { name: string; projectType: ProjectTypeKey; description?: string | null; phases: { key: string; name: string; status: string; startedOn: string | null }[]; tasks: ProjectSnapshotTask[] },
+): TemplateDef {
+  const phases = input.phases.filter((p) => p.status !== "skipped").map((p) => ({ key: p.key, name: p.name }));
+  const phaseKeys = new Set(phases.map((p) => p.key));
+  const starts = new Map(input.phases.map((p) => [p.key, p.startedOn]));
+  const taken = new Set<string>();
+  const keyOf = new Map<string, string>();
+  for (const t of input.tasks) keyOf.set(t.id, t.templateKey && !taken.has(t.templateKey) ? (taken.add(t.templateKey), t.templateKey) : slugKey(t.title, taken));
+  const tasks: TemplateTaskDef[] = input.tasks
+    .filter((t) => phaseKeys.has(t.phaseKey))
+    .map((t) => {
+      // Keep the rule a task came with; for hand-made tasks, derive "days after phase start" from the dates.
+      const start = starts.get(t.phaseKey);
+      const due: DueRule = t.due ?? { days: t.dueOn && start ? Math.max(0, daysBetween(start, t.dueOn)) : 14, unit: "calendar", from: "phase_start" };
+      const anchor = typeof due.from === "object" ? input.tasks.find((x) => x.templateKey === (due.from as { task: string }).task) : null;
+      return {
+        key: keyOf.get(t.id)!,
+        phaseKey: t.phaseKey,
+        title: t.title,
+        description: t.description,
+        role: t.role,
+        due: typeof due.from === "object" ? (anchor ? { ...due, from: { task: keyOf.get(anchor.id)! } } : { ...due, from: "phase_start" }) : due,
+        requiresApproval: t.requiresApproval,
+        approverRole: t.approverRole,
+        dependsOn: t.dependsOnIds.map((id) => keyOf.get(id)).filter((k): k is string => !!k),
+        subItems: t.subItems,
+        requiredAttachment: t.requiredAttachment,
+        recurrence: t.recurrence,
+        showIf: t.toggleSource.length ? t.toggleSource : undefined,
+      };
+    });
+  return { name: input.name, projectType: input.projectType, description: input.description ?? null, phases, tasks };
+}
