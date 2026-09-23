@@ -15,6 +15,13 @@
       "when": 1790190670673,
       "tag": "0001_audit_guard_and_companies",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790196653532,
+      "tag": "0002_user_last_seen",
+      "breakpoints": true
     }
   ]
 }

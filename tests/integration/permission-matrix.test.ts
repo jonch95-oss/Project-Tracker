@@ -101,6 +101,7 @@ const MATRIX: Record<string, Row | "public"> = {
   },
   "users.setRole": { allowed: OWNER_ONLY, call: (c, f) => c.users.setRole({ userId: f.otherUserId, role: "member" }) },
   "users.setStatus": { allowed: OWNER_ONLY, call: (c, f) => c.users.setStatus({ userId: f.otherUserId, status: "active" }) },
+  "users.createResetLink": { allowed: OWNER_ONLY, call: (c, f) => c.users.createResetLink({ userId: f.otherUserId }) },
   "users.access": { allowed: OWNER_ONLY, call: (c, f) => c.users.access({ userId: f.otherUserId }) },
 
   "companies.list": { allowed: ACTIVE, call: (c) => c.companies.list() },

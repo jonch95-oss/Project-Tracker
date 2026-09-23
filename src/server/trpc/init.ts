@@ -13,6 +13,7 @@ import {
 } from "@/core/permissions";
 import { auth } from "../auth";
 import { db, schema, type Database } from "../db";
+import { clientIp } from "../request-ip";
 import { logError } from "../services/errors";
 
 export interface Viewer {
@@ -61,8 +62,7 @@ export async function createContext(opts: { headers: Headers }): Promise<Context
   const session = await auth().api.getSession({ headers: opts.headers });
   const viewer = session ? await loadViewer(session.user.id) : null;
   const actor: Actor | null = viewer ? { userId: viewer.id, role: viewer.role, status: viewer.status } : null;
-  const ip =
-    opts.headers.get("cf-connecting-ip") ?? opts.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const ip = clientIp(opts.headers);
   return { db: db(), headers: opts.headers, ip, viewer, actor };
 }
 

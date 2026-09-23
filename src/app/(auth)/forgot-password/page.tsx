@@ -1,57 +1,24 @@
-"use client";
-
+import type { Metadata } from "next";
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
-import { Button, Field, Input } from "@/components/ui/primitives";
-import { authClient } from "@/lib/auth-client";
+import { headers } from "next/headers";
+import { emailEnabled } from "@/server/services/email";
+import { ForgotForm } from "./forgot-form";
 
-export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export const metadata: Metadata = { title: "Reset password" };
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    const res = await authClient.requestPasswordReset({ email: email.trim(), redirectTo: "/reset-password" });
-    setBusy(false);
-    if (res.error?.status === 429) {
-      setError("Too many requests. Try again in a few minutes.");
-      return;
-    }
-    // Same message whether or not the account exists.
-    setSent(true);
-  }
-
-  if (sent) {
-    return (
-      <div className="flex flex-col gap-6">
-        <h1 className="serif text-[40px] leading-[44px]">Check your email</h1>
-        <p className="text-[15px] text-muted">If {email} has an account, a reset link is on its way. It works for one hour.</p>
-        <Link href="/login" className="text-sm text-muted underline underline-offset-4 hover:text-text">
-          Back to sign in
-        </Link>
-      </div>
-    );
-  }
-
+export default async function ForgotPasswordPage() {
+  await headers();
+  if (emailEnabled()) return <ForgotForm />;
+  // Email is on hold: the owner issues reset links from Team instead.
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
-      <div>
-        <h1 className="serif text-[40px] leading-[44px]">Reset password</h1>
-        <p className="mt-2 text-[15px] text-muted">We&apos;ll email you a link to choose a new one.</p>
-      </div>
-      <Field label="Email" htmlFor="email" error={error}>
-        <Input id="email" type="email" autoComplete="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
-      </Field>
-      <Button type="submit" size="lg" loading={busy} disabled={!email}>
-        Send reset link
-      </Button>
-      <Link href="/login" className="text-center text-sm text-muted underline-offset-4 hover:text-text hover:underline">
+    <div className="flex flex-col gap-6">
+      <h1 className="serif text-[40px] leading-[44px]">Reset password</h1>
+      <p className="text-[15px] text-muted">
+        Ask the owner for a reset link. They can create one for you from the Team page and send it by WhatsApp or text. It works once, for one hour.
+      </p>
+      <Link href="/login" className="text-sm text-muted underline underline-offset-4 hover:text-text">
         Back to sign in
       </Link>
-    </form>
+    </div>
   );
 }

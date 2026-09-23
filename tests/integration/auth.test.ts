@@ -74,7 +74,7 @@ describe("Better Auth wiring", () => {
     expect(ctx.actor?.status ?? "deactivated").toBe("deactivated");
   });
 
-  it("password reset emails go through the outbox as urgent mail", async () => {
+  it("password reset requests are recorded (skipped while email is on hold)", async () => {
     const res = await post("/request-password-reset", { email: member.email, redirectTo: "/reset-password" });
     expect(res.status).toBe(200);
     const [mail] = await db()
@@ -84,7 +84,8 @@ describe("Better Auth wiring", () => {
       .orderBy(desc(schema.emailOutbox.createdAt))
       .limit(1);
     expect(mail?.category).toBe("password_reset");
-    expect(mail?.status).toBe("sent");
+    expect(mail?.status).toBe("skipped");
+    expect(mail?.text).toBe("");
     expect(mail?.urgent).toBe(true);
   });
 });

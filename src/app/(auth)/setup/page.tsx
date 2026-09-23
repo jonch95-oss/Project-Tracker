@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { databaseConfigured } from "@/server/session";
-import { hasAnyUser } from "@/server/services/setup";
+import { hasAnyUser, setupKeyConfigured } from "@/server/services/setup";
 import { SetupForm } from "./setup-form";
 
 export const metadata: Metadata = { title: "Set up" };
@@ -19,5 +19,15 @@ export default async function SetupPage() {
     );
   }
   if (await hasAnyUser()) redirect("/login");
+  if (!setupKeyConfigured()) {
+    return (
+      <div className="flex flex-col gap-4">
+        <h1 className="serif text-[40px] leading-[44px]">Setup isn&apos;t enabled</h1>
+        <p className="text-[15px] text-muted">
+          Add a SETUP_KEY environment variable to this Vercel project (any long random value), redeploy, then return here and enter it.
+        </p>
+      </div>
+    );
+  }
   return <SetupForm />;
 }

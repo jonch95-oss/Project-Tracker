@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { canGlobal, canGrantFlags, defaultFlags, PROJECT_ROLES } from "@/core/permissions";
+import { canGlobal, canGrantFlags, canRemoveMember, defaultFlags, PROJECT_ROLES } from "@/core/permissions";
 import { schema } from "../../db";
 import { recordAudit } from "../../services/audit";
 import { globalProcedure, projectProcedure, protectedProcedure, router } from "../init";
@@ -169,9 +169,6 @@ export const membersRouter = router({
     .input(z.object({ userId: z.string().min(1) }).extend(flagsInput.shape))
     .mutation(async ({ ctx, input }) => {
       const { projectId, userId, ...flags } = input;
-      if (!canGrantFlags(ctx.actor, ctx.project.membership, flags)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "You cannot grant access you do not have." });
-      }
       await ctx.db.transaction(async (tx) => {
         const [target] = await tx.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role, status: schema.user.status }).from(schema.user).where(eq(schema.user.id, userId));
         if (!target || target.status !== "active") throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
@@ -182,6 +179,15 @@ export const membersRouter = router({
           .select()
           .from(schema.projectMember)
           .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId)));
+        if (!canGrantFlags(ctx.actor, ctx.project.membership, flags, before ?? null, target.role)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              target.role === "owner" || target.role === "admin"
+                ? "Only the owner can change another admin's access."
+                : "Only someone who can see financials can grant or remove financial access.",
+          });
+        }
         if (before) {
           await tx
             .update(schema.projectMember)
@@ -216,11 +222,18 @@ export const membersRouter = router({
     .input(z.object({ userId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction(async (tx) => {
-        const [removed] = await tx
+        const [target] = await tx
+          .select({ role: schema.user.role, canViewFinancials: schema.projectMember.canViewFinancials })
+          .from(schema.projectMember)
+          .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
+          .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)));
+        if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+        if (!canRemoveMember(ctx.actor, ctx.project.membership, target)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only the owner can remove this person." });
+        }
+        await tx
           .delete(schema.projectMember)
-          .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)))
-          .returning();
-        if (!removed) throw new TRPCError({ code: "NOT_FOUND" });
+          .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)));
         const [u] = await tx.select({ name: schema.user.name }).from(schema.user).where(eq(schema.user.id, input.userId));
         await recordAudit(tx, {
           actorId: ctx.viewer.id,

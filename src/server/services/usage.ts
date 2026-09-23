@@ -60,10 +60,10 @@ export async function readUsage(conn: Database = db(), now = new Date()): Promis
     .where(gte(schema.jobRun.startedAt, monthStartUtc(now)));
 
   // Blob holds uploaded files (metered on upload/delete) and the nightly backups.
-  const [backupBytes] = await conn
-    .select({ total: sql<string>`coalesce(sum(${schema.backupRecord.sizeBytes}), 0)::text` })
-    .from(schema.backupRecord)
-    .where(eq(schema.backupRecord.kind, "nightly"));
+  // Only the newest 30 dumps are kept in Blob (older ones are pruned), so count just those.
+  const [backupBytes] = await conn.execute<{ total: string }>(
+    sql`select coalesce(sum(size_bytes), 0)::text as total from (select size_bytes from backup_record where kind = 'nightly' order by created_at desc limit 30) b`,
+  ).then((r) => r.rows);
   const fileBytes = await counter(conn, "blob.storage", "total");
 
   const readings: UsageReading[] = [
@@ -102,7 +102,7 @@ export async function runUsageCheck(conn: Database = db(), now = new Date()) {
   const toSend = alertsToSend(statuses, last);
   if (toSend.length === 0) return { alerted: [] as ServiceKey[], statuses };
 
-  const recipient = env().OWNER_ALERT_EMAIL ?? (await ownerEmail(conn));
+  const recipient = env().OWNER_ALERT_EMAIL || (await ownerEmail(conn));
   if (recipient) {
     const lines = toSend.map(
       (s) =>
@@ -150,7 +150,7 @@ async function ownerEmail(conn: Database): Promise<string | null> {
  */
 async function vercelCreditUsedCents(now: Date): Promise<number | null> {
   const token = env().VERCEL_USAGE_TOKEN;
-  const team = process.env.VERCEL_TEAM_ID;
+  const team = env().VERCEL_TEAM_ID;
   if (!token || !team) return null;
   try {
     const from = monthStartUtc(now).toISOString();

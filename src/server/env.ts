@@ -13,8 +13,10 @@ const schema = z.object({
   APP_URL: z.url().default("http://localhost:3000"),
   /** Sent by Vercel Cron as `Authorization: Bearer …`; also used by the GitHub backup workflow. */
   CRON_SECRET: z.string().min(24).optional(),
+  /** One-time key for the /setup page that creates the first owner (separate from CRON_SECRET). */
+  SETUP_KEY: z.string().min(24).optional(),
 
-  // Email (Resend). Without a key, email is written to the outbox and logged.
+  // Email is on hold (brief §3). With no sender configured the no-op adapter records "skipped" rows.
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("Project Command <projects@liandev.com>"),
   OWNER_ALERT_EMAIL: z.string().optional(),
@@ -24,6 +26,9 @@ const schema = z.object({
   NEON_PROJECT_ID: z.string().optional(),
   /** Read-only Vercel token (billing read) for the Pro credit meter on the System page. */
   VERCEL_USAGE_TOKEN: z.string().optional(),
+  VERCEL_TEAM_ID: z.string().optional(),
+  /** NYC Open Data (Socrata) app token for the public-records watch. */
+  SOCRATA_APP_TOKEN: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -32,7 +37,9 @@ let cached: Env | undefined;
 
 export function env(): Env {
   if (cached) return cached;
-  const parsed = schema.safeParse({ ...process.env, APP_URL: process.env.APP_URL || vercelUrl() });
+  // Blank values (e.g. `OWNER_ALERT_EMAIL=` copied from .env.example) count as unset.
+  const raw = Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined && v.trim() !== ""));
+  const parsed = schema.safeParse({ ...raw, APP_URL: raw.APP_URL || vercelUrl() });
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`Invalid server environment: ${issues}`);
@@ -62,4 +69,9 @@ export function allowedOrigins(): string[] {
     if (host) origins.add(`https://${host}`);
   }
   return [...origins];
+}
+
+/** Tests change process.env between files; clear the parsed cache. */
+export function resetEnvForTests() {
+  cached = undefined;
 }

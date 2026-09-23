@@ -33,7 +33,7 @@ export function SetupForm() {
       <Field label="Email" htmlFor="setup-email">
         <Input id="setup-email" name="email" type="email" required autoComplete="email" />
       </Field>
-      <Field label="Setup key" htmlFor="setup-secret" hint="The CRON_SECRET value from the Vercel project's environment variables." error={state && !state.ok ? state.error : null}>
+      <Field label="Setup key" htmlFor="setup-secret" hint="The SETUP_KEY value from the Vercel project's environment variables." error={state && !state.ok ? state.error : null}>
         <Input id="setup-secret" name="secret" type="password" required autoComplete="off" />
       </Field>
       <Button type="submit" size="lg" loading={pending}>

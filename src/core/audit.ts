@@ -21,6 +21,7 @@ export const AUDIT_ACTIONS = [
   "user.deactivate",
   "user.reactivate",
   "password.reset",
+  "password.resetLink",
   "2fa.enable",
   "2fa.disable",
   "passkey.add",

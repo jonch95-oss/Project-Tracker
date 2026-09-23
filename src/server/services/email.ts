@@ -1,11 +1,12 @@
 import "server-only";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 import { EMAIL_DAILY_SOFT_CAP, FREE_TIER_LIMITS } from "@/core/freeTier";
 import { db, schema, type DbOrTx } from "../db";
 import { env } from "../env";
 import { logError } from "./errors";
 
 export type EmailCategory = (typeof schema.EMAIL_CATEGORIES)[number];
+export type EmailStatus = "sent" | "held" | "failed" | "skipped";
 
 export interface OutgoingEmail {
   to: string;
@@ -13,22 +14,38 @@ export interface OutgoingEmail {
   html: string;
   text: string;
   category: EmailCategory;
-  /** Urgent mail may use the budget above the soft cap (invites, resets, approvals). */
+  /** Urgent mail may use the budget above the soft cap (invites, resets, approvals, critical alerts). */
   urgent: boolean;
+  /** Critical alerts (stop-work / vacate orders) always send, whatever the soft cap. */
+  critical?: boolean;
 }
 
+/**
+ * Email port. Email is on hold until the owner chooses a sender (brief §3);
+ * the default adapter is a no-op, and invites and resets are shared as
+ * on-screen links instead. A Resend adapter is ready for when a sender exists.
+ */
 export interface Mailer {
-  readonly name: string;
+  readonly name: "noop" | "console" | "resend" | "test";
+  readonly enabled: boolean;
   send(msg: { from: string; to: string; subject: string; html: string; text: string }): Promise<{ id: string }>;
 }
 
-/** Development / test adapter: prints the message; the outbox row is the record. */
+/** Production default while email is on hold: sends nothing, logs nothing. */
+export const noopMailer: Mailer = {
+  name: "noop",
+  enabled: false,
+  async send() {
+    throw new Error("Email is not configured");
+  },
+};
+
+/** Local development only: prints the message so links can be followed. Never used in production. */
 export const consoleMailer: Mailer = {
   name: "console",
+  enabled: true,
   async send(msg) {
-    if (env().NODE_ENV !== "test") {
-      console.info(`\n[email:console] to=${msg.to} subject="${msg.subject}"\n${msg.text}\n`);
-    }
+    console.info(`\n[email:console] to=${msg.to} subject="${msg.subject}"\n${msg.text}\n`);
     return { id: `console-${crypto.randomUUID()}` };
   },
 };
@@ -36,6 +53,7 @@ export const consoleMailer: Mailer = {
 export function resendMailer(apiKey: string): Mailer {
   return {
     name: "resend",
+    enabled: true,
     async send(msg) {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -60,7 +78,14 @@ export function setMailerForTests(m: Mailer | null) {
 export function mailer(): Mailer {
   if (mailerOverride) return mailerOverride;
   const key = env().RESEND_API_KEY;
-  return key ? resendMailer(key) : consoleMailer;
+  if (key) return resendMailer(key);
+  return env().NODE_ENV === "development" ? consoleMailer : noopMailer;
+}
+
+/** True when a real sender is configured (the app then offers email delivery). */
+export function emailEnabled(): boolean {
+  const m = mailer();
+  return m.enabled && m.name !== "console";
 }
 
 /** Resend's daily quota resets at midnight UTC, so the budget day is the UTC date. */
@@ -68,7 +93,7 @@ export function quotaDay(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** Emails that already count against today's Resend quota (one recipient each). */
+/** Emails that already count against today's quota (one recipient each). */
 export async function emailsCountedToday(conn: DbOrTx = db(), today = quotaDay()): Promise<number> {
   const [row] = await conn
     .select({ n: sql<number>`count(*)::int` })
@@ -80,65 +105,118 @@ export async function emailsCountedToday(conn: DbOrTx = db(), today = quotaDay()
 export type BudgetDecision = "send" | "hold";
 
 /**
- * Resend's free plan allows 100 emails/day. Non-urgent mail stops at the soft
- * cap (80) and is held for the next digest; urgent mail may use the rest.
- * Nothing is ever dropped: held mail stays in the outbox, visible on System.
+ * 100 emails per UTC day. Non-urgent mail stops at the soft cap (80) and is
+ * held for the next digest; urgent mail may use the rest; critical alerts
+ * (stop-work / vacate) always go. Nothing is dropped: held mail stays in the
+ * outbox and is retried by the hourly tick.
  */
-export function budgetDecision(sentToday: number, urgent: boolean): BudgetDecision {
+export function budgetDecision(sentToday: number, urgent: boolean, critical = false): BudgetDecision {
+  if (critical) return "send";
   const hardCap = FREE_TIER_LIMITS["resend.daily"].limit;
   if (sentToday >= hardCap) return "hold";
   if (!urgent && sentToday >= EMAIL_DAILY_SOFT_CAP) return "hold";
   return "send";
 }
 
-/** Queue and (budget permitting) send one email. Returns the outbox status. */
-export async function sendEmail(msg: OutgoingEmail): Promise<"sent" | "held" | "failed"> {
-  const today = quotaDay();
+/** Arbitrary constant for the send-serialization advisory lock. */
+const EMAIL_LOCK_ID = 7_310_204_552;
+const REDACTED = "[body removed after sending]";
+
+async function deliver(id: string, msg: OutgoingEmail): Promise<EmailStatus> {
   const conn = db();
-  const [row] = await conn
-    .insert(schema.emailOutbox)
-    .values({
+  const today = quotaDay();
+  // Serialize the budget check and the send so parallel sends cannot overshoot the cap.
+  return conn.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${EMAIL_LOCK_ID})`);
+    if (budgetDecision(await emailsCountedToday(tx, today), msg.urgent, msg.critical) === "hold") {
+      await tx
+        .update(schema.emailOutbox)
+        .set({ status: "held", error: "Daily email budget reached (UTC day); retried after midnight UTC" })
+        .where(eq(schema.emailOutbox.id, id));
+      return "held";
+    }
+    try {
+      const result = await mailer().send({ from: env().EMAIL_FROM, to: msg.to, subject: msg.subject, html: msg.html, text: msg.text });
+      // Bodies can contain live invite / reset links: never keep them after sending.
+      await tx
+        .update(schema.emailOutbox)
+        .set({ status: "sent", sendDate: today, sentAt: new Date(), providerId: result.id, error: null, html: REDACTED, text: REDACTED, attempts: sql`${schema.emailOutbox.attempts} + 1` })
+        .where(eq(schema.emailOutbox.id, id));
+      return "sent";
+    } catch (err) {
+      await tx
+        .update(schema.emailOutbox)
+        .set({ status: "failed", error: String(err).slice(0, 1000), attempts: sql`${schema.emailOutbox.attempts} + 1` })
+        .where(eq(schema.emailOutbox.id, id));
+      await logError("request", err, { context: { emailId: id, category: msg.category } });
+      return "failed";
+    }
+  });
+}
+
+/**
+ * Queue and (budget permitting) send one email. With no sender configured
+ * the message is recorded as "skipped" — recipient, subject and category
+ * only, never the body — so nothing disappears silently and no live links
+ * are stored.
+ */
+export async function sendEmail(msg: OutgoingEmail): Promise<EmailStatus> {
+  const m = mailer();
+  if (!m.enabled) {
+    await db().insert(schema.emailOutbox).values({
       toAddress: msg.to,
       subject: msg.subject,
-      html: msg.html,
-      text: msg.text,
+      html: "",
+      text: "",
       category: msg.category,
       urgent: msg.urgent,
-      status: "queued",
-    })
-    .returning({ id: schema.emailOutbox.id });
-  const id = row!.id;
-
-  const decision = budgetDecision(await emailsCountedToday(conn, today), msg.urgent);
-  if (decision === "hold") {
-    await conn
-      .update(schema.emailOutbox)
-      .set({ status: "held", error: "Daily email budget reached; held for next send window" })
-      .where(eq(schema.emailOutbox.id, id));
-    return "held";
-  }
-
-  try {
-    const result = await mailer().send({
-      from: env().EMAIL_FROM,
-      to: msg.to,
-      subject: msg.subject,
-      html: msg.html,
-      text: msg.text,
+      status: "skipped",
+      error: "Email is on hold (no sender configured)",
     });
-    await conn
-      .update(schema.emailOutbox)
-      .set({ status: "sent", sendDate: today, sentAt: new Date(), providerId: result.id, attempts: 1 })
-      .where(eq(schema.emailOutbox.id, id));
-    return "sent";
-  } catch (err) {
-    await conn
-      .update(schema.emailOutbox)
-      .set({ status: "failed", error: String(err).slice(0, 1000), attempts: 1 })
-      .where(eq(schema.emailOutbox.id, id));
-    await logError("request", err, { context: { emailId: id, category: msg.category } });
-    return "failed";
+    return "skipped";
   }
+  const [row] = await db()
+    .insert(schema.emailOutbox)
+    .values({ toAddress: msg.to, subject: msg.subject, html: msg.html, text: msg.text, category: msg.category, urgent: msg.urgent, status: "queued" })
+    .returning({ id: schema.emailOutbox.id });
+  return deliver(row!.id, msg);
+}
+
+/**
+ * Hourly: retry held mail (after the UTC day rolls over) and failed mail
+ * (up to 5 attempts), urgent first, oldest first. Batched to stay well inside
+ * the function time limit.
+ */
+export async function drainOutbox(limit = 25): Promise<{ attempted: number; sent: number }> {
+  if (!mailer().enabled) return { attempted: 0, sent: 0 };
+  const conn = db();
+  const rows = await conn
+    .select()
+    .from(schema.emailOutbox)
+    .where(
+      sql`(${schema.emailOutbox.status} = 'held' and ${schema.emailOutbox.createdAt} < ${new Date(`${quotaDay()}T00:00:00.000Z`)})
+        or (${schema.emailOutbox.status} = 'failed' and ${schema.emailOutbox.attempts} < 5)
+        or (${schema.emailOutbox.status} = 'held' and ${schema.emailOutbox.urgent} = true)`,
+    )
+    .orderBy(sql`${schema.emailOutbox.urgent} desc`, asc(schema.emailOutbox.createdAt))
+    .limit(limit);
+  let sent = 0;
+  for (const r of rows) {
+    const status = await deliver(r.id, { to: r.toAddress, subject: r.subject, html: r.html, text: r.text, category: r.category, urgent: r.urgent });
+    if (status === "sent") sent++;
+    if (status === "held") break; // budget reached; try again next hour
+  }
+  return { attempted: rows.length, sent };
+}
+
+/** Rows older than 30 days are pruned; bodies of unsent rows go with them. */
+export async function pruneOutbox(now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - 30 * 86_400_000);
+  const res = await db()
+    .delete(schema.emailOutbox)
+    .where(and(lt(schema.emailOutbox.createdAt, cutoff), inArray(schema.emailOutbox.status, ["sent", "skipped"])))
+    .returning({ id: schema.emailOutbox.id });
+  return res.length;
 }
 
 /* ------------------------------------------------------------------ */

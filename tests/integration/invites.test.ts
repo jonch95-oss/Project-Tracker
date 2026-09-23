@@ -17,12 +17,11 @@ describe("invitations", () => {
     const owner = await callerFor(ownerId);
     const email = `elias-${Date.now()}@example.com`;
     const res = await owner.users.invite({ email, name: "Elias", role: "admin", title: "Partner" });
-    expect(res.delivery).toBe("sent");
-
+    // Email is on hold: the link is shown on screen; the outbox records who, never the link.
+    expect(res.delivery).toBe("skipped");
     const [mail] = await db().select().from(schema.emailOutbox).where(eq(schema.emailOutbox.toAddress, email));
     expect(mail?.category).toBe("invite");
-    expect(mail?.text).toContain("/install");
-    expect(mail?.text).toContain(tokenFrom(res.inviteUrl));
+    expect(mail?.text).not.toContain(tokenFrom(res.inviteUrl));
 
     const anon = await callerFor(null);
     const token = tokenFrom(res.inviteUrl);

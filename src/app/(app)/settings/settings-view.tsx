@@ -10,6 +10,7 @@ import { Dialog, useToast } from "@/components/ui/overlay";
 import { Button, Field, Input, PageHeader, Panel, StatusPill } from "@/components/ui/primitives";
 import { ROLE_LABEL } from "@/core/labels";
 import type { GlobalRole } from "@/core/permissions";
+import { PASSWORD_HINT, passwordProblem } from "@/core/password";
 import { authClient } from "@/lib/auth-client";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import { hasPasskeySupport, useClientFlag } from "@/lib/use-client-flag";
@@ -91,7 +92,7 @@ function ProfilePanel({ viewer }: { viewer: ViewerProps }) {
         <Field label="Title" htmlFor="pf-title">
           <Input id="pf-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Project Manager" />
         </Field>
-        <Field label="Email" htmlFor="pf-email" hint={viewer.role === "owner" ? "Your sign-in email." : "Ask the owner to change your email."}>
+        <Field label="Email" htmlFor="pf-email" hint="Your sign-in email.">
           <Input id="pf-email" value={viewer.email} disabled readOnly />
         </Field>
         <div>
@@ -113,13 +114,18 @@ function PasswordPanel() {
     const form = e.currentTarget;
     const f = new FormData(form);
     const next = String(f.get("next"));
-    if (next.length < 12) return setError("Use at least 12 characters.");
+    const problem = passwordProblem(next);
+    if (problem) return setError(problem);
     if (next !== String(f.get("confirm"))) return setError("The new passwords don't match.");
     setBusy(true);
     setError(null);
     const res = await authClient.changePassword({ currentPassword: String(f.get("current")), newPassword: next, revokeOtherSessions: true });
     setBusy(false);
-    if (res.error) return setError(res.error.status === 429 ? "Too many attempts. Wait a minute." : "Your current password is incorrect.");
+    if (res.error) {
+      if (res.error.status === 429) return setError("Too many attempts. Wait a minute.");
+      if (res.error.status === 400 && res.error.message) return setError(res.error.message);
+      return setError("Your current password is incorrect.");
+    }
     form.reset();
     toast("success", "Password changed. Other devices were signed out.");
   }
@@ -129,7 +135,7 @@ function PasswordPanel() {
         <Field label="Current password" htmlFor="pw-current">
           <Input id="pw-current" name="current" type="password" autoComplete="current-password" required />
         </Field>
-        <Field label="New password" htmlFor="pw-next" hint="At least 12 characters.">
+        <Field label="New password" htmlFor="pw-next" hint={PASSWORD_HINT}>
           <Input id="pw-next" name="next" type="password" autoComplete="new-password" required />
         </Field>
         <Field label="Confirm new password" htmlFor="pw-confirm" error={error}>

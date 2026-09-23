@@ -162,7 +162,7 @@ export const emailOutbox = pgTable(
     text: text("text").notNull(),
     category: text("category", { enum: EMAIL_CATEGORIES }).notNull(),
     urgent: boolean("urgent").notNull().default(false),
-    status: text("status", { enum: ["queued", "sent", "held", "failed"] })
+    status: text("status", { enum: ["queued", "sent", "held", "failed", "skipped"] })
       .notNull()
       .default("queued"),
     /** UTC calendar date the email counts against (Resend's daily quota resets at 00:00 UTC). */

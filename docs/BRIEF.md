@@ -1,7 +1,7 @@
 # BUILD BRIEF — Ariel Development "Project Command"
 ### A development project tracker for a Brooklyn real estate developer. Paste this whole brief into Claude Code in an empty folder.
 
-> Source of truth. Updated by Change Order 01 (2026-09-23): Vercel Pro hosting, Vercel Blob storage, Vercel Cron, no Cloudflare; Section 14A modules A–N (Module A is BBL auto-fill only — never connect to the deal platform); 13 milestones.
+> Source of truth. Updated by Change Order 01 (2026-09-23): Vercel Pro hosting, Vercel Blob storage, Vercel Cron, no Cloudflare; Section 14A modules A–N (Module A is BBL auto-fill only — never connect to the deal platform); 13 milestones. Update: no custom domain (production is https://ariel-dev-projects.vercel.app); email on hold behind a no-op adapter.
 
 ---
 
@@ -105,7 +105,7 @@ Every piece below is free. Verify each free tier against its own pricing page be
   - Check Vercel Pro's current included Blob storage and transfer before building, and stay inside it.
   - Compress photos on the device before upload: long edge 2560px, WebP/JPEG around 80%.
   - Show storage used against the included amount on the System page.
-- **Email:** Resend, Free plan, sending from `projects@liandev.com` (or whatever domain I give you)
+- **Email:** on hold until I choose a sender (no domain we control yet). Build it behind an interface. When enabled it is Resend's free plan, or Gmail SMTP from a dedicated Gmail address
   - The free plan caps sending at 100 emails a day, and every recipient counts.
   - Treat push and in-app as the primary channels. Email carries only the daily digest, invites, password resets, approvals and the third overdue nudge.
   - Never send one email per event. Batch everything into the digest.
@@ -927,10 +927,10 @@ Offer "update template durations from actuals" so the checklist templates get mo
 - GitHub (free private repo; CI and the nightly backup)
 - Vercel Pro team (already paid): hosting, Blob storage, Cron
 - Neon (Free plan) for this app's database
-- Resend (Free plan), plus DNS access to add its records to our domain
+- An email sender, on hold (see Section 3)
 - Sentry (free), only if its terms allow business use
 - NYC Open Data app token (free)
-- The domain for the app, e.g. `projects.liandev.com`. This uses a domain we already own, so there is no new cost
+- The app lives at `https://ariel-dev-projects.vercel.app` (free). No custom domain for now
 
 Where an account is not ready yet, build against a local or mock adapter behind an interface, and swap in the real one when I provide it. Never block the whole build on a credential.
 

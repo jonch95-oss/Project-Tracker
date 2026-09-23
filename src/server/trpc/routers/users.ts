@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { passwordProblem } from "@/core/password";
 import { canAssignGlobalRole, GLOBAL_ROLES } from "@/core/permissions";
 import { auth } from "../../auth";
 import { schema } from "../../db";
@@ -36,11 +37,10 @@ async function sendInviteEmail(opts: { to: string; name: string; inviter: string
   return sendEmail({ to: opts.to, subject: `${opts.inviter} invited you to Project Command`, ...content, category: "invite", urgent: true });
 }
 
-const passwordSchema = z
-  .string()
-  .min(12, "Use at least 12 characters")
-  .max(256)
-  .refine((p) => /[a-zA-Z]/.test(p) && /[^a-zA-Z]/.test(p), "Mix letters with numbers or symbols");
+const passwordSchema = z.string().superRefine((p, ctx) => {
+  const problem = passwordProblem(p);
+  if (problem) ctx.addIssue({ code: "custom", message: problem });
+});
 
 export const invitesRouter = router({
   /** Public: what the invite page shows before the person sets a password. */
@@ -84,6 +84,7 @@ export const invitesRouter = router({
       if (!claimed) throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation is no longer valid." });
 
       const email = claimed.email.toLowerCase();
+      let createdUserId: string | null = null;
       try {
         const [existing] = await ctx.db.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.email, email));
         if (existing) throw new TRPCError({ code: "CONFLICT", message: "An account with this email already exists. Sign in instead." });
@@ -99,6 +100,7 @@ export const invitesRouter = router({
           title: claimed.title,
           company: claimed.company,
         }, { method: "email-password" });
+        createdUserId = created.id;
         await authCtx.internalAdapter.linkAccount({
           userId: created.id,
           providerId: "credential",
@@ -120,8 +122,13 @@ export const invitesRouter = router({
         });
         return { email };
       } catch (err) {
-        // Release the claim so the person can retry.
-        await ctx.db.update(schema.invitation).set({ acceptedAt: null }).where(eq(schema.invitation.id, claimed.id));
+        // Undo a half-created account (cascades to its credential row), then
+        // release the claim so the person can simply retry.
+        if (createdUserId) await ctx.db.delete(schema.user).where(eq(schema.user.id, createdUserId));
+        await ctx.db
+          .update(schema.invitation)
+          .set({ acceptedAt: null, acceptedUserId: null })
+          .where(eq(schema.invitation.id, claimed.id));
         throw err;
       }
     }),
@@ -149,7 +156,7 @@ export const usersRouter = router({
         twoFactorEnabled: schema.user.twoFactorEnabled,
         createdAt: schema.user.createdAt,
         projectCount: sql<number>`(select count(*)::int from ${schema.projectMember} pm where pm.user_id = ${schema.user.id})`,
-        lastSeenAt: sql<Date | null>`(select max(s.updated_at) from ${schema.session} s where s.user_id = ${schema.user.id})`,
+        lastSeenAt: schema.user.lastSeenAt,
       })
       .from(schema.user)
       .orderBy(asc(schema.user.status), asc(schema.user.name));
@@ -305,6 +312,39 @@ export const usersRouter = router({
         });
       });
       return { ok: true };
+    }),
+
+  /**
+   * While email is on hold, the owner creates a one-hour, single-use reset
+   * link and shares it (WhatsApp, text). Uses Better Auth's own reset token
+   * format, so the normal /reset-password page completes it.
+   */
+  createResetLink: globalProcedure("users.manage")
+    .input(z.object({ userId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const [target] = await ctx.db
+        .select({ id: schema.user.id, name: schema.user.name, status: schema.user.status })
+        .from(schema.user)
+        .where(eq(schema.user.id, input.userId));
+      if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+      if (target.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "Reactivate this person first." });
+      const token = generateToken();
+      const authCtx = await auth().$context;
+      await authCtx.internalAdapter.createVerificationValue({
+        value: target.id,
+        identifier: `reset-password:${token}`,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+      await recordAudit(ctx.db, {
+        actorId: ctx.viewer.id,
+        actorName: ctx.viewer.name,
+        action: "password.resetLink",
+        entityType: "user",
+        entityId: target.id,
+        summary: `${ctx.viewer.name} created a password reset link for ${target.name}`,
+        ip: ctx.ip,
+      });
+      return { resetUrl: `${env().APP_URL}/reset-password?token=${encodeURIComponent(token)}`, expiresInMinutes: 60 };
     }),
 
   /** Project assignments and flags for one user (Team & permissions). */

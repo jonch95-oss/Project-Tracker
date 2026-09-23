@@ -116,19 +116,38 @@ export function canProject(
 }
 
 /**
- * Admins may grant project flags only up to what they hold themselves, and
- * may never make someone else an owner. Owners may grant anything.
+ * May the actor set a membership to `requested`, given what it was before
+ * (`before`, null for a new member) and the target's global role?
+ *
+ * - Owners may do anything.
+ * - Admins manage only members and outside collaborators on projects they
+ *   are on — never owners or other admins (including themselves).
+ * - An admin may leave financial visibility as it was, but may only grant
+ *   or revoke it if they can see financials themselves.
  */
 export function canGrantFlags(
   actor: Actor,
   actorMembership: Membership | null,
   requested: MembershipFlags,
+  before: MembershipFlags | null = null,
+  targetRole: GlobalRole = "member",
 ): boolean {
   if (!isActive(actor)) return false;
   if (actor.role === "owner") return true;
   if (actor.role !== "admin" || !actorMembership) return false;
-  if (requested.canViewFinancials && !actorMembership.canViewFinancials) return false;
+  if (targetRole === "owner" || targetRole === "admin") return false;
+  const financialsChanged = requested.canViewFinancials !== (before?.canViewFinancials ?? false);
+  if (financialsChanged && !actorMembership.canViewFinancials) return false;
   return true;
+}
+
+/** Removing someone from a project follows the same limits as editing them. */
+export function canRemoveMember(actor: Actor, actorMembership: Membership | null, target: { role: GlobalRole; canViewFinancials: boolean }): boolean {
+  if (!isActive(actor)) return false;
+  if (actor.role === "owner") return true;
+  if (actor.role !== "admin" || !actorMembership) return false;
+  if (target.role === "owner" || target.role === "admin") return false;
+  return !target.canViewFinancials || actorMembership.canViewFinancials;
 }
 
 export function canAssignGlobalRole(actor: Actor, target: GlobalRole, targetUserId: string): boolean {

@@ -8,20 +8,12 @@ import { twoFactor } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db";
 import { allowedOrigins, env } from "./env";
+import { passwordProblem } from "@/core/password";
+import { clientIp, TRUSTED_IP_HEADERS } from "./request-ip";
 import { recordAudit } from "./services/audit";
 import { renderEmail, sendEmail } from "./services/email";
 
 export const APP_NAME = "Project Command";
-
-function clientIp(headers: Headers | undefined | null): string | null {
-  if (!headers) return null;
-  return (
-    headers.get("cf-connecting-ip") ??
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    headers.get("x-real-ip") ??
-    null
-  );
-}
 
 function createAuth() {
   const appUrl = new URL(env().APP_URL);
@@ -85,7 +77,8 @@ function createAuth() {
     session: {
       expiresIn: 60 * 60 * 24 * 30, // 30 days: field users stay signed in on their phones
       updateAge: 60 * 60 * 24,
-      cookieCache: { enabled: true, maxAge: 60 }, // short, so deactivation takes effect within a minute
+      // No cookie cache: revoking a session (sign out elsewhere, deactivation) takes effect on the next request.
+      cookieCache: { enabled: false },
     },
 
     rateLimit: {
@@ -106,7 +99,7 @@ function createAuth() {
 
     advanced: {
       useSecureCookies: appUrl.protocol === "https:",
-      ipAddress: { ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for", "x-real-ip"] },
+      ipAddress: { ipAddressHeaders: TRUSTED_IP_HEADERS },
       database: { generateId: () => crypto.randomUUID() },
     },
 
@@ -121,22 +114,6 @@ function createAuth() {
               .where(eq(schema.user.id, session.userId));
             if (!u || u.status !== "active") return false;
           },
-          async after(session) {
-            const [u] = await db()
-              .select({ name: schema.user.name })
-              .from(schema.user)
-              .where(eq(schema.user.id, session.userId));
-            await recordAudit(db(), {
-              actorId: session.userId,
-              actorName: u?.name ?? null,
-              action: "login",
-              entityType: "session",
-              entityId: session.id,
-              summary: `${u?.name ?? "User"} signed in`,
-              data: { userAgent: session.userAgent ?? null },
-              ip: session.ipAddress ?? null,
-            });
-          },
         },
       },
     },
@@ -145,6 +122,12 @@ function createAuth() {
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path === "/sign-up/email") {
           throw new APIError("FORBIDDEN", { message: "Accounts are created by invitation only." });
+        }
+        // Same password rule everywhere (invite, reset, change).
+        if (ctx.path === "/reset-password" || ctx.path === "/change-password") {
+          const pw = typeof ctx.body?.newPassword === "string" ? ctx.body.newPassword : "";
+          const problem = passwordProblem(pw);
+          if (problem) throw new APIError("BAD_REQUEST", { message: problem });
         }
       }),
       after: createAuthMiddleware(async (ctx) => {
@@ -168,6 +151,28 @@ function createAuth() {
           return;
         }
         if (failed || !actorId) return;
+
+        // A sign-in is complete only when it hands back a real session:
+        // password sign-in without 2FA, the 2FA challenge (no prior session),
+        // or a passkey. The 2FA plugin creates and deletes a provisional
+        // session first, so session-create hooks would log false sign-ins.
+        const signInPaths = ["/sign-in/email", "/two-factor/verify-totp", "/two-factor/verify-backup-code", "/passkey/verify-authentication"];
+        const pendingTwoFactor = typeof returned === "object" && returned !== null && "twoFactorRedirect" in returned;
+        if (signInPaths.includes(ctx.path) && ctx.context.newSession && !ctx.context.session && !pendingTwoFactor) {
+          const s = ctx.context.newSession;
+          await db().update(schema.user).set({ lastSeenAt: new Date() }).where(eq(schema.user.id, s.user.id));
+          await recordAudit(db(), {
+            actorId: s.user.id,
+            actorName: s.user.name,
+            action: "login",
+            entityType: "session",
+            entityId: s.session.id,
+            summary: `${s.user.name} signed in${ctx.path.startsWith("/passkey") ? " with a passkey" : ctx.path.startsWith("/two-factor") ? " with two-factor" : ""}`,
+            data: { userAgent: s.session.userAgent ?? null },
+            ip,
+          });
+          return;
+        }
 
         const map: Record<string, { action: Parameters<typeof recordAudit>[1]["action"]; summary: string } | undefined> = {
           "/two-factor/disable": { action: "2fa.disable", summary: `${actorName} turned off two-factor authentication` },

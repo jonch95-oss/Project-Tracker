@@ -2,8 +2,8 @@ import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { db, schema } from "@/server/db";
 import { recordAudit } from "@/server/services/audit";
-import { budgetDecision, sendEmail, setMailerForTests, type Mailer } from "@/server/services/email";
-import { tickJob } from "@/server/services/jobs";
+import { budgetDecision, drainOutbox, sendEmail, setMailerForTests, type Mailer } from "@/server/services/email";
+import { backupWatchJob, tickJob } from "@/server/services/jobs";
 import { runUsageCheck } from "@/server/services/usage";
 import { POST as jobRoute } from "@/app/api/jobs/[job]/route";
 import { callerFor, createUser } from "../support/fixtures";
@@ -75,21 +75,57 @@ describe("email budget", () => {
     expect(budgetDecision(100, true)).toBe("hold");
   });
 
-  it("never drops mail: held and failed messages stay in the outbox", async () => {
-    const failing: Mailer = { name: "fail", send: async () => { throw new Error("provider down"); } };
+  it("critical alerts (stop-work / vacate) always send", () => {
+    expect(budgetDecision(100, true, true)).toBe("send");
+    expect(budgetDecision(250, false, true)).toBe("send");
+  });
+
+  it("with email on hold, records a skipped row without the body", async () => {
+    const status = await sendEmail({ to: "skip@example.com", subject: "Invite", html: "<p>secret link</p>", text: "secret link", category: "invite", urgent: true });
+    expect(status).toBe("skipped");
+    const [row] = await db().select().from(schema.emailOutbox).where(eq(schema.emailOutbox.toAddress, "skip@example.com"));
+    expect(row).toMatchObject({ status: "skipped", html: "", text: "" });
+  });
+
+  it("never drops mail: failed messages stay in the outbox and are retried", async () => {
+    const failing: Mailer = { name: "test", enabled: true, send: async () => { throw new Error("provider down"); } };
     setMailerForTests(failing);
     const status = await sendEmail({ to: "x@example.com", subject: "s", html: "<p>h</p>", text: "t", category: "system", urgent: true });
     expect(status).toBe("failed");
     const rows = await db().select().from(schema.emailOutbox).where(eq(schema.emailOutbox.toAddress, "x@example.com"));
     expect(rows[0]?.status).toBe("failed");
     expect(rows[0]?.error).toContain("provider down");
+
+    // The provider recovers: the hourly drain delivers it and removes the body.
+    setMailerForTests({ name: "test", enabled: true, send: async () => ({ id: "ok" }) });
+    const drained = await drainOutbox();
+    expect(drained.sent).toBeGreaterThanOrEqual(1);
+    const [after] = await db().select().from(schema.emailOutbox).where(eq(schema.emailOutbox.toAddress, "x@example.com"));
+    expect(after).toMatchObject({ status: "sent", attempts: 2 });
+    expect(after?.text).not.toContain("t\n");
+    expect(after?.html).toBe("[body removed after sending]");
+  });
+
+  it("parallel sends never exceed the daily cap", async () => {
+    setMailerForTests({ name: "test", enabled: true, send: async () => ({ id: "ok" }) });
+    const today = new Date().toISOString().slice(0, 10);
+    // Pretend 78 were already sent today.
+    await db().insert(schema.emailOutbox).values(
+      Array.from({ length: 78 }, (_, i) => ({ toAddress: `p${i}@example.com`, subject: "s", html: "", text: "", category: "digest" as const, status: "sent" as const, sendDate: today })),
+    );
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => sendEmail({ to: `race${i}@example.com`, subject: "s", html: "h", text: "t", category: "digest", urgent: false })),
+    );
+    const [row] = await db().execute<{ n: number }>(sql`select count(*)::int as n from email_outbox where status = 'sent' and send_date = ${today}`).then((r) => r.rows);
+    expect(row!.n).toBeLessThanOrEqual(80);
+    expect(results.filter((r) => r === "held").length).toBeGreaterThan(0);
   });
 });
 
 describe("free-tier usage alerts", () => {
   it("emails the owner once when a metric passes 70%, again only on escalation", async () => {
     const sent: string[] = [];
-    setMailerForTests({ name: "capture", send: async (m) => { sent.push(m.subject); return { id: "x" }; } });
+    setMailerForTests({ name: "test", enabled: true, send: async (m) => { sent.push(m.subject); return { id: "x" }; } });
     try {
       // Simulate 1,500 GitHub Actions minutes this month (75%).
       await db().insert(schema.jobRun).values({ job: "actions:ci", trigger: "actions-report", status: "succeeded", billableMinutes: 1_500 });
@@ -153,13 +189,32 @@ describe("hourly tick", () => {
   it("runs daily jobs once per New York day, only after their hour", async () => {
     const before7 = new Date("2030-01-15T11:30:00Z"); // 6:30 ET
     const after7 = new Date("2030-01-15T12:30:00Z"); // 7:30 ET
-    // runJob stamps real "now", so simulate by checking what the tick decides.
     const early = await tickJob(before7);
-    expect(early.ran).toEqual(["usage-check"]);
+    expect(early.ran).toEqual(["usage-check", "email-outbox"]);
     const first = await tickJob(after7);
     expect(first.ran).toContain("error-summary");
     const second = await tickJob(after7);
     expect(second.ran).not.toContain("error-summary");
+  });
+
+  it("closes runs that died mid-flight and skips an overlapping tick", async () => {
+    const now = new Date("2030-01-16T12:30:00Z");
+    const [stuck] = await db()
+      .insert(schema.jobRun)
+      .values({ job: "stuck", status: "running", startedAt: new Date(now.getTime() - 3_600_000) })
+      .returning();
+    const res = await tickJob(now);
+    expect(res.staleRunsClosed).toBeGreaterThanOrEqual(1);
+    const [after] = await db().select().from(schema.jobRun).where(eq(schema.jobRun.id, stuck!.id));
+    expect(after?.status).toBe("failed");
+
+    // Hold the tick lock from another connection: a second tick exits at once.
+    const results = await Promise.all([tickJob(now), tickJob(now)]);
+    expect(results.some((r) => r.skipped === "another tick is running")).toBe(true);
+  });
+
+  it("backup watch fails loudly when no nightly backup is recent", async () => {
+    await expect(backupWatchJob(new Date("2031-01-01T14:00:00Z"))).rejects.toThrow(/nightly backup/);
   });
 
   it("records backups reported by the workflow", async () => {

@@ -25,6 +25,8 @@ export const user = pgTable(
     title: text("title"),
     company: text("company"),
     phone: text("phone"),
+    /** Last completed sign-in (sessions are deleted on sign-out, so they can't answer "last active"). */
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   },
   (t) => [index("user_role_idx").on(t.role)],
 );

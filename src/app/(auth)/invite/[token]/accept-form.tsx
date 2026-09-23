@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button, Field, Input } from "@/components/ui/primitives";
+import { PASSWORD_HINT, passwordProblem } from "@/core/password";
 import { authClient } from "@/lib/auth-client";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 
@@ -19,8 +20,8 @@ export function AcceptInviteForm({ token, email, defaultName, roleLabel }: { tok
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (password.length < 12) return setError("Use at least 12 characters.");
-    if (!/[a-zA-Z]/.test(password) || !/[^a-zA-Z]/.test(password)) return setError("Mix letters with numbers or symbols.");
+    const problem = passwordProblem(password);
+    if (problem) return setError(problem);
     if (password !== confirm) return setError("The passwords don't match.");
     try {
       await accept.mutateAsync({ token, name, password });
@@ -45,7 +46,7 @@ export function AcceptInviteForm({ token, email, defaultName, roleLabel }: { tok
       <Field label="Your name" htmlFor="name">
         <Input id="name" autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
-      <Field label="Password" htmlFor="password" hint="At least 12 characters, mixing letters with numbers or symbols.">
+      <Field label="Password" htmlFor="password" hint={PASSWORD_HINT}>
         <Input id="password" type="password" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
       <Field label="Confirm password" htmlFor="confirm" error={error}>

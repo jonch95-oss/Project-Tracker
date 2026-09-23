@@ -10,7 +10,7 @@ import { hasPasskeySupport, useClientFlag } from "@/lib/use-client-flag";
 
 type Step = "password" | "totp" | "backup";
 
-export function LoginForm() {
+export function LoginForm({ next, justReset }: { next: string; justReset: boolean }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("password");
   const [email, setEmail] = useState("");
@@ -22,8 +22,15 @@ export function LoginForm() {
   const passkeySupported = useClientFlag(hasPasskeySupport);
 
   function done() {
-    router.replace("/");
+    router.replace(next);
     router.refresh();
+  }
+
+  function startOver(message: string | null = null) {
+    setStep("password");
+    setCode("");
+    setPassword("");
+    setError(message);
   }
 
   async function onPassword(e: FormEvent) {
@@ -53,8 +60,12 @@ export function LoginForm() {
         : await authClient.twoFactor.verifyBackupCode({ code: code.trim(), trustDevice });
     setBusy(false);
     if (res.error) {
-      setError(res.error.status === 429 ? "Too many attempts. Wait a minute and try again." : "That code didn't work. Check it and try again.");
-      return;
+      if (res.error.status === 429) return setError("Too many attempts. Wait a minute and try again.");
+      // The two-step challenge lasts 10 minutes; after that, sign in again.
+      if (res.error.status === 401 && /cookie|expired|session/i.test(res.error.message ?? "")) {
+        return startOver("That sign-in expired. Enter your password again.");
+      }
+      return setError("That code didn't work. Check it and try again.");
     }
     done();
   }
@@ -113,6 +124,9 @@ export function LoginForm() {
         >
           {step === "totp" ? "Use a backup code instead" : "Use my authenticator app"}
         </button>
+        <button type="button" className="text-sm text-muted underline-offset-4 hover:text-text hover:underline" onClick={() => startOver()}>
+          Start over with a different account
+        </button>
       </form>
     );
   }
@@ -123,6 +137,11 @@ export function LoginForm() {
         <h1 className="serif text-[40px] leading-[44px]">Sign in</h1>
         <p className="mt-2 text-[15px] text-muted">Access is by invitation only.</p>
       </div>
+      {justReset && (
+        <p role="status" className="rounded-panel border border-done/30 bg-done-tint px-4 py-3 text-sm text-done-text">
+          Your password was changed. Sign in with the new one.
+        </p>
+      )}
 
       {passkeySupported && (
         <>

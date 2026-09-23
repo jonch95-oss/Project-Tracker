@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { databaseConfigured, getViewer } from "@/server/session";
+import { safeNextPath } from "@/core/redirect";
 import { LoginForm } from "./login-form";
 
 export const metadata: Metadata = { title: "Sign in" };
 
-export default async function LoginPage() {
-  if (await getViewer()) redirect("/");
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
+  const sp = await searchParams;
+  const next = safeNextPath(typeof sp.next === "string" ? sp.next : null);
+  if (await getViewer()) redirect(next);
   if (!databaseConfigured()) {
     return (
       <div className="flex flex-col gap-4">
@@ -17,5 +20,5 @@ export default async function LoginPage() {
       </div>
     );
   }
-  return <LoginForm />;
+  return <LoginForm next={next} justReset={sp.reset === "1"} />;
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
 import { Button, Field, Input } from "@/components/ui/primitives";
+import { PASSWORD_HINT, passwordProblem } from "@/core/password";
 import { authClient } from "@/lib/auth-client";
 
 function ResetForm() {
@@ -20,9 +21,9 @@ function ResetForm() {
     return (
       <div className="flex flex-col gap-6">
         <h1 className="serif text-[40px] leading-[44px]">Link expired</h1>
-        <p className="text-[15px] text-muted">This reset link is invalid or has expired. Request a new one.</p>
+        <p className="text-[15px] text-muted">This reset link is invalid or has expired. Ask the owner for a new one.</p>
         <Link href="/forgot-password" className="text-sm underline underline-offset-4">
-          Request a new link
+          How to get a new link
         </Link>
       </div>
     );
@@ -30,13 +31,14 @@ function ResetForm() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (password.length < 12) return setError("Use at least 12 characters.");
+    const problem = passwordProblem(password);
+    if (problem) return setError(problem);
     if (password !== confirm) return setError("The passwords don't match.");
     setBusy(true);
     setError(null);
     const res = await authClient.resetPassword({ newPassword: password, token: token! });
     setBusy(false);
-    if (res.error) return setError("This link has expired. Request a new one.");
+    if (res.error) return setError(res.error.status === 400 && res.error.message ? res.error.message : "This link has expired. Ask for a new one.");
     router.replace("/login?reset=1");
   }
 
@@ -44,7 +46,7 @@ function ResetForm() {
     <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
       <div>
         <h1 className="serif text-[40px] leading-[44px]">Choose a new password</h1>
-        <p className="mt-2 text-[15px] text-muted">At least 12 characters. A short sentence works well.</p>
+        <p className="mt-2 text-[15px] text-muted">{PASSWORD_HINT}</p>
       </div>
       <Field label="New password" htmlFor="password">
         <Input id="password" type="password" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)} />

@@ -3,6 +3,7 @@ import {
   canAssignGlobalRole,
   canGlobal,
   canGrantFlags,
+  canRemoveMember,
   canProject,
   defaultFlags,
   GLOBAL_ROLES,
@@ -150,5 +151,38 @@ describe("granting", () => {
     expect(defaultFlags("admin").canViewFinancials).toBe(false);
     expect(defaultFlags("member")).toEqual({ canViewFinancials: false, canEditChecklist: false, canApprove: false });
     expect(defaultFlags("external")).toEqual({ canViewFinancials: false, canEditChecklist: false, canApprove: false });
+  });
+});
+
+describe("admin limits on memberships", () => {
+  const admin = actor("admin");
+  const adminNoFin = member();
+  const adminFin = member({ canViewFinancials: true });
+  const noFlags = { canViewFinancials: false, canEditChecklist: false, canApprove: false };
+  const withFin = { ...noFlags, canViewFinancials: true };
+
+  it("an admin without financials may keep someone's financial access unchanged", () => {
+    expect(canGrantFlags(admin, adminNoFin, { ...withFin, canApprove: true }, withFin, "member")).toBe(true);
+  });
+  it("…but may not revoke or grant it", () => {
+    expect(canGrantFlags(admin, adminNoFin, noFlags, withFin, "member")).toBe(false);
+    expect(canGrantFlags(admin, adminNoFin, withFin, noFlags, "member")).toBe(false);
+    expect(canGrantFlags(admin, adminFin, noFlags, withFin, "member")).toBe(true);
+  });
+  it("admins never edit owners or other admins", () => {
+    expect(canGrantFlags(admin, adminFin, noFlags, noFlags, "owner")).toBe(false);
+    expect(canGrantFlags(admin, adminFin, noFlags, noFlags, "admin")).toBe(false);
+    expect(canGrantFlags(actor("owner"), null, withFin, null, "admin")).toBe(true);
+  });
+  it("removal follows the same limits", () => {
+    expect(canRemoveMember(admin, adminNoFin, { role: "member", canViewFinancials: false })).toBe(true);
+    expect(canRemoveMember(admin, adminNoFin, { role: "member", canViewFinancials: true })).toBe(false);
+    expect(canRemoveMember(admin, adminFin, { role: "external", canViewFinancials: true })).toBe(true);
+    expect(canRemoveMember(admin, adminFin, { role: "owner", canViewFinancials: true })).toBe(false);
+    expect(canRemoveMember(admin, adminFin, { role: "admin", canViewFinancials: false })).toBe(false);
+    expect(canRemoveMember(actor("owner"), null, { role: "admin", canViewFinancials: true })).toBe(true);
+    expect(canRemoveMember(actor("member"), adminFin, { role: "member", canViewFinancials: false })).toBe(false);
+    expect(canRemoveMember(actor("admin", "deactivated"), adminFin, { role: "member", canViewFinancials: false })).toBe(false);
+    expect(canRemoveMember(admin, null, { role: "member", canViewFinancials: false })).toBe(false);
   });
 });
