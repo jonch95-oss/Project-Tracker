@@ -54,6 +54,15 @@ describe("projects", () => {
     expect((await c.projects.get({ projectId: n.id })).latitude).toBeNull();
   });
 
+  it("editing with a blank BBL fills it from the city's address data", async () => {
+    const c = await callerFor(owner.id);
+    const { id } = await c.projects.create({ name: "Later BBL", address: "5 With BBL Place", type: "gut_renovation", companyId: await companyId(), bbl: null });
+    await db().update(schema.project).set({ bbl: null }).where(eq(schema.project.id, id));
+    const p = await c.projects.get({ projectId: id });
+    await c.projects.update({ projectId: id, version: p.version, name: p.name, address: p.address, borough: "Brooklyn", bbl: null, companyId: p.companyId, status: "active", facts: {} });
+    expect((await c.projects.get({ projectId: id })).bbl).toBe("3011370045");
+  });
+
   it("rejects a BBL whose borough digit doesn't match", async () => {
     const c = await callerFor(owner.id);
     await expect(
@@ -244,6 +253,41 @@ describe("photos", () => {
     expect((await oc.projects.get({ projectId })).heroPhotoId).toBeNull();
   });
 
+  it("two simultaneous completes record the photo once and meter it once; two removes release it once", async () => {
+    const c = await callerFor(member.id);
+    const b = await c.photos.beginUpload({ projectId, contentType: "image/webp", fullBytes: 1000, thumbBytes: 100, width: 4, height: 3 });
+    for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(o.role === "full" ? 1000 : 100), { contentType: "image/webp" });
+    const meter = async () => (await db().select().from(schema.usageCounter).where(eq(schema.usageCounter.key, "blob.storage")))[0]?.value ?? 0;
+    const before = await meter();
+    const results = await Promise.allSettled([c.photos.completeUpload({ projectId, uploadId: b.uploadId }), c.photos.completeUpload({ projectId, uploadId: b.uploadId })]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rows = await db().select().from(schema.projectPhoto).where(eq(schema.projectPhoto.objectKey, b.objects[0]!.pathname));
+    expect(rows).toHaveLength(1);
+    expect((await meter()) - before).toBe(1100);
+
+    const oc = await callerFor(owner.id);
+    const removed = await Promise.allSettled([oc.photos.remove({ projectId, photoId: rows[0]!.id }), oc.photos.remove({ projectId, photoId: rows[0]!.id })]);
+    expect(removed.some((r) => r.status === "fulfilled")).toBe(true);
+    expect((await meter()) - before).toBe(0);
+  });
+
+  it("uploads still in flight count toward the 95% stop", async () => {
+    const limit = FREE_TIER_LIMITS["blob.storage"].limit;
+    const c = await callerFor(member.id);
+    // Leave just under 25 MB of headroom below 95%, then reserve two 12 MB uploads without finishing them.
+    const start = Math.floor(limit * 0.95) - 25 * 1024 * 1024;
+    await db()
+      .insert(schema.usageCounter)
+      .values({ key: "blob.storage", periodKey: "total", value: start })
+      .onConflictDoUpdate({ target: [schema.usageCounter.key, schema.usageCounter.periodKey], set: { value: start } });
+    const big = 12 * 1024 * 1024;
+    await c.photos.beginUpload({ projectId, contentType: "image/webp", fullBytes: big - 1024, thumbBytes: 1024, width: 4, height: 3 });
+    await c.photos.beginUpload({ projectId, contentType: "image/webp", fullBytes: big - 1024, thumbBytes: 1024, width: 4, height: 3 });
+    await expect(c.photos.beginUpload({ projectId, contentType: "image/webp", fullBytes: big - 1024, thumbBytes: 1024, width: 4, height: 3 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await db().update(schema.usageCounter).set({ value: 0 }).where(eq(schema.usageCounter.key, "blob.storage"));
+    await db().delete(schema.pendingUpload).where(eq(schema.pendingUpload.userId, member.id));
+  });
+
   it("the photo route serves only to people on the project, with private caching", async () => {
     const c = await callerFor(member.id);
     const photo = await uploadPhoto(c, projectId, { full: 64, thumb: 16 });
@@ -253,7 +297,7 @@ describe("photos", () => {
     });
     expect(ok.status).toBe(200);
     expect((await ok.arrayBuffer()).byteLength).toBe(64);
-    expect(ok.headers.get("cache-control")).toMatch(/^private/);
+    expect(ok.headers.get("cache-control")).toBe("private, max-age=600");
     const thumb = await photoRoute(new Request(`http://localhost:3000/api/media/photos/${photo.id}`, { headers: { cookie } }), { params: Promise.resolve({ id: photo.id }) });
     expect((await thumb.arrayBuffer()).byteLength).toBe(16);
 

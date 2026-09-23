@@ -5,7 +5,7 @@ import { useState, type FormEvent } from "react";
 import { readProjectForm, ProjectFormFields } from "@/components/project/project-form";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
-import { Button } from "@/components/ui/primitives";
+import { Button, Skeleton } from "@/components/ui/primitives";
 import { FieldError } from "@/core/forms";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 
@@ -75,13 +75,18 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" form="edit-project" loading={update.isPending || headline.isPending}>
+          <Button type="submit" form="edit-project" disabled={!companies.data} loading={update.isPending || headline.isPending}>
             Save
           </Button>
         </>
       }
     >
-      {/* Keyed on version so reopening after someone else's save shows fresh values. */}
+      {/* Keyed on version so reopening after someone else's save shows fresh values. The form waits
+          for the company list: an uncontrolled select mounted without its options would silently
+          pick the first company. */}
+      {!companies.data ? (
+        <Skeleton className="h-64 rounded-panel" />
+      ) : (
       <form key={`${project.version}-${open}`} id="edit-project" onSubmit={onSubmit}>
         <ProjectFormFields
           idPrefix="ep"
@@ -116,6 +121,7 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
           </p>
         )}
       </form>
+      )}
     </Dialog>
   );
 }

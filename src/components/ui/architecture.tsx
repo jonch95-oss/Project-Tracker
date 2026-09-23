@@ -17,11 +17,19 @@ export function AddressPlaceholder({
   size?: "card" | "hero" | "thumb";
 }) {
   const text = { card: "text-[34px] leading-[38px]", hero: "text-title sm:text-[72px] sm:leading-[76px]", thumb: "text-[15px] leading-[18px]" }[size];
+  if (size === "thumb") {
+    // Too small for the address: the elevation ornament alone.
+    return (
+      <div className={cn("relative isolate flex items-end justify-center overflow-hidden bg-stone", className)} aria-hidden="true">
+        <Elevation className="h-[85%] text-accent/45" />
+      </div>
+    );
+  }
   return (
     <div className={cn("relative isolate flex overflow-hidden bg-stone", className)}>
       <Elevation className="absolute -right-6 bottom-0 -z-10 h-[88%] text-accent/15" />
-      <div className={cn("mt-auto p-6", size === "thumb" && "p-2", size === "hero" && "p-8 sm:p-12")}>
-        {borough && size !== "thumb" && <p className="eyebrow mb-2">{borough}</p>}
+      <div className={cn("mt-auto p-6", size === "hero" && "p-8 sm:p-12")}>
+        {borough && <p className="eyebrow mb-2">{borough}</p>}
         <p className={cn("serif text-text/90", text)}>{address}</p>
       </div>
     </div>

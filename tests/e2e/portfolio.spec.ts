@@ -133,6 +133,17 @@ test.describe("portfolio", () => {
     await expect(page.getByText("Project restored to the portfolio")).toBeVisible();
   });
 
+  test("editing from a cold page load keeps the project's company", async ({ page }) => {
+    await signIn(page, "jon@demo.test");
+    await page.goto("/portfolio");
+    await page.getByText("Bergen Street Condominium").click();
+    await expect(page).toHaveURL(/\/projects\//);
+    await page.reload(); // nothing cached
+    await page.getByRole("button", { name: "Edit project" }).click();
+    await expect(page.getByLabel("Company")).toHaveValue(/.+/);
+    await expect(page.getByLabel("Company").locator("option:checked")).toHaveText("Lian Development JV Group");
+  });
+
   test("a member without financial access never sees money", async ({ page }) => {
     await signIn(page, "ariel@demo.test");
     await page.goto("/portfolio");

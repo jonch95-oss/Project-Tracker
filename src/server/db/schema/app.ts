@@ -299,7 +299,7 @@ export const projectPhoto = pgTable(
     uploadedById: text("uploaded_by_id").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
-  (t) => [index("project_photo_project_idx").on(t.projectId, t.createdAt)],
+  (t) => [index("project_photo_project_idx").on(t.projectId, t.createdAt), uniqueIndex("project_photo_object_idx").on(t.objectKey)],
 );
 
 /**

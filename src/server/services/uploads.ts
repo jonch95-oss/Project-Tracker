@@ -1,9 +1,9 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { FREE_TIER_LIMITS, uploadAllowed } from "@/core/freeTier";
-import { db, schema, type Database } from "../db";
+import { db, schema, type Database, type DbOrTx } from "../db";
 import { storage } from "../storage";
 import { bumpCounter } from "./usage";
 
@@ -25,9 +25,18 @@ export async function blobStoredBytes(conn: Database = db()): Promise<number> {
   return Number(files?.value ?? 0) + Number(backups?.total ?? 0);
 }
 
-/** Refuse uploads that would take Blob past 95% of the app's budget. */
+/** Bytes authorized for uploads still in progress (they may land any moment). */
+export async function reservedUploadBytes(conn: Database = db(), now = new Date()): Promise<number> {
+  const [r] = await conn.execute<{ total: string | null }>(sql`
+    select sum((o->>'maxBytes')::bigint)::text as total
+    from pending_upload, jsonb_array_elements(objects) o
+    where completed_at is null and expires_at > ${now}`).then((x) => x.rows);
+  return Number(r?.total ?? 0);
+}
+
+/** Refuse uploads that would take Blob past 95% of the app's budget, counting uploads still in flight. */
 export async function assertUploadBudget(totalBytes: number, conn: Database = db()): Promise<void> {
-  const stored = await blobStoredBytes(conn);
+  const stored = (await blobStoredBytes(conn)) + (await reservedUploadBytes(conn));
   if (!uploadAllowed(stored, totalBytes)) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
@@ -82,8 +91,22 @@ export async function verifyUploadedObjects(row: PendingUpload): Promise<Record<
   return out;
 }
 
-export async function markUploadComplete(conn: Database, id: string, bytes: number): Promise<void> {
-  await conn.update(schema.pendingUpload).set({ completedAt: new Date() }).where(eq(schema.pendingUpload.id, id));
+/**
+ * Atomically claim an open upload for completion (inside the caller's
+ * transaction). Only one caller can win, so a double-submit can never record
+ * the same files twice, and the hourly cleanup (which only looks at
+ * unclaimed, expired rows) can't delete files being recorded.
+ */
+export async function claimUpload(tx: DbOrTx, id: string, userId: string, now = new Date()): Promise<boolean> {
+  const rows = await tx
+    .update(schema.pendingUpload)
+    .set({ completedAt: now })
+    .where(and(eq(schema.pendingUpload.id, id), eq(schema.pendingUpload.userId, userId), isNull(schema.pendingUpload.completedAt), gt(schema.pendingUpload.expiresAt, now)))
+    .returning({ id: schema.pendingUpload.id });
+  return rows.length === 1;
+}
+
+export async function meterStored(bytes: number): Promise<void> {
   if (bytes > 0) await bumpCounter("blob.storage", bytes);
 }
 

@@ -252,3 +252,47 @@ describe("images", () => {
   });
 });
 
+
+describe("EXIF capture date", async () => {
+  const { exifTakenAt, parseExifDate } = await import("@/core/exif");
+  /** A minimal JPEG with an APP1 Exif block: IFD0 → ExifIFD → DateTimeOriginal. */
+  function jpegWithExif(date: string, little: boolean, where: "exif" | "ifd0" = "exif"): ArrayBuffer {
+    const tiff = new DataView(new ArrayBuffer(200));
+    const w16 = (o: number, x: number) => tiff.setUint16(o, x, little);
+    const w32 = (o: number, x: number) => tiff.setUint32(o, x, little);
+    tiff.setUint16(0, little ? 0x4949 : 0x4d4d);
+    w16(2, 42);
+    w32(4, 8); // IFD0 at 8
+    w16(8, 1);
+    if (where === "exif") {
+      w16(10, 0x8769); w16(12, 4); w32(14, 1); w32(18, 26); // Exif IFD at 26
+      w32(22, 0);
+      w16(26, 1);
+      w16(28, 0x9003); w16(30, 2); w32(32, 20); w32(36, 60);
+    } else {
+      w16(10, 0x0132); w16(12, 2); w32(14, 20); w32(18, 60);
+    }
+    for (let i = 0; i < date.length; i++) tiff.setUint8(60 + i, date.charCodeAt(i));
+    const app1Len = 2 + 6 + 200;
+    const out = new Uint8Array(2 + 2 + app1Len + 2);
+    out.set([0xff, 0xd8, 0xff, 0xe1, app1Len >> 8, app1Len & 0xff, 0x45, 0x78, 0x69, 0x66, 0, 0], 0);
+    out.set(new Uint8Array(tiff.buffer), 12);
+    out.set([0xff, 0xd9], 12 + 200);
+    return out.buffer;
+  }
+  it("reads DateTimeOriginal as New York time, both byte orders", () => {
+    for (const little of [true, false]) {
+      expect(exifTakenAt(jpegWithExif("2026:09:23 14:05:09", little))?.toISOString()).toBe("2026-09-23T18:05:09.000Z");
+    }
+    expect(exifTakenAt(jpegWithExif("2026:01:15 08:00:00", true, "ifd0"))?.toISOString()).toBe("2026-01-15T13:00:00.000Z");
+  });
+  it("returns null for anything else", () => {
+    expect(exifTakenAt(new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer)).toBeNull();
+    expect(exifTakenAt(new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 2]).buffer)).toBeNull();
+    expect(exifTakenAt(new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, 50, 0x45]).buffer)).toBeNull();
+    expect(exifTakenAt(new Uint8Array([0xff, 0xd8, 0x00]).buffer)).toBeNull();
+    expect(exifTakenAt(jpegWithExif("0000:00:00 00:00:00", true))).toBeNull();
+    expect(parseExifDate("2026-09-23 14:05:09")).toBeNull();
+    expect(parseExifDate("2026:13:01 00:00:00")).toBeNull();
+  });
+});

@@ -1,5 +1,56 @@
 # Progress
 
+## Milestone 2 — Projects & Portfolio (done)
+
+**Live:** https://ariel-dev-projects.vercel.app/portfolio
+
+### What shipped
+
+- **Portfolio**, four views, with the view, filters and search kept in the URL:
+  - **Cards:** hero photo (or the address in serif), phase track with "Phase X of N", % complete, days in phase, company, status, and headline figures only for people with financial access
+  - **Table:** sortable-looking dense list with thumbnails; scrolls inside its frame on a phone
+  - **Timeline:** phase Gantt across projects, opens on today; the current phase is hatched and marked ▸ as well as colored
+  - **Map:** MapLibre with OpenFreeMap's Positron tiles (free, commercial use allowed, no key). If the map can't load (offline or no WebGL), a plain plot of the pins shows instead
+  - Filters for phase, type, company, person (internal team only) and status; search by name, address or BBL; archived projects view
+- **Projects:**
+  - create and edit: address, borough, BBL, type, company, status, key facts (lot, zoning, residential and built FAR, unused ZSF, units, gross and sellable SF) and notes
+  - headline financials (purchase price, budget, projected sellout), editable by the owner or admins with financial access
+  - address lookup via NYC Planning GeoSearch (free, no key): map pin, and a blank BBL is filled when the city's data has one in the right borough
+  - optimistic locking: a stale edit is refused with "Someone else changed this project…"
+  - archive and restore (nothing is deleted)
+- **Phases:** each project type gets its track (standard 11 phases, contract flip, foreclosure auction). A stepper lets people who can edit the project make a phase current (forwards or back, with a confirmation for going back) or skip / restore a phase.
+- **Site photos:**
+  - compressed on the device (2560px WebP, JPEG on Safari, ~80%) plus a small copy for cards
+  - capture date from the photo's EXIF, never the file's modified time
+  - direct upload to the private Blob store with a token limited to the exact file path, size and type; the server checks the stored files before recording them; double submits and double removes are harmless
+  - storage metered; uploads refused at 95% of the Blob budget, counting uploads still in progress
+  - served only through an access-checked route, cached privately for 10 minutes
+  - newest photo is the hero unless an admin pins one; uploader or admin can remove
+  - abandoned uploads are cleaned up hourly
+- **Activity tab:** the project's history; money entries are hidden from anyone without financial access; outside collaborators don't get the feed.
+- The other project tabs (Checklist, Key Dates, Files, Public Records) show designed "coming next" states until their milestones.
+
+### Review
+
+An independent review found no financial leaks. It found 14 issues, all fixed:
+- editing from a cold page load could silently switch the company (the form now waits for the company list; e2e test added)
+- simultaneous upload completions or removals could duplicate photos or skew the storage meter (atomic claim, unique object key, delete-returning)
+- the 95% stop ignored uploads in progress
+- wrong "Phase X of N" with skipped phases, a stale search box after clearing filters, archived projects unreachable when everything was archived, BBL not filled on edit
+- polish: photo remove button rule, restored-phase wording, timeline on phones and color-only cues, table thumbnails, EXIF capture date, photo cache length
+
+### Test results
+
+- Unit: 171 tests (`src/core` ≥ 98% lines)
+- Integration: 455 tests against Postgres, including the permission matrix for every new procedure, financial gating in list, get and activity, upload verification, concurrency, budget and cleanup, and the photo route
+- E2E (Playwright, desktop Chromium plus an iPhone-sized viewport): 14/14. Covers views, filters, search, create, phase change, stale-edit conflict, photo upload, activity, archive/restore, money hidden from a member without the flag, cold-load edit, and no horizontal scroll on iPhone
+
+### Known limitations
+
+- Next action, blockers, overdue counts and key dates on cards arrive with tasks (Milestone 4).
+- The map tiles can't be reached from the build sandbox, so the live map was checked through its fallback here; it loads from OpenFreeMap in the browser.
+- **Preview deployments share the production database and don't run migrations**, so a preview can be broken until its milestone reaches `main`. Milestones are checked locally and on production. Neon's free "preview branching" in the Vercel integration would give each preview its own copy (optional).
+
 ## Milestone 1 — Foundation (done)
 
 **Production URL:** https://ariel-dev-projects.vercel.app (no custom domain). Branch previews are at `project-tracker-git-<branch>-jonch95-oss-projects.vercel.app` and sit behind Vercel Authentication.

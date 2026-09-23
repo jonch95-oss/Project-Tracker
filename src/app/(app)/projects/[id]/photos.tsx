@@ -144,7 +144,7 @@ export function PhotoGallery({ projectId, heroPhotoId, pinnedHeroId, canUpload, 
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {list.map((p) => (
             <li key={p.id} className="relative">
-              <button type="button" onClick={() => setOpen(p.id)} className="group block w-full overflow-hidden rounded-panel border border-border bg-stone" aria-label={`Open photo from ${formatDateTimeET(p.takenAt ?? p.createdAt)}`}>
+              <button type="button" onClick={() => setOpen(p.id)} className="group block w-full overflow-hidden rounded-panel border border-border bg-stone" aria-label={`Open photo ${p.takenAt ? `taken ${formatDateTimeET(p.takenAt)}` : `added ${formatDateTimeET(p.createdAt)}`}`}>
                 {/* eslint-disable-next-line @next/next/no-img-element -- private, access-checked route */}
                 <img src={photoUrl(p.id)} alt="" loading="lazy" decoding="async" className="aspect-[4/3] w-full object-cover transition-transform duration-200 ease-quiet group-hover:scale-[1.02]" />
               </button>
@@ -163,11 +163,15 @@ export function PhotoGallery({ projectId, heroPhotoId, pinnedHeroId, canUpload, 
         onClose={() => setOpen(null)}
         size="lg"
         title={current?.caption || "Site photo"}
-        description={current ? `${current.uploadedByName ?? "Someone"} · ${formatDateTimeET(current.takenAt ?? current.createdAt)}` : undefined}
+        description={
+          current
+            ? `${current.uploadedByName ?? "Someone"} · ${current.takenAt ? `taken ${formatDateTimeET(current.takenAt)}` : `added ${formatDateTimeET(current.createdAt)}`}`
+            : undefined
+        }
         footer={
           current && (
             <>
-              {(canManage || current.uploadedById === viewerId) && (
+              {(canManage || (canUpload && current.uploadedById === viewerId)) && (
                 <Button variant="danger" onClick={() => setRemoving(current.id)}>
                   <IconClose size={16} /> Remove
                 </Button>

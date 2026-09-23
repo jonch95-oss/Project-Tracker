@@ -1,5 +1,6 @@
 "use client";
 
+import { exifTakenAt } from "@/core/exif";
 import { FULL_LONG_EDGE, fitLongEdge, MAX_ORIGINAL_PHOTO_BYTES, PHOTO_QUALITY, THUMB_LONG_EDGE, type PhotoContentType } from "@/core/images";
 
 export interface CompressedPhoto {
@@ -51,7 +52,9 @@ export async function compressPhoto(file: File): Promise<CompressedPhoto> {
       fullBlob = await encode(bitmap, full.width, full.height, type);
     }
     const thumbBlob = await encode(bitmap, thumb.width, thumb.height, type);
-    return { full: fullBlob, thumb: thumbBlob, width: full.width, height: full.height, contentType: type, takenAt: file.lastModified ? new Date(file.lastModified) : null };
+    // Only a real capture time from the camera; the file's modified time is often just the export time.
+    const takenAt = file.type === "image/jpeg" ? exifTakenAt(await file.slice(0, 256 * 1024).arrayBuffer()) : null;
+    return { full: fullBlob, thumb: thumbBlob, width: full.width, height: full.height, contentType: type, takenAt };
   } finally {
     bitmap.close();
   }

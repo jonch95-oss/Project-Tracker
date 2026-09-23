@@ -16,7 +16,8 @@ import { photoUrl } from "@/lib/photo-upload";
 export function PhaseTrack({ phases, className, showLabel = true }: { phases: readonly PhaseState[]; className?: string; showLabel?: boolean }) {
   const cur = currentPhase(phases);
   const list = [...phases].sort((a, b) => a.sortOrder - b.sortOrder);
-  const idx = cur ? list.findIndex((p) => p.key === cur.key) : -1;
+  const counted = list.filter((p) => p.status !== "skipped");
+  const idx = cur ? counted.findIndex((p) => p.key === cur.key) : -1;
   const allDone = list.length > 0 && list.every((p) => p.status === "done" || p.status === "skipped");
   const label = cur ? cur.name : allDone ? "Complete" : "Not started";
   return (
@@ -26,7 +27,7 @@ export function PhaseTrack({ phases, className, showLabel = true }: { phases: re
           <span className="truncate font-medium text-text">{label}</span>
           {idx >= 0 && (
             <span className="num shrink-0 text-muted">
-              Phase {idx + 1} of {list.filter((p) => p.status !== "skipped").length + (cur?.status === "skipped" ? 1 : 0)}
+              Phase {idx + 1} of {counted.length}
             </span>
           )}
         </p>

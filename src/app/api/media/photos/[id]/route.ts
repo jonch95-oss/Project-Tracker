@@ -9,8 +9,9 @@ import { projectAccess } from "@/server/trpc/init";
 /**
  * Serves a project photo to someone who can see the project. Files are private
  * in Blob; this route is the only way to read them, and it checks access on
- * every request. The browser may keep a private copy (photos never change
- * under the same id), which also keeps Blob download usage down.
+ * every request. The browser keeps a private copy for 10 minutes (photos
+ * never change under the same id), which keeps Blob downloads down while
+ * still ending access soon after someone is removed from the project.
  */
 export async function GET(req: Request, ctx: RouteContext<"/api/media/photos/[id]">) {
   const { id } = await ctx.params;
@@ -34,7 +35,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/photos/[id
     headers: {
       "Content-Type": obj.contentType,
       "Content-Length": String(obj.size),
-      "Cache-Control": "private, max-age=604800, immutable",
+      "Cache-Control": "private, max-age=600",
       "X-Content-Type-Options": "nosniff",
       "Content-Disposition": "inline",
     },

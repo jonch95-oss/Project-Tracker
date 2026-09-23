@@ -377,12 +377,15 @@ export const projectsRouter = router({
       if (!before) throw new TRPCError({ code: "NOT_FOUND" });
       if (before.version !== input.version) throw conflict();
       const moved = before.address !== input.address || before.borough !== input.borough;
-      const geo = moved ? await tryGeocode(input.address, input.borough) : null;
+      const needBbl = !input.bbl;
+      const geo = moved || needBbl ? await tryGeocode(input.address, input.borough) : null;
+      // As on create: a blank BBL is filled from the city's address data when it's in the right borough.
+      const bbl = input.bbl ?? (geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough]) ? geo.bbl : null);
       const changes = {
         name: input.name,
         address: input.address,
         borough: input.borough,
-        bbl: input.bbl ?? null,
+        bbl,
         companyId: input.companyId,
         status: input.status,
         ...input.facts,

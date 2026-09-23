@@ -118,7 +118,19 @@ export function PortfolioView({ canCreate, isOwner }: { canCreate: boolean; isOw
       ) : total === 0 && !archived ? (
         <EmptyState
           title={canCreate ? "Start your first project" : "No projects yet"}
-          body={canCreate ? "Add a property to begin tracking it: its phase, photos, team and key facts." : "When you are added to a project, it will appear here."}
+          body={
+            <>
+              {canCreate ? "Add a property to begin tracking it: its phase, photos, team and key facts." : "When you are added to a project, it will appear here."}
+              {canCreate && (
+                <>
+                  {" "}
+                  <button type="button" className="underline underline-offset-4 hover:text-text" onClick={() => setParam({ archived: "1" })}>
+                    Show archived projects
+                  </button>
+                </>
+              )}
+            </>
+          }
           action={newButton}
         />
       ) : (
@@ -193,17 +205,19 @@ function Toolbar({
   people: { id: string; name: string }[];
   nFilters: number;
 }) {
-  const [q, setQ] = useState(filters.q ?? "");
   const [showFilters, setShowFilters] = useState(nFilters > 0 && !filters.q);
   return (
     <div className="mb-4 flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
+        {/* Uncontrolled and keyed on the URL's query, so clearing filters also clears the box. */}
         <form
+          key={filters.q ?? ""}
           role="search"
           className="relative min-w-0 flex-1 sm:max-w-sm"
           onSubmit={(e) => {
             e.preventDefault();
-            onFilter("q", q.trim() || null);
+            const v = String(new FormData(e.currentTarget).get("q") ?? "").trim();
+            onFilter("q", v || null);
           }}
         >
           <IconSearch size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -212,13 +226,13 @@ function Toolbar({
           </label>
           <Input
             id="portfolio-q"
+            name="q"
             type="search"
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              if (e.target.value === "") onFilter("q", null);
+            defaultValue={filters.q ?? ""}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== (filters.q ?? "")) onFilter("q", v || null);
             }}
-            onBlur={() => onFilter("q", q.trim() || null)}
             placeholder="Name, address or BBL"
             className="h-10 pl-9"
           />
@@ -330,20 +344,24 @@ function NewProjectDialog({ open, onClose, showHeadline }: { open: boolean; onCl
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" form="new-project" loading={create.isPending}>
+          <Button type="submit" form="new-project" disabled={!companies.data} loading={create.isPending}>
             Create project
           </Button>
         </>
       }
     >
-      <form key={formKey} id="new-project" onSubmit={onSubmit} noValidate={false}>
-        <ProjectFormFields idPrefix="np" mode="create" companies={companies.data} fieldError={fieldError} showHeadline={showHeadline} />
-        {error && (
-          <p role="alert" className="mt-4 text-[13px] text-blocked-text">
-            {error}
-          </p>
-        )}
-      </form>
+      {!companies.data ? (
+        <Skeleton className="h-64 rounded-panel" />
+      ) : (
+        <form key={formKey} id="new-project" onSubmit={onSubmit}>
+          <ProjectFormFields idPrefix="np" mode="create" companies={companies.data} fieldError={fieldError} showHeadline={showHeadline} />
+          {error && (
+            <p role="alert" className="mt-4 text-[13px] text-blocked-text">
+              {error}
+            </p>
+          )}
+        </form>
+      )}
     </Dialog>
   );
 }

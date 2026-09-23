@@ -185,7 +185,7 @@ export function PhaseStepper({ projectId, phases, version, canEdit }: { projectI
 }
 
 function describe(p: PhaseState): string {
-  if (p.status === "done" && p.startedOn && p.completedOn) return `${formatIsoDate(p.startedOn)} – ${formatIsoDate(p.completedOn)}`;
+  if (p.status === "done") return p.startedOn && p.completedOn ? `${formatIsoDate(p.startedOn)} – ${formatIsoDate(p.completedOn)}` : "Done. No dates were recorded for this phase.";
   if (p.status === "active" && p.startedOn) return `Since ${formatIsoDate(p.startedOn)}`;
   if (p.status === "skipped") return "Not part of this project.";
   return "Not started.";

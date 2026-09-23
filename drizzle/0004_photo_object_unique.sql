@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "project_photo_object_idx" ON "project_photo" USING btree ("object_key");

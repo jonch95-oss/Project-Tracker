@@ -1,14 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { addDays, daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { phaseSpans } from "@/core/phases";
 import { cn } from "@/lib/cn";
 import type { PortfolioProject } from "./portfolio-view";
 
 const DAY_PX = 3;
-const LABEL_W = 220;
 
 /**
  * Phase Gantt across all projects (brief §7.1): each row is a project, each
@@ -18,6 +17,8 @@ const LABEL_W = 220;
 export function PortfolioTimeline({ projects }: { projects: PortfolioProject[] }) {
   const today = todayET();
   const scroller = useRef<HTMLDivElement>(null);
+  // Narrower project column on phones so the bars get the room.
+  const LABEL_W = useNarrow() ? 132 : 220;
   // Open on today, with the recent past in view.
   useEffect(() => {
     const el = scroller.current;
@@ -43,8 +44,9 @@ export function PortfolioTimeline({ projects }: { projects: PortfolioProject[] }
       <div ref={scroller} className="overflow-x-auto" tabIndex={0} role="region" aria-label="Phase timeline, scrolls sideways">
         <div style={{ width: LABEL_W + width }} className="relative">
           {/* Month axis */}
-          <div className="sticky top-0 flex border-b border-border text-[11px] text-muted" style={{ paddingLeft: LABEL_W }}>
-            <div className="relative h-9" style={{ width }}>
+          <div className="flex border-b border-border text-[11px] text-muted">
+            <div className="sticky left-0 z-20 h-9 shrink-0 border-r border-border bg-surface" style={{ width: LABEL_W }} />
+            <div className="relative h-9 overflow-hidden" style={{ width }}>
               {months.map((m) => (
                 <span key={m} className="absolute top-0 flex h-full items-center border-l border-border pl-2" style={{ left: x(m) }}>
                   {formatIsoDate(m, { month: "short", year: m.endsWith("-01-01") || m === months[0] ? "numeric" : undefined, day: undefined })}
@@ -54,7 +56,7 @@ export function PortfolioTimeline({ projects }: { projects: PortfolioProject[] }
           </div>
           <ul className="relative">
             {/* Today line */}
-            <li aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-10 w-px bg-blocked/60" style={{ left: LABEL_W + x(today) }} />
+            <li aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-10 w-px bg-text/50" style={{ left: LABEL_W + x(today) }} />
             {rows.map(({ p, spans }) => (
               <li key={p.id} className="flex items-center border-b border-border last:border-0">
                 <Link
@@ -75,10 +77,12 @@ export function PortfolioTimeline({ projects }: { projects: PortfolioProject[] }
                         title={`${s.name}: ${formatIsoDate(s.start)} – ${s.status === "active" ? "today" : formatIsoDate(s.end)}`}
                         className={cn(
                           "absolute top-1/2 flex h-7 -translate-y-1/2 items-center overflow-hidden rounded-[6px] px-2 text-[11px] font-medium",
-                          s.status === "active" ? "bg-accent text-on-accent" : i % 2 ? "bg-text/25 text-text" : "bg-text/15 text-text",
+                          s.status === "active" ? "pc-current-bar bg-accent text-on-accent" : i % 2 ? "bg-text/25 text-text" : "bg-text/15 text-text",
                         )}
                         style={{ left, width: w }}
                       >
+                        {/* The current bar is hatched and marked ▸, so it doesn't rest on color alone. */}
+                        {s.status === "active" && <span aria-hidden="true" className="mr-1">▸</span>}
                         {w > 70 && <span className="truncate">{s.name}</span>}
                       </div>
                     );
@@ -94,13 +98,13 @@ export function PortfolioTimeline({ projects }: { projects: PortfolioProject[] }
       </div>
       <p className="flex flex-wrap items-center gap-4 border-t border-border px-4 py-3 text-[12px] text-muted">
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2.5 w-4 rounded-[3px] bg-accent" /> Current phase
+          <span className="pc-current-bar h-2.5 w-4 rounded-[3px] bg-accent" /> ▸ Current phase
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-4 rounded-[3px] bg-text/20" /> Finished phase
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-3 w-px bg-blocked/60" /> Today
+          <span className="h-3 w-px bg-text/50" /> Today
         </span>
       </p>
     </div>
@@ -110,4 +114,16 @@ export function PortfolioTimeline({ projects }: { projects: PortfolioProject[] }
 function nextMonth(iso: string): string {
   const [y, m] = iso.split("-").map(Number) as [number, number];
   return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+}
+
+function useNarrow(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const m = window.matchMedia("(max-width: 639px)");
+      m.addEventListener("change", cb);
+      return () => m.removeEventListener("change", cb);
+    },
+    () => window.matchMedia("(max-width: 639px)").matches,
+    () => false,
+  );
 }

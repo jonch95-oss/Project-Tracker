@@ -9,7 +9,8 @@ import {
   assertUploadBudget,
   createPendingUpload,
   deleteStoredObjects,
-  markUploadComplete,
+  claimUpload,
+  meterStored,
   objectPath,
   openUpload,
   verifyUploadedObjects,
@@ -92,6 +93,7 @@ export const photosRouter = router({
       const objs = await verifyUploadedObjects(row);
       const meta = row.meta as { width: number; height: number; takenAt: string | null; caption: string | null };
       const [photo] = await ctx.db.transaction(async (tx) => {
+        if (!(await claimUpload(tx, row.id, ctx.viewer.id))) throw new TRPCError({ code: "NOT_FOUND", message: "This upload has already been saved or has expired." });
         const inserted = await tx
           .insert(schema.projectPhoto)
           .values({
@@ -121,7 +123,7 @@ export const photosRouter = router({
         });
         return inserted;
       });
-      await markUploadComplete(ctx.db, row.id, objs.full!.size + objs.thumb!.size);
+      await meterStored(objs.full!.size + objs.thumb!.size);
       return { id: photo!.id };
     }),
 
@@ -164,12 +166,14 @@ export const photosRouter = router({
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
       const own = p.uploadedById === ctx.viewer.id && ctx.project.can("photos.upload");
       if (!own && !ctx.project.can("photos.manage")) throw new TRPCError({ code: "FORBIDDEN" });
-      await ctx.db.transaction(async (tx) => {
+      const removed = await ctx.db.transaction(async (tx) => {
+        const gone = await tx.delete(schema.projectPhoto).where(eq(schema.projectPhoto.id, input.photoId)).returning({ id: schema.projectPhoto.id });
+        // Someone else removed it a moment ago: nothing to release or record.
+        if (gone.length === 0) return false;
         await tx
           .update(schema.project)
           .set({ heroPhotoId: null })
           .where(and(eq(schema.project.id, input.projectId), eq(schema.project.heroPhotoId, input.photoId)));
-        await tx.delete(schema.projectPhoto).where(eq(schema.projectPhoto.id, input.photoId));
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
           actorName: ctx.viewer.name,
@@ -180,8 +184,9 @@ export const photosRouter = router({
           summary: `${ctx.viewer.name} removed a photo`,
           ip: ctx.ip,
         });
+        return true;
       });
-      await deleteStoredObjects([p.objectKey, p.thumbKey], p.sizeBytes + p.thumbBytes);
+      if (removed) await deleteStoredObjects([p.objectKey, p.thumbKey], p.sizeBytes + p.thumbBytes);
       return { ok: true };
     }),
 });
