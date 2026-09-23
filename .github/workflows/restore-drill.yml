@@ -4,6 +4,10 @@ name: Restore drill
 # restore it into a throwaway Postgres 17, and prove it is intact.
 on:
   workflow_dispatch:
+  # On-demand runs from a commit: change ops/triggers/restore-drill on main.
+  push:
+    branches: [main]
+    paths: ["ops/triggers/restore-drill"]
 
 permissions:
   contents: read

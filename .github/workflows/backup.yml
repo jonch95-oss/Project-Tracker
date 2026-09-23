@@ -10,6 +10,10 @@ on:
   schedule:
     - cron: "15 8 * * *" # ~3–4am New York
   workflow_dispatch:
+  # On-demand runs from a commit: change ops/triggers/backup on main.
+  push:
+    branches: [main]
+    paths: ["ops/triggers/backup"]
 
 concurrency:
   group: nightly-backup
