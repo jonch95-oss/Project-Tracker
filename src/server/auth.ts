@@ -7,7 +7,7 @@ import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db";
-import { env } from "./env";
+import { allowedOrigins, env } from "./env";
 import { recordAudit } from "./services/audit";
 import { renderEmail, sendEmail } from "./services/email";
 
@@ -30,7 +30,7 @@ function createAuth() {
     appName: APP_NAME,
     baseURL: env().APP_URL,
     secret: env().BETTER_AUTH_SECRET,
-    trustedOrigins: [appUrl.origin],
+    trustedOrigins: allowedOrigins(),
     database: drizzleAdapter(db(), { provider: "pg", schema }),
 
     emailAndPassword: {

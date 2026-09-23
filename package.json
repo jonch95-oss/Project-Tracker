@@ -26,6 +26,7 @@
     "@trpc/client": "^11.19.0",
     "@trpc/server": "^11.19.0",
     "@trpc/tanstack-react-query": "^11.19.0",
+    "@vercel/blob": "^2.8.0",
     "better-auth": "^1.7.5",
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.3",

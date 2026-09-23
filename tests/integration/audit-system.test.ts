@@ -111,7 +111,7 @@ describe("free-tier usage alerts", () => {
     const owner = await callerFor((await createUser("owner")).id);
     const o = await owner.system.overview();
     const keys = o.usage.map((u) => u.key).sort();
-    expect(keys).toEqual(["actions.minutes", "neon.storage", "r2.classA", "r2.classB", "r2.storage", "resend.daily", "resend.monthly", "workers.requests"]);
+    expect(keys).toEqual(["actions.minutes", "blob.storage", "blob.transfer", "neon.storage", "resend.daily", "resend.monthly", "vercel.credit"]);
     expect(o.usage.find((u) => u.key === "neon.storage")!.used).toBeGreaterThan(0);
   });
 });
@@ -133,19 +133,19 @@ describe("job endpoints", () => {
   });
 
   it("runs known jobs and records them", async () => {
-    const res = await req("error-summary", process.env.JOB_SECRET);
+    const res = await req("error-summary", process.env.CRON_SECRET);
     expect(res.status).toBe(200);
     const runs = await db().select().from(schema.jobRun).where(eq(schema.jobRun.job, "error-summary"));
     expect(runs.at(-1)?.status).toBe("succeeded");
-    expect((await req("nope", process.env.JOB_SECRET)).status).toBe(404);
+    expect((await req("nope", process.env.CRON_SECRET)).status).toBe(404);
   });
 
   it("records Actions minutes reported by workflows", async () => {
-    const res = await req("report-run", process.env.JOB_SECRET, { workflow: "nightly-backup", durationSeconds: 95, status: "succeeded" });
+    const res = await req("report-run", process.env.CRON_SECRET, { workflow: "nightly-backup", durationSeconds: 95, status: "succeeded" });
     expect(res.status).toBe(200);
     const [run] = await db().select().from(schema.jobRun).where(eq(schema.jobRun.job, "actions:nightly-backup"));
     expect(run?.billableMinutes).toBe(2);
-    expect((await req("report-run", process.env.JOB_SECRET, { workflow: "x", durationSeconds: -1, status: "ok" })).status).toBe(400);
+    expect((await req("report-run", process.env.CRON_SECRET, { workflow: "x", durationSeconds: -1, status: "ok" })).status).toBe(400);
   });
 });
 
@@ -166,7 +166,7 @@ describe("hourly tick", () => {
     const res = await jobRoute(
       new Request("http://localhost:3000/api/jobs/record-backup", {
         method: "POST",
-        headers: { authorization: `Bearer ${process.env.JOB_SECRET}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${process.env.CRON_SECRET}`, "content-type": "application/json" },
         body: JSON.stringify({ objectKey: "backups/2030-01-15.sql.gz", sizeBytes: 123456, kind: "nightly" }),
       }),
       { params: Promise.resolve({ job: "record-backup" }) },

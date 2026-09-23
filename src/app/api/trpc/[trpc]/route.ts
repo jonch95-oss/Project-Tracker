@@ -1,5 +1,5 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { env } from "@/server/env";
+import { allowedOrigins } from "@/server/env";
 import { createContext } from "@/server/trpc/init";
 import { appRouter } from "@/server/trpc/root";
 
@@ -10,7 +10,7 @@ import { appRouter } from "@/server/trpc/root";
 function sameOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return req.headers.get("sec-fetch-site") === "same-origin";
-  return origin === new URL(env().APP_URL).origin;
+  return allowedOrigins().includes(origin);
 }
 
 function handler(req: Request) {

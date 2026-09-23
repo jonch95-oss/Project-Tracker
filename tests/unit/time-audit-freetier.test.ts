@@ -179,7 +179,7 @@ describe("free-tier usage", () => {
     const s = evaluateUsage({ key: "resend.daily", used: 71 });
     expect(s.bps).toBe(7_100);
     expect(s.level).toBe("warn");
-    expect(evaluateUsage({ key: "workers.requests", used: null })).toMatchObject({ bps: null, level: "ok" });
+    expect(evaluateUsage({ key: "vercel.credit", used: null })).toMatchObject({ bps: null, level: "ok" });
     expect(evaluateUsage({ key: "neon.storage", used: -5 }).bps).toBe(0);
   });
 
@@ -214,5 +214,20 @@ describe("free-tier usage", () => {
     expect(billableMinutes(1)).toBe(1);
     expect(billableMinutes(60)).toBe(1);
     expect(billableMinutes(61)).toBe(2);
+  });
+});
+
+describe("upload guard", () => {
+  it("refuses uploads that would cross 95% of the Blob budget", async () => {
+    const { uploadAllowed, FREE_TIER_LIMITS: L } = await import("@/core/freeTier");
+    const limit = L["blob.storage"].limit;
+    expect(uploadAllowed(0, 1024)).toBe(true);
+    expect(uploadAllowed(limit * 0.94, limit * 0.009)).toBe(true);
+    expect(uploadAllowed(limit * 0.94, limit * 0.02)).toBe(false);
+    expect(uploadAllowed(limit, 1)).toBe(false);
+  });
+  it("formats cents", async () => {
+    const { formatUsage } = await import("@/core/freeTier");
+    expect(formatUsage(1234, "cents")).toBe("$12.34");
   });
 });

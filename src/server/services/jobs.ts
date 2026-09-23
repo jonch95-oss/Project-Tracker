@@ -104,9 +104,9 @@ const DAILY: { job: string; hourET: number; fn: () => Promise<JobResult> }[] = [
 ];
 
 /**
- * One hourly tick runs everything that is due. GitHub bills each workflow
- * run by the minute, so a single hourly run keeps Actions usage to ~744
- * min/month instead of one run per job.
+ * Vercel Cron calls this once an hour (vercel.json); it runs everything that
+ * is due. Each job keeps its own batch small so the tick stays well inside
+ * the function time limit (maxDuration 300s on the jobs route).
  */
 export async function tickJob(now = new Date()): Promise<JobResult> {
   const ran: string[] = [];

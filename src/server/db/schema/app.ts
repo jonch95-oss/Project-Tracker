@@ -207,7 +207,7 @@ export const usageAlert = pgTable(
   (t) => [primaryKey({ columns: [t.key, t.periodKey, t.level] })],
 );
 
-/** Counters we meter ourselves (e.g. R2 operations) per period. */
+/** Counters we meter ourselves (e.g. Blob bytes stored and downloaded) per period. */
 export const usageCounter = pgTable(
   "usage_counter",
   {

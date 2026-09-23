@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Restore drill: restore a dump into a scratch database and prove it is intact.
-# Usage: scripts/ops/restore-drill.sh <dump-file> <admin-postgres-url>
+# Restore drill: fetch the newest dump from Vercel Blob (or use a local file),
+# restore it into a scratch database and prove it is intact.
+# Usage: scripts/ops/restore-drill.sh <dump-file|--latest-from-blob> <admin-postgres-url>
 #   admin url e.g. postgres://postgres:postgres@localhost:5432/postgres
 set -euo pipefail
 dump="$1"; admin="$2"
+if [ "$dump" = "--latest-from-blob" ]; then
+  dump="$(mktemp -d)/latest.dump"
+  node "$(dirname "$0")/blob-backup.mjs" latest "$dump"
+fi
 target="pc_restore_drill_$(date +%s)"
 target_url="${admin%/*}/${target}"
 psql "$admin" -qc "create database ${target}"

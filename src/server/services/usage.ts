@@ -27,7 +27,7 @@ async function counter(conn: Database, key: string, period: string): Promise<num
   return row?.value ?? 0;
 }
 
-/** Increment a self-metered counter (e.g. R2 operations). */
+/** Increment a self-metered counter (e.g. Blob bytes stored and downloaded). */
 export async function bumpCounter(key: ServiceKey, by = 1, now = new Date()): Promise<void> {
   const period = periodKey(FREE_TIER_LIMITS[key].period, quotaDay(now));
   await db()
@@ -59,23 +59,21 @@ export async function readUsage(conn: Database = db(), now = new Date()): Promis
     .from(schema.jobRun)
     .where(gte(schema.jobRun.startedAt, monthStartUtc(now)));
 
-  // R2 holds uploaded files (metered on upload/delete) and nightly backups.
+  // Blob holds uploaded files (metered on upload/delete) and the nightly backups.
   const [backupBytes] = await conn
     .select({ total: sql<string>`coalesce(sum(${schema.backupRecord.sizeBytes}), 0)::text` })
     .from(schema.backupRecord)
     .where(eq(schema.backupRecord.kind, "nightly"));
-  const fileBytes = await counter(conn, "r2.storage", "total");
+  const fileBytes = await counter(conn, "blob.storage", "total");
 
   const readings: UsageReading[] = [
     { key: "neon.storage", used: dbSize ? Number(dbSize.bytes) : null },
-    { key: "r2.storage", used: fileBytes + Number(backupBytes?.total ?? 0) },
-    { key: "r2.classA", used: await counter(conn, "r2.classA", month) },
-    { key: "r2.classB", used: await counter(conn, "r2.classB", month) },
+    { key: "blob.storage", used: fileBytes + Number(backupBytes?.total ?? 0) },
+    { key: "blob.transfer", used: await counter(conn, "blob.transfer", month) },
     { key: "resend.daily", used: emails?.today ?? 0 },
     { key: "resend.monthly", used: emails?.month ?? 0 },
     { key: "actions.minutes", used: minutes?.total ?? 0 },
-    // Needs a Cloudflare analytics token; shown as "Not connected" until provided.
-    { key: "workers.requests", used: null },
+    { key: "vercel.credit", used: await vercelCreditUsedCents(now) },
   ];
   return readings.map(evaluateUsage);
 }
@@ -143,4 +141,33 @@ async function ownerEmail(conn: Database): Promise<string | null> {
     .where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active")))
     .limit(1);
   return o?.email ?? null;
+}
+
+/**
+ * Team spend this month in cents, from Vercel's billing charges API (FOCUS
+ * JSONL). Returns null without a read-only VERCEL_USAGE_TOKEN or on failure;
+ * the System page then shows "Not connected".
+ */
+async function vercelCreditUsedCents(now: Date): Promise<number | null> {
+  const token = env().VERCEL_USAGE_TOKEN;
+  const team = process.env.VERCEL_TEAM_ID;
+  if (!token || !team) return null;
+  try {
+    const from = monthStartUtc(now).toISOString();
+    const to = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10) + "T00:00:00.000Z";
+    const res = await fetch(`https://api.vercel.com/v1/billing/charges?teamId=${team}&from=${from}&to=${to}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    let cents = 0;
+    for (const line of (await res.text()).split("\n")) {
+      if (!line.trim()) continue;
+      const row = JSON.parse(line) as { BilledCost?: number | string };
+      const cost = Number(row.BilledCost ?? 0);
+      if (Number.isFinite(cost)) cents += Math.round(cost * 100);
+    }
+    return cents;
+  } catch {
+    return null;
+  }
 }

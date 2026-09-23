@@ -9,12 +9,12 @@ See `PLAN.md` for the architecture and milestones, and `PROGRESS.md` for what ha
 
 ## Stack
 
-Next.js 16 (App Router) · tRPC 11 · Better Auth (invite-only, 2FA, passkeys) · Drizzle + Postgres (Neon Free) · Cloudflare R2 · Resend · GitHub Actions for scheduled jobs. Running cost is **$0/month**. The owner-only System page shows live usage against every free-tier limit.
+Next.js 16 (App Router) · tRPC 11 · Better Auth (invite-only, 2FA, passkeys) · Drizzle + Postgres (Neon Free) · Vercel Pro (hosting, Blob, Cron) · Resend Free · GitHub Actions for CI and the nightly backup. There is **no added monthly cost**. The owner-only System page shows live usage against every limit.
 
 ## Develop
 
 ```bash
-cp .env.example .env.local        # fill BETTER_AUTH_SECRET (openssl rand -base64 48) and JOB_SECRET
+cp .env.example .env.local        # fill BETTER_AUTH_SECRET (openssl rand -base64 48) and CRON_SECRET
 createdb pc_dev                   # any local Postgres 16+
 npm install
 npm run db:migrate
@@ -45,8 +45,12 @@ npm run test:e2e          # Playwright; set E2E_WEBKIT=1 for the iPhone WebKit p
 
 ## Production setup (first time)
 
-1. Set environment variables from `.env.example` on the host. Set the GitHub repository secrets: `APP_URL`, `JOB_SECRET`, `DATABASE_URL_DIRECT`, `R2_ACCOUNT_ID`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
-2. `DATABASE_URL=... npm run db:migrate`. The production database starts empty; never run the demo seed on it.
-3. `DATABASE_URL=... APP_URL=https://projects.liandev.com npm run bootstrap:owner -- --email you@liandev.com --name "Jon"`. Open the printed link to set the owner password. Invite everyone else from **Team**.
-4. In GitHub → Settings → Billing, keep the Actions budget at $0 with "stop usage" enabled.
-5. Do a restore drill (see `docs/RESTORE.md`).
+1. **Vercel project** `project-tracker` (team "jonch95-oss' projects"):
+   - Connect the Neon database under Storage. This sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
+   - Connect a **private** Blob store. This sets `BLOB_READ_WRITE_TOKEN`.
+   - Set `BETTER_AUTH_SECRET`, `CRON_SECRET`, `APP_URL` (`https://projects.liandev.com` once DNS is live), `EMAIL_FROM` and, once Resend is set up, `RESEND_API_KEY`.
+2. **GitHub repository secrets**, for the backup workflow: `DATABASE_URL_UNPOOLED`, `BLOB_READ_WRITE_TOKEN`, `APP_URL`, `CRON_SECRET`.
+3. **Migrate:** `DATABASE_URL=<unpooled url> npm run db:migrate`. The production database starts empty; never run the demo seed on it.
+4. **First owner:** `DATABASE_URL=… APP_URL=https://projects.liandev.com npm run bootstrap:owner -- --email you@liandev.com --name "Jon"`. Open the printed link. Invite everyone else from **Team**.
+5. **Spend management:** in Vercel → Team Settings → Billing → Spend Management, set a cap and turn on "pause production deployments" at the cap. In GitHub → Billing, keep the Actions budget at $0 with "stop usage".
+6. **Restore drill:** see `docs/RESTORE.md`.

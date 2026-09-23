@@ -1,35 +1,39 @@
 /**
- * Free-tier limits for every external service and the math that decides when
- * to warn. Limits were checked against each provider's pricing docs on
- * 2026-09-23; re-verify at each integration milestone and update here.
+ * Free-tier limits and Vercel Pro allowances for every external service, and
+ * the math that decides when to warn. Checked 2026-09-23; re-verify at each
+ * integration milestone and update here.
  *
  * Overage behaviour matters as much as the limit:
- * - Neon, Resend, Sentry, Workers: hard caps (service stops, no charge).
- * - R2: overage is billed automatically to the card on file, so the app meters
- *   its own R2 usage and refuses uploads before the limit (see R2_UPLOAD_STOP_BPS).
- * - GitHub Actions: blocked at quota unless a payment method and a non-stopping
- *   budget exist; keep the account budget at $0 with "stop usage" enabled.
+ * - Neon Free, Resend Free: hard caps (service stops, no charge).
+ * - Vercel Pro: every metered item bills from the first unit against the
+ *   team's $20/month usage credit, which is shared with the team's other
+ *   projects. Blob has no separate free allowance, so this app budgets its own
+ *   Blob share (10 GB stored ≈ $0.23/month) and refuses uploads at 95% of it.
+ *   A team spend cap in Vercel stops anything beyond the credit billing silently.
+ * - GitHub Actions (CI + nightly backup only): blocked at quota unless a
+ *   payment method and a non-stopping budget exist.
  * - Resend's daily quota resets at 00:00 UTC.
  */
 
 export type ServiceKey =
   | "neon.storage"
-  | "r2.storage"
-  | "r2.classA"
-  | "r2.classB"
+  | "blob.storage"
+  | "blob.transfer"
   | "resend.daily"
   | "resend.monthly"
   | "actions.minutes"
-  | "workers.requests";
+  | "vercel.credit";
 
 export interface FreeTierLimit {
   key: ServiceKey;
   service: string;
   metric: string;
   limit: number;
-  unit: "bytes" | "emails" | "minutes" | "operations" | "requests";
+  unit: "bytes" | "emails" | "minutes" | "cents";
   period: "total" | "day" | "month";
   source: string;
+  /** Plain-English note shown on the System page. */
+  note?: string;
 }
 
 const GB = 1024 ** 3;
@@ -37,75 +41,70 @@ const GB = 1024 ** 3;
 export const FREE_TIER_LIMITS: Record<ServiceKey, FreeTierLimit> = {
   "neon.storage": {
     key: "neon.storage",
-    service: "Neon Postgres",
+    service: "Neon Postgres (Free)",
     metric: "Database storage",
     limit: 0.5 * GB,
     unit: "bytes",
     period: "total",
-    source: "https://neon.com/pricing",
+    source: "https://neon.com/docs/introduction/plans",
   },
-  "r2.storage": {
-    key: "r2.storage",
-    service: "Cloudflare R2",
-    metric: "File storage",
+  "blob.storage": {
+    key: "blob.storage",
+    service: "Vercel Blob (Pro)",
+    metric: "Files and backups stored",
     limit: 10 * GB,
     unit: "bytes",
     period: "total",
-    source: "https://developers.cloudflare.com/r2/pricing/",
+    source: "https://vercel.com/docs/vercel-blob/usage-and-pricing",
+    note: "App budget. Pro has no separate Blob allowance; 10 GB costs about $0.23/month from the $20 Pro credit. Uploads stop at 95%.",
   },
-  "r2.classA": {
-    key: "r2.classA",
-    service: "Cloudflare R2",
-    metric: "Class A operations (writes)",
-    limit: 1_000_000,
-    unit: "operations",
+  "blob.transfer": {
+    key: "blob.transfer",
+    service: "Vercel Blob (Pro)",
+    metric: "File downloads this month",
+    limit: 20 * GB,
+    unit: "bytes",
     period: "month",
-    source: "https://developers.cloudflare.com/r2/pricing/",
-  },
-  "r2.classB": {
-    key: "r2.classB",
-    service: "Cloudflare R2",
-    metric: "Class B operations (reads)",
-    limit: 10_000_000,
-    unit: "operations",
-    period: "month",
-    source: "https://developers.cloudflare.com/r2/pricing/",
+    source: "https://vercel.com/docs/vercel-blob/usage-and-pricing",
+    note: "App budget: about $1/month of the Pro credit. Metered by the app's download route.",
   },
   "resend.daily": {
     key: "resend.daily",
-    service: "Resend",
-    metric: "Emails today (UTC day)",
+    service: "Resend (Free)",
+    metric: "Emails today — UTC day, sent and received",
     limit: 100,
     unit: "emails",
     period: "day",
-    source: "https://resend.com/pricing",
+    source: "https://resend.com/docs/knowledge-base/account-quotas-and-limits",
+    note: "Resend's day runs midnight to midnight UTC (8pm–8pm New York in summer, 7pm–7pm in winter).",
   },
   "resend.monthly": {
     key: "resend.monthly",
-    service: "Resend",
+    service: "Resend (Free)",
     metric: "Emails this month",
     limit: 3_000,
     unit: "emails",
     period: "month",
-    source: "https://resend.com/pricing",
+    source: "https://resend.com/docs/knowledge-base/account-quotas-and-limits",
   },
   "actions.minutes": {
     key: "actions.minutes",
-    service: "GitHub Actions",
-    metric: "Private-repo minutes this month",
+    service: "GitHub Actions (Free)",
+    metric: "CI and backup minutes this month",
     limit: 2_000,
     unit: "minutes",
     period: "month",
     source: "https://docs.github.com/en/billing/concepts/product-billing/github-actions",
   },
-  "workers.requests": {
-    key: "workers.requests",
-    service: "Cloudflare Workers",
-    metric: "Requests today (UTC day)",
-    limit: 100_000,
-    unit: "requests",
-    period: "day",
-    source: "https://developers.cloudflare.com/workers/platform/pricing/",
+  "vercel.credit": {
+    key: "vercel.credit",
+    service: "Vercel Pro",
+    metric: "Team usage against the $20 monthly credit",
+    limit: 2_000,
+    unit: "cents",
+    period: "month",
+    source: "https://vercel.com/docs/plans/pro-plan",
+    note: "Whole team, all projects. Needs a read-only VERCEL_USAGE_TOKEN to measure.",
   },
 };
 
@@ -113,8 +112,8 @@ export const FREE_TIER_LIMITS: Record<ServiceKey, FreeTierLimit> = {
 export const WARN_THRESHOLD_BPS = 7_000;
 export const CRITICAL_THRESHOLD_BPS = 9_000;
 
-/** R2 bills overage automatically; uploads are refused at 95% of the storage limit. */
-export const R2_UPLOAD_STOP_BPS = 9_500;
+/** Blob storage bills from the Pro credit; uploads are refused at 95% of the app's budget. */
+export const UPLOAD_STOP_BPS = 9_500;
 
 /** Resend: hold non-urgent mail once the day's queue would pass this many. */
 export const EMAIL_DAILY_SOFT_CAP = 80;
@@ -176,6 +175,7 @@ export function periodKey(period: FreeTierLimit["period"], todayIso: string): st
 export function formatUsage(value: number | null, unit: FreeTierLimit["unit"]): string {
   if (value === null) return "Not connected";
   if (unit === "bytes") return formatBytes(value);
+  if (unit === "cents") return `$${(value / 100).toFixed(2)}`;
   return new Intl.NumberFormat("en-US").format(value);
 }
 
@@ -189,6 +189,12 @@ export function formatBytes(bytes: number): string {
     i++;
   }
   return `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)} ${units[i]}`;
+}
+
+/** True when an upload of `size` bytes would take stored bytes past the stop threshold. */
+export function uploadAllowed(storedBytes: number, size: number): boolean {
+  const limit = FREE_TIER_LIMITS["blob.storage"].limit;
+  return (storedBytes + size) * 10_000 < limit * UPLOAD_STOP_BPS;
 }
 
 /** GitHub bills each job rounded up to the whole minute. */

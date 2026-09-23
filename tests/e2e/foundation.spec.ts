@@ -105,7 +105,7 @@ test.describe("owner flows", () => {
   test("System page shows free-tier usage for every service", async ({ page }) => {
     await signIn(page, "jon@demo.test");
     await page.goto("/system");
-    for (const service of ["Neon Postgres", "Cloudflare R2", "Resend", "GitHub Actions", "Cloudflare Workers"]) {
+    for (const service of ["Neon Postgres (Free)", "Vercel Blob (Pro)", "Resend (Free)", "GitHub Actions (Free)", "Vercel Pro"]) {
       await expect(page.getByText(service, { exact: true }).first()).toBeVisible();
     }
     await expect(page.getByRole("meter").first()).toBeVisible();

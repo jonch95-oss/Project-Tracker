@@ -31,7 +31,7 @@ export default defineConfig({
       DATABASE_URL,
       APP_URL: `http://localhost:${PORT}`,
       BETTER_AUTH_SECRET: "e2e-secret-e2e-secret-e2e-secret-0123456789",
-      JOB_SECRET: "e2e-job-secret-0123456789abcdef",
+      CRON_SECRET: "e2e-job-secret-0123456789abcdef",
       E2E_DISABLE_RATE_LIMIT: "1",
       NODE_ENV: process.env.CI ? "production" : "development",
     },

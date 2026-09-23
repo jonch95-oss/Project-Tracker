@@ -54,7 +54,7 @@ export function SystemView() {
                     </div>
                     {u.used === null ? (
                       <p className="mt-4 text-sm text-muted">
-                        Limit {formatUsage(u.limit, u.unit)}. Needs a read-only Cloudflare analytics token to measure; far below the limit at this team&apos;s size.
+                        Limit {formatUsage(u.limit, u.unit)}. {u.note ?? "Not measured yet."}
                       </p>
                     ) : (
                       <p className="num mt-4 text-sm">
@@ -65,6 +65,7 @@ export function SystemView() {
                     <div className="mt-3">
                       <Meter valueBps={u.bps} tone={lvl.tone} label={`${u.service} ${u.metric}`} />
                     </div>
+                    {u.used !== null && u.note && <p className="mt-3 text-[12px] text-muted">{u.note}</p>}
                     <p className="mt-3 text-[12px] text-faint">
                       {u.period === "total" ? "Total" : u.period === "day" ? "Resets daily (UTC)" : "Resets monthly"} ·{" "}
                       <a href={u.source} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
@@ -78,7 +79,7 @@ export function SystemView() {
           </section>
 
           <div className="grid gap-6 xl:grid-cols-2">
-            <Panel title="Scheduled jobs" description="Run by GitHub Actions. Failures email the owner and appear here.">
+            <Panel title="Scheduled jobs" description="Vercel Cron runs the hourly tick; GitHub Actions runs CI and the nightly backup. Failures appear here and in the daily error email.">
               {q.data.jobs.length === 0 ? (
                 <p className="text-sm text-muted">No job runs recorded yet.</p>
               ) : (
@@ -127,7 +128,7 @@ export function SystemView() {
               )}
             </Panel>
 
-            <Panel title="Email" description="Resend free plan: 100/day, 3,000/month. Non-urgent mail is held above 80/day and folded into the next digest.">
+            <Panel title="Email" description="Resend free plan: 100 per UTC day (midnight–midnight UTC), 3,000/month; sent and received mail both count. Above 80 in a UTC day, non-urgent mail is held for the next digest; stop-work and vacate alerts always send.">
               <dl className="grid grid-cols-4 gap-4 text-center">
                 {(["sent", "queued", "held", "failed"] as const).map((s) => (
                   <div key={s}>
@@ -151,9 +152,9 @@ export function SystemView() {
               )}
             </Panel>
 
-            <Panel title="Backups" description="Nightly pg_dump to R2, 30 kept. Neon's free restore window is only 6 hours, so these are the real backups.">
+            <Panel title="Backups" description="Nightly pg_dump to Vercel Blob (private), 30 kept. Neon's free restore window is only 6 hours, so these are the real backups.">
               {q.data.backups.length === 0 ? (
-                <p className="text-sm text-muted">No backups reported yet. The nightly workflow starts once the database and R2 credentials are connected.</p>
+                <p className="text-sm text-muted">No backups reported yet. The nightly workflow starts once the production database and Blob store are connected.</p>
               ) : (
                 <ul className="divide-y divide-border">
                   {q.data.backups.map((b) => (
