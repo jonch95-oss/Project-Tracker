@@ -1,7 +1,7 @@
 # BUILD BRIEF — Ariel Development "Project Command"
 ### A development project tracker for a Brooklyn real estate developer. Paste this whole brief into Claude Code in an empty folder.
 
-> Source of truth. Updated by Change Order 01 (2026-09-23): Vercel Pro hosting, Vercel Blob storage, Vercel Cron, no Cloudflare; Section 14A modules A–N; 13 milestones.
+> Source of truth. Updated by Change Order 01 (2026-09-23): Vercel Pro hosting, Vercel Blob storage, Vercel Cron, no Cloudflare; Section 14A modules A–N (Module A is BBL auto-fill only — never connect to the deal platform); 13 milestones.
 
 ---
 
@@ -123,7 +123,7 @@ Every piece below is free. Verify each free tier against its own pricing page be
 - **Error monitoring:** Sentry free plan if its terms allow business use. If they don't, log errors to a table and send a daily error summary to the owner.
 
 **Hosting**
-- **Vercel Pro**, which we already pay for. Deploy as a new project on the existing Pro team, alongside my deal-origination platform.
+- **Vercel Pro**, which we already pay for. Deploy as a new project on the existing Pro team. It is a separate project with its own database; it shares nothing with my other apps.
 - Do not use Cloudflare for anything.
 
 **Time zone:** America/New_York everywhere (due dates, digests, "today").
@@ -721,15 +721,11 @@ Folders are editable per template. Files can attach to tasks and appear in both 
 
 ## 14A. Additional modules — all required, all free
 
-### A. Deal platform link and BBL auto-fill
-- **Deal platform import:** add an "Import from deal platform" action that reads my existing deal-origination database (Neon Postgres, same Vercel team) with a **read-only** connection string. Picking a deal creates a project and brings across:
-  - address, BBL
-  - lot, zoning, residential FAR, built FAR, unused ZSF
-  - pro forma figures, purchase price
-  - linked documents
-
-  Never write back to the deal platform.
-- **BBL auto-fill:** typing a BBL or address on a new project fills in the property facts from PLUTO automatically, and pulls the first public-records snapshot.
+### A. BBL auto-fill
+- This app is **fully separate** from my deal-origination platform (the arieldevg database). Never connect to it, read from it or write to it.
+- Typing a BBL or address on a new project fills in the property facts from PLUTO (public NYC Open Data), then pulls the first public-records snapshot:
+  - lot and zoning
+  - residential FAR, built FAR, unused ZSF
 
 ### B. Expiry tracker
 - Track every item with an expiry, per project:
@@ -903,8 +899,8 @@ Offer "update template durations from actuals" so the checklist templates get mo
    - Module B
 9. **Field and construction**
    - Modules D, E, F, G and K (daily log, schedule / baseline, RFIs / submittals / drawings, minutes, punch lists)
-10. **Directory, deal import, investors and units**
-    - Modules A, C, J and L
+10. **Directory, BBL auto-fill, investors and units**
+    - Modules A (BBL auto-fill), C, J and L
 11. **Calendar, email-in, analytics and import**
     - Modules H, I, M and N
 12. **iPhone home-screen app**
@@ -931,7 +927,6 @@ Offer "update template durations from actuals" so the checklist templates get mo
 - GitHub (free private repo; CI and the nightly backup)
 - Vercel Pro team (already paid): hosting, Blob storage, Cron
 - Neon (Free plan) for this app's database
-- A read-only connection string to the deal-origination platform's database
 - Resend (Free plan), plus DNS access to add its records to our domain
 - Sentry (free), only if its terms allow business use
 - NYC Open Data app token (free)

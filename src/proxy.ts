@@ -15,5 +15,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next|login|forgot-password|reset-password|invite|install|manifest.webmanifest|icon|apple-icon|.*\\.(?:png|svg|ico|webp|jpg|woff2)$).*)"],
+  matcher: ["/((?!api|_next|login|setup|forgot-password|reset-password|invite|install|manifest.webmanifest|icon|apple-icon|.*\\.(?:png|svg|ico|webp|jpg|woff2)$).*)"],
 };

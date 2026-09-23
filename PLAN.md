@@ -17,7 +17,7 @@ The source of truth is `docs/BRIEF.md` (updated by Change Order 01). This plan b
   - A Vercel team spend cap stops silent overage.
 - **Server-side permissions.** Every tRPC procedure passes through the permission middleware in `src/server`. Financial data never leaves the server unless `canViewFinancials` is set.
 - **Pure core.** All business logic lives in `src/core`, with no I/O and full unit tests.
-- **Adapters for every external service.** Storage, mail, push, public records, the deal platform and inbound mail each sit behind an interface with a local mock. No missing credential blocks the build.
+- **Adapters for every external service.** Storage, mail, push, public records and inbound mail each sit behind an interface with a local mock. The app never connects to the deal-origination platform. No missing credential blocks the build.
 - **Time zone:** `America/New_York` for every "today", due date, digest and schedule.
 
 ## Stack
@@ -79,8 +79,8 @@ The source of truth is `docs/BRIEF.md` (updated by Change Order 01). This plan b
    - Module B
 9. **Field and construction**
    - Modules D, E, F, G and K: daily log, baseline and critical path, RFIs, submittals, drawings, minutes, punch pins
-10. **Directory, deal import, investors, units**
-    - Modules A, C, J and L
+10. **Directory, BBL auto-fill, investors, units**
+    - Modules A (BBL auto-fill from PLUTO only; never connects to the deal platform), C, J and L
 11. **Calendar, email-in, analytics, import**
     - Modules H, I, M and N
 12. **iPhone home-screen app**

@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "crons": [
-    { "path": "/api/jobs/tick", "schedule": "7 * * * *" }
-  ]
+    {
+      "path": "/api/jobs/tick",
+      "schedule": "7 * * * *"
+    }
+  ],
+  "buildCommand": "npm run vercel-build"
 }

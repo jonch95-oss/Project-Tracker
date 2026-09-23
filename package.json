@@ -16,7 +16,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "bootstrap:owner": "tsx scripts/bootstrap-owner.ts",
     "format": "prettier --write .",
-    "seed:demo": "DEMO_SEED=1 tsx --conditions=react-server scripts/seed-demo.ts"
+    "seed:demo": "DEMO_SEED=1 tsx --conditions=react-server scripts/seed-demo.ts",
+    "vercel-build": "node scripts/vercel-build.mjs"
   },
   "dependencies": {
     "@better-auth/passkey": "^1.7.5",
