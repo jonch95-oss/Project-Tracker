@@ -9,6 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { db, schema } from "@/server/db";
+import { storage } from "@/server/storage";
 import { appRouter } from "@/server/trpc/root";
 import { addMember, callerFor, companyId, createProject, createUser, deactivate } from "../support/fixtures";
 
@@ -49,6 +50,8 @@ interface Fixture {
   projectId: string;
   otherUserId: string;
   companyId: string;
+  /** A photo on the project uploaded by the owner. */
+  photoId: () => Promise<string>;
 }
 
 type Caller = Awaited<ReturnType<typeof callerFor>>;
@@ -107,6 +110,71 @@ const MATRIX: Record<string, Row | "public"> = {
   "companies.list": { allowed: ACTIVE, call: (c) => c.companies.list() },
   "projects.list": { allowed: ACTIVE, call: (c) => c.projects.list() },
   "projects.get": { allowed: ASSIGNED, call: (c, f) => c.projects.get({ projectId: f.projectId }) },
+  "projects.update": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: async (c, f) => {
+      const [p] = await db().select().from(schema.project).where(eq(schema.project.id, f.projectId));
+      return c.projects.update({
+        projectId: f.projectId,
+        version: p!.version,
+        name: p!.name,
+        address: p!.address,
+        borough: "Brooklyn",
+        bbl: null,
+        companyId: p!.companyId,
+        status: "active",
+        facts: { units: 12 },
+      });
+    },
+  },
+  "projects.setHeadline": {
+    allowed: ["owner", "admin+fin"],
+    call: (c, f) => c.projects.setHeadline({ projectId: f.projectId, purchasePriceCents: 100_000_00, totalBudgetCents: null, projectedSelloutCents: null }),
+  },
+  "projects.setPhase": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: async (c, f) => {
+      const [p] = await db().select().from(schema.project).where(eq(schema.project.id, f.projectId));
+      return c.projects.setPhase({ projectId: f.projectId, key: "pipeline", version: p!.version });
+    },
+  },
+  "projects.skipPhase": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: async (c, f) => {
+      const [p] = await db().select().from(schema.project).where(eq(schema.project.id, f.projectId));
+      return c.projects.skipPhase({ projectId: f.projectId, key: "ag_plan_sales", skipped: false, version: p!.version });
+    },
+  },
+  "projects.setArchived": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: (c, f) => c.projects.setArchived({ projectId: f.projectId, archived: false }),
+  },
+  "projects.activity": {
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    call: (c, f) => c.projects.activity({ projectId: f.projectId }),
+  },
+
+  "photos.list": { allowed: ASSIGNED, call: (c, f) => c.photos.list({ projectId: f.projectId }) },
+  "photos.beginUpload": {
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    call: (c, f) => c.photos.beginUpload({ projectId: f.projectId, contentType: "image/webp", fullBytes: 10, thumbBytes: 5, width: 4, height: 3 }),
+  },
+  "photos.completeUpload": {
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    call: async (c, f) => {
+      const b = await c.photos.beginUpload({ projectId: f.projectId, contentType: "image/webp", fullBytes: 10, thumbBytes: 5, width: 4, height: 3 });
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(o.role === "full" ? 10 : 5), { contentType: "image/webp" });
+      return c.photos.completeUpload({ projectId: f.projectId, uploadId: b.uploadId });
+    },
+  },
+  "photos.setHero": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: async (c, f) => c.photos.setHero({ projectId: f.projectId, photoId: await f.photoId() }),
+  },
+  "photos.remove": {
+    allowed: ["owner", "admin+fin", "admin"],
+    call: async (c, f) => c.photos.remove({ projectId: f.projectId, photoId: await f.photoId() }),
+  },
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: (c, f) => c.projects.create({ name: `M ${uid()}`, address: "1 Matrix Pl", type: "gut_renovation", companyId: f.companyId, bbl: null }),
@@ -154,6 +222,12 @@ describe("permission matrix", () => {
     fixture.projectId = p.id;
     fixture.companyId = await companyId();
     fixture.otherUserId = (await createUser("member")).id;
+    const ownerCaller = await callerFor(owner.id);
+    fixture.photoId = async () => {
+      const b = await ownerCaller.photos.beginUpload({ projectId: p.id, contentType: "image/webp", fullBytes: 10, thumbBytes: 5, width: 4, height: 3 });
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(o.role === "full" ? 10 : 5), { contentType: "image/webp" });
+      return (await ownerCaller.photos.completeUpload({ projectId: p.id, uploadId: b.uploadId })).id;
+    };
     await addMember(fixture.projectId, fixture.otherUserId);
 
     for (const role of ["admin", "member", "external"] as const) {
@@ -206,7 +280,7 @@ describe("permission matrix", () => {
       const c = await callerFor(users[s]);
       await expect(c.projects.get({ projectId: fixture.projectId })).rejects.toMatchObject({ code: "NOT_FOUND" });
       const list = await c.projects.list();
-      expect(list.find((p) => p.id === fixture.projectId)).toBeUndefined();
+      expect(list.projects.find((p) => p.id === fixture.projectId)).toBeUndefined();
     }
   });
 

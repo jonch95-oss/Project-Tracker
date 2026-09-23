@@ -30,6 +30,25 @@ export const AUDIT_ACTIONS = [
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
+/**
+ * Entity types whose audit entries carry money. The project activity feed
+ * hides them from anyone without financial visibility on that project.
+ */
+export const FINANCIAL_ENTITY_TYPES = [
+  "project_headline",
+  "budget_line",
+  "commitment",
+  "invoice",
+  "change_order",
+  "draw",
+  "sale",
+  "capital",
+] as const;
+
+export function isFinancialEntity(entityType: string): boolean {
+  return (FINANCIAL_ENTITY_TYPES as readonly string[]).includes(entityType);
+}
+
 export const GENESIS_HASH = "0".repeat(64);
 
 export interface AuditEntryContent {

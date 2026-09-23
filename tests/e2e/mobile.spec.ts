@@ -14,3 +14,19 @@ test("iPhone: sign in, bottom tab bar, settings and sign out", async ({ page }) 
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/login/);
 });
+
+test("iPhone: portfolio cards, phase track and project page", async ({ page }) => {
+  await signIn(page, "jon@demo.test");
+  await page.goto("/portfolio");
+  await expect(page.getByText("Bergen Street Condominium")).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  await page.getByRole("radio", { name: "Table" }).click();
+  await expect(page.getByRole("table")).toBeVisible();
+  await page.getByRole("radio", { name: "Cards" }).click();
+  await page.getByText("Bergen Street Condominium").click();
+  await expect(page.getByRole("heading", { name: "Bergen Street Condominium" })).toBeVisible();
+  await expect(page.locator('[aria-current="step"]')).toBeInViewport();
+  const overflow2 = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow2).toBeLessThanOrEqual(0);
+});

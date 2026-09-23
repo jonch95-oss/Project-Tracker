@@ -26,6 +26,10 @@ export function memoryStorage(): FileStorage {
         contentType: o.meta.contentType ?? "application/octet-stream",
       };
     },
+    async head(pathname) {
+      const o = objects.get(pathname);
+      return o ? { size: o.meta.size, contentType: o.meta.contentType ?? "application/octet-stream" } : null;
+    },
     async delete(pathnames) {
       for (const p of pathnames) objects.delete(p);
     },

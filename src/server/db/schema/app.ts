@@ -1,9 +1,11 @@
 import {
   bigint,
   boolean,
+  doublePrecision,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -66,6 +68,21 @@ export const project = pgTable(
     companyId: uuid("company_id")
       .notNull()
       .references(() => company.id),
+    status: text("status", { enum: ["active", "on_hold", "closed"] }).notNull().default("active"),
+    description: text("description"),
+    // Key facts (manual now; filled from PLUTO by BBL auto-fill in Milestone 10).
+    lotAreaSqft: integer("lot_area_sqft"),
+    zoning: text("zoning"),
+    residFar: numeric("resid_far", { precision: 6, scale: 2, mode: "number" }),
+    builtFar: numeric("built_far", { precision: 6, scale: 2, mode: "number" }),
+    unusedZsf: integer("unused_zsf"),
+    units: integer("units"),
+    grossSf: integer("gross_sf"),
+    sellableSf: integer("sellable_sf"),
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
+    /** Pinned hero photo; when null the newest photo is the hero. */
+    heroPhotoId: uuid("hero_photo_id"),
     createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     /** Optimistic-locking version; bumped on every update. */
@@ -231,4 +248,83 @@ export const backupRecord = pgTable(
     note: text("note"),
   },
   (t) => [uniqueIndex("backup_object_idx").on(t.objectKey)],
+);
+
+/** Headline financial numbers entered by hand (gated by canViewFinancials). Milestone 6 derives budget and spend from the ledger. */
+export const projectHeadline = pgTable("project_headline", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => project.id, { onDelete: "cascade" }),
+  purchasePriceCents: bigint("purchase_price_cents", { mode: "number" }),
+  totalBudgetCents: bigint("total_budget_cents", { mode: "number" }),
+  projectedSelloutCents: bigint("projected_sellout_cents", { mode: "number" }),
+  updatedAt: updatedAt(),
+});
+
+export const projectPhase = pgTable(
+  "project_phase",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull(),
+    status: text("status", { enum: ["pending", "active", "done", "skipped"] }).notNull().default("pending"),
+    /** New York calendar dates (YYYY-MM-DD). */
+    startedOn: text("started_on"),
+    completedOn: text("completed_on"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("project_phase_key_idx").on(t.projectId, t.key), index("project_phase_project_idx").on(t.projectId)],
+);
+
+export const projectPhoto = pgTable(
+  "project_photo",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    objectKey: text("object_key").notNull(),
+    thumbKey: text("thumb_key").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    thumbBytes: bigint("thumb_bytes", { mode: "number" }).notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    caption: text("caption"),
+    takenAt: timestamp("taken_at", { withTimezone: true }),
+    uploadedById: text("uploaded_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("project_photo_project_idx").on(t.projectId, t.createdAt)],
+);
+
+/**
+ * An upload the server has authorized but not yet confirmed. The client
+ * uploads straight to storage with a short-lived token scoped to exactly these
+ * pathnames and sizes; `complete` then checks the stored objects before any
+ * record points at them.
+ */
+export const pendingUpload = pgTable(
+  "pending_upload",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    purpose: text("purpose", { enum: ["photo"] }).notNull(),
+    /** Pathnames the client may write, with their byte limits and content types. */
+    objects: jsonb("objects").$type<{ role: string; pathname: string; maxBytes: number; contentType: string }[]>().notNull(),
+    meta: jsonb("meta"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("pending_upload_user_idx").on(t.userId), index("pending_upload_expires_idx").on(t.expiresAt)],
 );

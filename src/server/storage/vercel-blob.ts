@@ -1,4 +1,4 @@
-import { del, get, list, put } from "@vercel/blob";
+import { BlobNotFoundError, del, get, head, list, put } from "@vercel/blob";
 import type { FileStorage, StoredObject } from "./types";
 
 /**
@@ -22,6 +22,15 @@ export function vercelBlobStorage(token: string): FileStorage {
       const r = await get(pathname, { access: "private", token });
       if (!r || r.statusCode !== 200) return null;
       return { body: r.stream, size: r.blob.size, contentType: r.blob.contentType };
+    },
+    async head(pathname) {
+      try {
+        const r = await head(pathname, { token });
+        return { size: r.size, contentType: r.contentType };
+      } catch (e) {
+        if (e instanceof BlobNotFoundError) return null;
+        throw e;
+      }
     },
     async delete(pathnames) {
       if (pathnames.length) await del(pathnames, { token });

@@ -7,6 +7,7 @@ import { env } from "../env";
 import { drainOutbox, pruneOutbox, renderEmail, sendEmail } from "./email";
 import { logError } from "./errors";
 import { runUsageCheck } from "./usage";
+import { cleanupAbandonedUploads } from "./uploads";
 
 export type JobResult = Record<string, unknown>;
 
@@ -183,6 +184,7 @@ export async function tickJob(now = new Date()): Promise<JobResult> {
     const stale = await markStaleRuns(now);
     await attempt("usage-check", usageCheckJob);
     await attempt("email-outbox", outboxJob);
+    await attempt("upload-cleanup", () => cleanupAbandonedUploads());
     for (const d of DAILY) {
       if (hourET(now) >= d.hourET && !(await ranToday(d.job, now))) await attempt(d.job, d.fn);
     }

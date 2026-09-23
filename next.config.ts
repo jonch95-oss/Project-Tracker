@@ -21,7 +21,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: securityHeaders },
       // Authenticated API responses must never be cached by shared caches.
-      { source: "/api/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
+      // Photos (/api/media) set their own private, per-browser cache headers.
+      { source: "/api/:path((?!media/).*)", headers: [{ key: "Cache-Control", value: "no-store" }] },
     ];
   },
 };

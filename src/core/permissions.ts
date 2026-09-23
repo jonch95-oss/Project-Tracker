@@ -48,7 +48,10 @@ export type ProjectAction =
   | "checklist.edit"
   | "task.approve"
   | "task.viewAll" // see tasks not assigned or shared to me
-  | "folder.viewAll"; // see folders not explicitly shared to me
+  | "folder.viewAll" // see folders not explicitly shared to me
+  | "photos.upload" // add site photos
+  | "photos.manage" // pin the hero photo, remove anyone's photo
+  | "activity.view"; // the project's activity feed
 
 const GLOBAL_RULES: Record<GlobalAction, readonly GlobalRole[]> = {
   "users.manage": ["owner"],
@@ -105,6 +108,14 @@ export function canProject(
       return actor.role !== "external";
     case "project.delete":
       return false;
+    case "photos.upload":
+      // Outside parties see only folders shared with them (brief §4); photo
+      // sharing with them arrives with shared folders in Milestone 5.
+      return actor.role !== "external";
+    case "photos.manage":
+      return actor.role === "admin";
+    case "activity.view":
+      return actor.role !== "external";
     case "checklist.edit":
       if (actor.role === "admin") return true;
       if (actor.role === "member") return membership.canEditChecklist;

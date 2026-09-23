@@ -33,6 +33,7 @@ export default defineConfig({
       BETTER_AUTH_SECRET: "e2e-secret-e2e-secret-e2e-secret-0123456789",
       CRON_SECRET: "e2e-job-secret-0123456789abcdef",
       E2E_DISABLE_RATE_LIMIT: "1",
+      GEOCODER: "off",
       NODE_ENV: process.env.CI ? "production" : "development",
     },
   },

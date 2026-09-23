@@ -60,6 +60,9 @@ describe("project permissions", () => {
     "task.approve",
     "task.viewAll",
     "folder.viewAll",
+    "photos.upload",
+    "photos.manage",
+    "activity.view",
   ];
 
   it("owner can do everything, even without membership", () => {
@@ -120,6 +123,19 @@ describe("project permissions", () => {
     expect(canProject(actor("external"), m, "checklist.edit")).toBe(false);
     expect(canProject(actor("external"), m, "task.approve")).toBe(true);
     expect(canProject(actor("external"), m, "project.manageMembers")).toBe(false);
+  });
+
+  it("photos: team members upload, admins manage, externals neither (until folders are shared)", () => {
+    expect(canProject(actor("member"), member(), "photos.upload")).toBe(true);
+    expect(canProject(actor("member"), member(), "photos.manage")).toBe(false);
+    expect(canProject(actor("admin"), member(), "photos.manage")).toBe(true);
+    expect(canProject(actor("external"), member({ canViewFinancials: true }), "photos.upload")).toBe(false);
+    expect(canProject(actor("external"), member(), "photos.manage")).toBe(false);
+  });
+
+  it("activity feed is for the internal team", () => {
+    expect(canProject(actor("member"), member(), "activity.view")).toBe(true);
+    expect(canProject(actor("external"), member({ canViewFinancials: true }), "activity.view")).toBe(false);
   });
 });
 
