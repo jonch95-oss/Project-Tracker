@@ -1,0 +1,59 @@
+name: Restore drill
+
+# Run on demand (and before launch): pull the newest dump from Vercel Blob,
+# restore it into a throwaway Postgres 17, and prove it is intact.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      APP_URL: ${{ secrets.APP_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - run: echo "RUN_START=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-17
+      - name: Download newest dump from Vercel Blob and restore
+        run: |
+          set -euo pipefail
+          out=$(scripts/ops/restore-drill.sh --latest-from-blob postgres://postgres:postgres@localhost:5432/postgres)
+          echo "$out"
+          echo "DRILL_DB=$(echo "$out" | sed -n 's/^Restored into \([a-z0-9_]*\)\..*/\1/p')" >> "$GITHUB_ENV"
+      - name: Verify the audit hash chain
+        run: |
+          DATABASE_URL="postgres://postgres:postgres@localhost:5432/${DRILL_DB}" BETTER_AUTH_SECRET=drill-drill-drill-drill-drill-drill-00 \
+            npx tsx --conditions=react-server scripts/verify-audit.ts
+      - name: Record the drill on the System page
+        if: success()
+        run: |
+          curl -sS --fail --max-time 60 -X POST -H "Authorization: Bearer ${CRON_SECRET}" -H "content-type: application/json" \
+            -d "{\"objectKey\":\"restore-drill/$(date -u +%Y-%m-%dT%H%M%SZ)\",\"sizeBytes\":0,\"kind\":\"restore-drill\",\"note\":\"Restored latest Blob dump; audit chain verified (run ${GITHUB_RUN_ID})\"}" \
+            "${APP_URL}/api/jobs/record-backup"
+      - name: Report runner minutes
+        if: always()
+        run: scripts/ops/report-run.sh restore-drill "${{ job.status }}"

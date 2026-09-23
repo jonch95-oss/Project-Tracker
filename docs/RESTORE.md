@@ -8,6 +8,10 @@
 
 ## Restore drill (do it before launch, then quarterly)
 
+**Easiest:** GitHub → Actions → "Restore drill" → Run workflow. It downloads the newest dump from Vercel Blob, restores it into a throwaway Postgres 17, confirms the audit log is still append-only, verifies the hash chain, and records the drill on the System page.
+
+Manual alternative:
+
 1. Fetch the newest dump from Vercel Blob and restore it into a scratch database:
    `BLOB_READ_WRITE_TOKEN=… scripts/ops/restore-drill.sh --latest-from-blob postgres://USER:PASS@HOST/postgres`
    (or pass a local `.dump` file instead of `--latest-from-blob`)
