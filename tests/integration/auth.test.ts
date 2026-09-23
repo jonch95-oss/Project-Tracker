@@ -1,3 +1,5 @@
+import { base32 } from "@better-auth/utils/base32";
+import { createOTP } from "@better-auth/utils/otp";
 import { desc, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { auth } from "@/server/auth";
@@ -84,5 +86,42 @@ describe("Better Auth wiring", () => {
     expect(mail?.category).toBe("password_reset");
     expect(mail?.status).toBe("sent");
     expect(mail?.urgent).toBe(true);
+  });
+});
+
+describe("two-factor authentication", () => {
+  it("enable → verify → sign-in requires a TOTP code", async () => {
+    const u = await createUser("admin", { password: "correct horse battery 1" });
+    const login = await post("/sign-in/email", { email: u.email, password: "correct horse battery 1" });
+    const cookie = cookieHeader(login);
+
+    const enable = await post("/two-factor/enable", { password: "correct horse battery 1" }, { cookie });
+    expect(enable.status).toBe(200);
+    const { totpURI, backupCodes } = (await enable.json()) as { totpURI: string; backupCodes: string[] };
+    expect(backupCodes.length).toBeGreaterThanOrEqual(8);
+    const secret = new TextDecoder().decode(base32.decode(new URL(totpURI).searchParams.get("secret")!));
+    const code = () => createOTP(secret).totp();
+
+    const verify = await post("/two-factor/verify-totp", { code: await code() }, { cookie });
+    expect(verify.status).toBe(200);
+    const [row] = await db().select().from(schema.user).where(eq(schema.user.id, u.id));
+    expect(row?.twoFactorEnabled).toBe(true);
+    const [entry] = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "2fa.enable")).orderBy(desc(schema.auditLog.seq)).limit(1);
+    expect(entry?.actorId).toBe(u.id);
+
+    // A fresh sign-in now stops at the 2FA challenge.
+    const second = await post("/sign-in/email", { email: u.email, password: "correct horse battery 1" });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ twoFactorRedirect: true });
+    const challengeCookie = cookieHeader(second);
+    const noSession = await createContext({ headers: new Headers({ cookie: challengeCookie }) });
+    expect(noSession.viewer).toBeNull();
+
+    const bad = await post("/two-factor/verify-totp", { code: "000000" }, { cookie: challengeCookie });
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+    const good = await post("/two-factor/verify-totp", { code: await code() }, { cookie: challengeCookie });
+    expect(good.status).toBe(200);
+    const ctx = await createContext({ headers: new Headers({ cookie: cookieHeader(good) }) });
+    expect(ctx.viewer?.id).toBe(u.id);
   });
 });

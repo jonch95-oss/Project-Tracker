@@ -1,36 +1,52 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Project Command
 
-## Getting Started
+Private development-project tracker for Ariel Development Group and Lian Development JV Group. It is one responsive web app that also installs on iPhone as a Home Screen app.
 
-First, run the development server:
+- **Owner:** "Where am I on every project, and what is stuck?"
+- **Team member:** "What exactly do I have to do today?"
+
+See `PLAN.md` for the architecture and milestones, and `PROGRESS.md` for what has shipped.
+
+## Stack
+
+Next.js 16 (App Router) · tRPC 11 · Better Auth (invite-only, 2FA, passkeys) · Drizzle + Postgres (Neon Free) · Cloudflare R2 · Resend · GitHub Actions for scheduled jobs. Running cost is **$0/month**. The owner-only System page shows live usage against every free-tier limit.
+
+## Develop
 
 ```bash
+cp .env.example .env.local        # fill BETTER_AUTH_SECRET (openssl rand -base64 48) and JOB_SECRET
+createdb pc_dev                   # any local Postgres 16+
+npm install
+npm run db:migrate
+npm run seed:demo                 # demo data only (refuses non dev/test/demo databases)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Demo users (demo seed only): `jon@demo.test` (owner), `elias@demo.test` (admin), `ariel@demo.test` (member), `architect@demo.test` (outside collaborator). The password is `demo password 1`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Test
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run lint && npm run typecheck
+npm test                  # unit tests for src/core
+npm run test:coverage     # with 95% coverage thresholds
+npm run test:integration  # real Postgres: permission matrix, auth, invites, audit, jobs
+npm run test:e2e          # Playwright; set E2E_WEBKIT=1 for the iPhone WebKit profile
+```
 
-## Learn More
+## Code layout
 
-To learn more about Next.js, take a look at the following resources:
+- `src/core`: pure business logic (permissions, money, time, free-tier math, audit hashing). No I/O; fully unit tested.
+- `src/server`: database, Better Auth, tRPC routers with permission middleware, services (audit, email, usage, jobs).
+- `src/app`: routes. `(auth)` holds sign-in, reset and invites; `(app)` holds the signed-in shell.
+- `src/components/ui`: the component kit, built on `src/styles/tokens.css`.
+- `drizzle/`: SQL migrations, including the audit-log protection triggers.
+- `scripts/`: migrate, bootstrap the first owner, the demo seed, and ops scripts (backup, restore drill).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Production setup (first time)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Set environment variables from `.env.example` on the host. Set the GitHub repository secrets: `APP_URL`, `JOB_SECRET`, `DATABASE_URL_DIRECT`, `R2_ACCOUNT_ID`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
+2. `DATABASE_URL=... npm run db:migrate`. The production database starts empty; never run the demo seed on it.
+3. `DATABASE_URL=... APP_URL=https://projects.liandev.com npm run bootstrap:owner -- --email you@liandev.com --name "Jon"`. Open the printed link to set the owner password. Invite everyone else from **Team**.
+4. In GitHub → Settings → Billing, keep the Actions budget at $0 with "stop usage" enabled.
+5. Do a restore drill (see `docs/RESTORE.md`).
