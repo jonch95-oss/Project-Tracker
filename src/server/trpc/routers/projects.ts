@@ -3,12 +3,14 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle
 import { z } from "zod";
 import { isFinancialEntity } from "@/core/audit";
 import { canGlobal, canGrantFlags, canProject, canRemoveMember, defaultFlags, PROJECT_ROLES, type Membership } from "@/core/permissions";
-import { initialPhases, phasesForType, setCurrentPhase, setPhaseSkipped, type PhaseState } from "@/core/phases";
+import { setCurrentPhase, setPhaseSkipped, type PhaseState } from "@/core/phases";
+import { isToggleKey } from "@/core/toggles";
 import { PROJECT_STATUSES } from "@/core/portfolio";
 import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
+import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { globalProcedure, projectProcedure, protectedProcedure, router, type AuthedContext } from "../init";
 
 const bblSchema = z
@@ -56,7 +58,14 @@ const baseInput = z.object({
 const bblMatchesBorough = (p: { bbl?: string | null; borough: (typeof BOROUGHS)[number] }) => !p.bbl || p.bbl.startsWith(BOROUGH_CODE[p.borough]);
 
 const createInput = baseInput
-  .extend({ facts: factsInput.partial().optional(), headline: headlineInput.partial().optional() })
+  .extend({
+    facts: factsInput.partial().optional(),
+    headline: headlineInput.partial().optional(),
+    /** Template to build the checklist from; the type's default when omitted. */
+    templateId: z.uuid().optional(),
+    /** Toggles answered "yes" (brief §5.1 step 2). */
+    toggles: z.array(z.string().min(1).max(60)).max(30).default([]),
+  })
   .refine(bblMatchesBorough, { path: ["bbl"], message: BBL_BOROUGH_MESSAGE });
 
 const updateInput = baseInput
@@ -320,6 +329,11 @@ export const projectsRouter = router({
       const bbl = input.bbl ?? (geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough]) ? geo.bbl : null);
       const today = todayET();
       const flags = defaultFlags(ctx.actor.role);
+      const toggles = [...new Set(input.toggles)];
+      for (const k of toggles) if (!isToggleKey(k)) throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown toggle: ${k}` });
+      const tpl = input.templateId ? await loadTemplate(ctx.db, input.templateId) : await defaultTemplateFor(ctx.db, input.type);
+      if (!tpl || tpl.row.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+      if (tpl.row.projectType !== input.type) throw new TRPCError({ code: "BAD_REQUEST", message: "That template is for a different project type." });
       return ctx.db.transaction(async (tx) => {
         const [p] = await tx
           .insert(schema.project)
@@ -337,7 +351,7 @@ export const projectsRouter = router({
           })
           .returning({ id: schema.project.id });
         const id = p!.id;
-        await tx.insert(schema.projectPhase).values(initialPhases(phasesForType(input.type), today).map((ph) => ({ ...ph, projectId: id })));
+        const built = await buildProjectChecklist(tx, { projectId: id, type: input.type, template: tpl, chosenToggles: toggles, today, userId: ctx.viewer.id });
         // The creator is always a member (admins need membership to see it).
         await tx.insert(schema.projectMember).values({ projectId: id, userId: ctx.viewer.id, projectRole: "PM", ...flags, addedById: ctx.viewer.id });
         await recordAudit(tx, {
@@ -348,7 +362,7 @@ export const projectsRouter = router({
           entityId: id,
           projectId: id,
           summary: `${ctx.viewer.name} created project ${input.name}`,
-          data: { name: input.name, address: input.address, type: input.type, bbl, geocoded: !!geo },
+          data: { name: input.name, address: input.address, type: input.type, bbl, geocoded: !!geo, template: tpl.row.name, templateVersion: tpl.row.version, toggles, ...built },
           ip: ctx.ip,
         });
         const h = input.headline;
@@ -450,6 +464,8 @@ export const projectsRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
         }
         await savePhases(tx, input.projectId, before, after);
+        // A phase that just started gives its tasks their due dates.
+        await reschedule(tx, input.projectId);
         const from = before.find((p) => p.status === "active");
         const to = after.find((p) => p.key === input.key)!;
         await recordAudit(tx, {

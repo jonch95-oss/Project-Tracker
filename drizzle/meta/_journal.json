@@ -36,6 +36,13 @@
       "when": 1790205812486,
       "tag": "0004_photo_object_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790206315299,
+      "tag": "0005_templates_tasks",
+      "breakpoints": true
     }
   ]
 }

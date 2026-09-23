@@ -6,7 +6,7 @@
  * a matrix row, so new endpoints cannot ship unchecked.
  */
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { db, schema } from "@/server/db";
 import { storage } from "@/server/storage";
@@ -45,6 +45,15 @@ const SCENARIOS: Scenario[] = [
 const ACTIVE: Scenario[] = SCENARIOS.filter((s) => s !== "anon" && s !== "deactivated");
 const ASSIGNED: Scenario[] = ["owner", "admin+fin", "admin", "member+fin", "member", "external+fin", "external"];
 const OWNER_ONLY: Scenario[] = ["owner"];
+/** Can edit the checklist on the matrix project (members lack the flag there). */
+const EDITORS: Scenario[] = ["owner", "admin+fin", "admin"];
+const INTERNAL_ASSIGNED: Scenario[] = ["owner", "admin+fin", "admin", "member+fin", "member"];
+const TEMPLATE_EDITORS: Scenario[] = ["owner", "admin+fin", "admin", "admin-unassigned"];
+
+async function taskVersion(id: string): Promise<number> {
+  const [t] = await db().select({ version: schema.task.version }).from(schema.task).where(eq(schema.task.id, id));
+  return t!.version;
+}
 
 interface Fixture {
   projectId: string;
@@ -52,6 +61,9 @@ interface Fixture {
   companyId: string;
   /** A photo on the project uploaded by the owner. */
   photoId: () => Promise<string>;
+  /** A task on the project with no prerequisites. */
+  taskId: string;
+  templateId: string;
 }
 
 type Caller = Awaited<ReturnType<typeof callerFor>>;
@@ -175,6 +187,67 @@ const MATRIX: Record<string, Row | "public"> = {
     allowed: ["owner", "admin+fin", "admin"],
     call: async (c, f) => c.photos.remove({ projectId: f.projectId, photoId: await f.photoId() }),
   },
+  "checklist.get": { allowed: ASSIGNED, call: (c, f) => c.checklist.get({ projectId: f.projectId }) },
+  "checklist.setDone": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => c.checklist.setDone({ projectId: f.projectId, taskId: f.taskId, done: false, version: await taskVersion(f.taskId) }),
+  },
+  "checklist.addTask": { allowed: EDITORS, call: (c, f) => c.checklist.addTask({ projectId: f.projectId, phaseKey: "pipeline", title: `Matrix ${uid()}` }) },
+  "checklist.updateTask": {
+    allowed: EDITORS,
+    call: async (c, f) => c.checklist.updateTask({ projectId: f.projectId, taskId: f.taskId, version: await taskVersion(f.taskId), role: "Acquisitions" }),
+  },
+  "checklist.deleteTask": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [t] = await db().insert(schema.task).values({ projectId: f.projectId, phaseKey: "pipeline", title: "Temp" }).returning({ id: schema.task.id });
+      return c.checklist.deleteTask({ projectId: f.projectId, taskId: t!.id });
+    },
+  },
+  "checklist.reorder": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const ids = (await db().select({ id: schema.task.id }).from(schema.task).where(and(eq(schema.task.projectId, f.projectId), eq(schema.task.phaseKey, "closing")))).map((r) => r.id);
+      return c.checklist.reorder({ projectId: f.projectId, phaseKey: "closing", taskIds: ids });
+    },
+  },
+  "checklist.setDependencies": { allowed: EDITORS, call: (c, f) => c.checklist.setDependencies({ projectId: f.projectId, taskId: f.taskId, dependsOnIds: [] }) },
+  "checklist.previewToggles": { allowed: EDITORS, call: (c, f) => c.checklist.previewToggles({ projectId: f.projectId, toggles: ["excavation"] }) },
+  "checklist.setToggles": { allowed: EDITORS, call: (c, f) => c.checklist.setToggles({ projectId: f.projectId, toggles: [] }) },
+  "checklist.renamePhase": { allowed: EDITORS, call: (c, f) => c.checklist.renamePhase({ projectId: f.projectId, key: "pipeline", name: "Pipeline" }) },
+  "checklist.addPhase": { allowed: EDITORS, call: (c, f) => c.checklist.addPhase({ projectId: f.projectId, name: `Extra ${uid()}`, afterKey: "closed" }) },
+  "checklist.saveAsTemplate": { allowed: EDITORS, call: (c, f) => c.checklist.saveAsTemplate({ projectId: f.projectId, name: `From matrix ${uid()}` }) },
+
+  "templates.list": { allowed: TEMPLATE_EDITORS, call: (c) => c.templates.list() },
+  "templates.get": { allowed: TEMPLATE_EDITORS, call: (c, f) => c.templates.get({ templateId: f.templateId }) },
+  "templates.create": { allowed: TEMPLATE_EDITORS, call: (c) => c.templates.create({ name: `T ${uid()}`, from: { projectType: "contract_flip" } }) },
+  "templates.save": {
+    allowed: TEMPLATE_EDITORS,
+    call: async (c, f) => {
+      const t = await c.templates.get({ templateId: f.templateId }).catch(() => null);
+      const [row] = await db().select().from(schema.template).where(eq(schema.template.id, f.templateId));
+      return c.templates.save({ templateId: f.templateId, version: t?.version ?? row!.version, definition: (t?.definition ?? row!.definition) as never });
+    },
+  },
+  "templates.setDefault": { allowed: TEMPLATE_EDITORS, call: (c, f) => c.templates.setDefault({ templateId: f.templateId }) },
+  "templates.setArchived": {
+    allowed: TEMPLATE_EDITORS,
+    call: async (c, f) => {
+      const [row] = await db().insert(schema.template).values({ name: "Archivable", projectType: "contract_flip", definition: (await db().select().from(schema.template).where(eq(schema.template.id, f.templateId)))[0]!.definition }).returning({ id: schema.template.id });
+      return c.templates.setArchived({ templateId: row!.id, archived: true });
+    },
+  },
+  "templates.preview": {
+    allowed: TEMPLATE_EDITORS,
+    call: async (c, f) => {
+      const [row] = await db().select().from(schema.template).where(eq(schema.template.id, f.templateId));
+      return c.templates.preview({ definition: row!.definition as never, toggles: ["excavation"] });
+    },
+  },
+  "templates.projects": { allowed: TEMPLATE_EDITORS, call: (c, f) => c.templates.projects({ templateId: f.templateId }) },
+  "templates.updatePreview": { allowed: EDITORS, call: (c, f) => c.templates.updatePreview({ projectId: f.projectId }) },
+  "templates.applyUpdate": { allowed: EDITORS, call: (c, f) => c.templates.applyUpdate({ projectIds: [f.projectId] }) },
+
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: (c, f) => c.projects.create({ name: `M ${uid()}`, address: "1 Matrix Pl", type: "gut_renovation", companyId: f.companyId, bbl: null }),
@@ -222,6 +295,10 @@ describe("permission matrix", () => {
     fixture.projectId = p.id;
     fixture.companyId = await companyId();
     fixture.otherUserId = (await createUser("member")).id;
+    const [firstTask] = await db().select({ id: schema.task.id }).from(schema.task).where(and(eq(schema.task.projectId, p.id), eq(schema.task.templateKey, "mih_check")));
+    fixture.taskId = firstTask!.id;
+    const [proj] = await db().select({ templateId: schema.project.templateId }).from(schema.project).where(eq(schema.project.id, p.id));
+    fixture.templateId = proj!.templateId!;
     const ownerCaller = await callerFor(owner.id);
     fixture.photoId = async () => {
       const b = await ownerCaller.photos.beginUpload({ projectId: p.id, contentType: "image/webp", fullBytes: 10, thumbBytes: 5, width: 4, height: 3 });

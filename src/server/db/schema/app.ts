@@ -83,6 +83,11 @@ export const project = pgTable(
     longitude: doublePrecision("longitude"),
     /** Pinned hero photo; when null the newest photo is the hero. */
     heroPhotoId: uuid("hero_photo_id"),
+    /** Toggles that are on (brief §5.3). */
+    toggles: jsonb("toggles").$type<string[]>().notNull().default([]),
+    /** The template (and its revision) the checklist was generated from. */
+    templateId: uuid("template_id"),
+    templateVersion: integer("template_version"),
     createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     /** Optimistic-locking version; bumped on every update. */
@@ -327,4 +332,107 @@ export const pendingUpload = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("pending_upload_user_idx").on(t.userId), index("pending_upload_expires_idx").on(t.expiresAt)],
+);
+
+/**
+ * A checklist template. The whole definition (phases, tasks, rules) is one
+ * validated JSON document (see src/core/templates.ts), versioned on every
+ * save. Live projects are never rewritten silently: they record the version
+ * they came from, and updates are applied per project with a preview.
+ */
+export const template = pgTable(
+  "template",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    projectType: text("project_type", { enum: PROJECT_TYPES }).notNull(),
+    /** The type's default template (one per type), used for new projects unless another is chosen. */
+    isDefault: boolean("is_default").notNull().default(false),
+    version: integer("version").notNull().default(1),
+    definition: jsonb("definition").notNull(),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("template_type_idx").on(t.projectType)],
+);
+
+export const templateRevision = pgTable(
+  "template_revision",
+  {
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => template.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    definition: jsonb("definition").notNull(),
+    savedById: text("saved_by_id").references(() => user.id, { onDelete: "set null" }),
+    savedAt: timestamp("saved_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.templateId, t.version] })],
+);
+
+export const TASK_STATUSES = ["not_started", "in_progress", "waiting", "blocked", "awaiting_approval", "done"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/** A checklist item on a project. Milestone 4 adds assignment, comments, approvals and recurrence handling. */
+export const task = pgTable(
+  "task",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    phaseKey: text("phase_key").notNull(),
+    /** The template task it came from (null for tasks people added). */
+    templateKey: text("template_key"),
+    title: text("title").notNull(),
+    description: text("description"),
+    role: text("role").notNull().default("PM"),
+    assigneeId: text("assignee_id").references(() => user.id, { onDelete: "set null" }),
+    status: text("status", { enum: TASK_STATUSES }).notNull().default("not_started"),
+    blockedReason: text("blocked_reason"),
+    waitingOn: text("waiting_on"),
+    priority: text("priority", { enum: ["low", "normal", "high"] }).notNull().default("normal"),
+    /** New York calendar date. */
+    dueOn: text("due_on"),
+    dueRule: jsonb("due_rule"),
+    /** A person set the date: never recomputed from the rule. */
+    dueManual: boolean("due_manual").notNull().default(false),
+    requiresApproval: boolean("requires_approval").notNull().default(false),
+    approverRole: text("approver_role"),
+    approverId: text("approver_id").references(() => user.id, { onDelete: "set null" }),
+    requiredAttachment: text("required_attachment"),
+    subItems: jsonb("sub_items").$type<{ id: string; text: string; done: boolean }[]>().notNull().default([]),
+    recurrence: jsonb("recurrence"),
+    killScreen: boolean("kill_screen").notNull().default(false),
+    milestone: boolean("milestone").notNull().default(false),
+    toggleSource: jsonb("toggle_source").$type<string[]>().notNull().default([]),
+    sortOrder: integer("sort_order").notNull().default(0),
+    version: integer("version").notNull().default(1),
+    completedOn: text("completed_on"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    completedById: text("completed_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("task_project_idx").on(t.projectId, t.phaseKey, t.sortOrder),
+    index("task_assignee_idx").on(t.assigneeId, t.status),
+    index("task_due_idx").on(t.dueOn),
+  ],
+);
+
+export const taskDependency = pgTable(
+  "task_dependency",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => task.id, { onDelete: "cascade" }),
+    dependsOnId: uuid("depends_on_id")
+      .notNull()
+      .references(() => task.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.dependsOnId] }), index("task_dependency_on_idx").on(t.dependsOnId)],
 );
