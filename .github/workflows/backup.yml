@@ -40,10 +40,10 @@ jobs:
           u="${APP_URL%/}"
           case "$u" in http://*) u="https://${u#http://}";; https://*) ;; "") ;; *) u="https://$u";; esac
           echo "APP_URL=$u" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           sparse-checkout: scripts/ops
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Install PostgreSQL 18 client (matches Neon) and the Blob SDK

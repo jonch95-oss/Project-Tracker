@@ -1,6 +1,6 @@
 # Progress
 
-## Milestone 1 — Foundation (in review)
+## Milestone 1 — Foundation (done)
 
 **Production URL:** https://ariel-dev-projects.vercel.app (no custom domain). Branch previews are at `project-tracker-git-<branch>-jonch95-oss-projects.vercel.app` and sit behind Vercel Authentication.
 
@@ -74,14 +74,12 @@
   - the permission matrix: every procedure × 12 role/flag/assignment scenarios, plus a check that every procedure is covered
   - auth, 2FA end to end, invites, audit immutability and tamper detection, the email budget and no-op sender, usage alerts, jobs (tick lock, stale runs, backup watch) and setup
 - E2E (Playwright, desktop Chromium): 9/9. The iPhone WebKit project runs in CI.
-- Restore drill: done locally with an encrypted dump (4 users, 3 projects, 5 audit entries; anchor matched; a truncated log was rejected). **Still to run against Vercel Blob** once the backup store and GitHub secrets exist.
+- Restore drill: **passed against production.** The nightly workflow dumped Neon (Postgres 18), encrypted it and stored it in the `project-tracker-backups` Blob store. The restore-drill workflow decrypted it, restored it into a throwaway Postgres 18 (1 user, 3 audit entries, 3 migrations), confirmed the audit log is still append-only, and verified the hash chain against anchor #3. See `docs/RESTORE.md`.
 
 ### Known limitations / pending
 
-- **Vercel Blob stores** (`project-tracker-files` and `project-tracker-backups`): not created yet. My Vercel access can't create stores; it's a few clicks in the dashboard.
-- **Vercel spend cap:** not set yet. Vercel's API doesn't let me set it. Suggested: $20 with "pause production deployments" on.
-- **`projects.liandev.com`** is still attached to the project; my access can't remove domains.
-- **Vercel Pro has no separate Blob allowance.** Blob bills from the team's shared $20 credit. The app budgets 10 GB stored (about $0.23/month) and 20 GB/month of downloads.
-- **Email is on hold.** Invites and resets are on-screen links; notifications will go by push and in-app (Milestone 7). Adding a sender later is one adapter plus env vars.
-- **Not done from the review:** a strict nonce-based Content-Security-Policy `script-src` (planned with Milestone 13 hardening) and client-side error reporting.
-- `SOCRATA_APP_TOKEN` (NYC Open Data) is set in Vercel and `.env.local`, ready for Milestone 8.
+- **Setup key retired:** Vercel's API has no delete for environment variables, so `SETUP_KEY` was overwritten with a random value nobody knows. `/setup` also refuses once any user exists. Deleting the variable in Vercel is optional tidying.
+- **Workflow triggers:** the GitHub integration can't press "Run workflow", so the backup and restore-drill workflows also start when `ops/triggers/backup` or `ops/triggers/restore-drill` changes on `main`.
+- **Vercel Pro has no separate Blob allowance.** Blob bills from the team's shared $20 credit. The app budgets 10 GB stored (about $0.23/month) and 20 GB/month of downloads. The team spend budget is $20 with production pausing on.
+- **Email is on hold.** Invites and resets are on-screen links; notifications go by push, in-app and WhatsApp share (Milestone 7).
+- **Not done from the review:** a strict nonce-based Content-Security-Policy `script-src` (Milestone 13 hardening) and client-side error reporting.

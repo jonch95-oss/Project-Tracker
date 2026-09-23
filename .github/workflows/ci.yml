@@ -30,8 +30,8 @@ jobs:
       E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/pc_e2e_test
     steps:
       - run: echo "RUN_START=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm

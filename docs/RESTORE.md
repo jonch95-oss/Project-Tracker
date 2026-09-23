@@ -14,7 +14,7 @@
 
 ## Restore drill (do it before launch, then quarterly)
 
-**Easiest:** GitHub → Actions → "Restore drill" → Run workflow. It downloads the newest dump from Vercel Blob, restores it into a throwaway Postgres 17, confirms the audit log is still append-only, verifies the hash chain, and records the drill on the System page.
+**Easiest:** GitHub → Actions → "Restore drill" → Run workflow (or change `ops/triggers/restore-drill` on main). It downloads the newest dump from Vercel Blob, restores it into a throwaway Postgres 18, confirms the audit log is still append-only, verifies the hash chain, and records the drill on the System page.
 
 Manual alternative:
 
@@ -32,7 +32,7 @@ Manual alternative:
 |---|---|---|
 | 2026-09-23 | Local dev database (M1), unencrypted file | Superseded |
 | 2026-09-23 | Local dev database, **encrypted** dump (AES-256), local file | Decrypted and restored: 4 users, 3 projects, 5 audit entries, 3 migrations. Triggers present. Chain verified. Anchor #5 matched. A simulated truncated log was rejected |
-| pending | Production → Vercel Blob (GitHub "Restore drill" workflow) | Waiting on the backup Blob store and GitHub secrets | Restored 4 users, 3 projects, 2 audit entries, 2 migrations. Audit trigger intact after restore. Hash chain verified |
+| 2026-09-23 | **Production** Neon (Postgres 18) → nightly workflow → encrypted dump in the `project-tracker-backups` Blob store (12.9 KB) → GitHub "Restore drill" workflow ([run](https://github.com/jonch95-oss/Project-Tracker/actions/runs/35930377459)) | Decrypted and restored into a throwaway Postgres 18: 1 user, 0 projects, 3 audit entries, 3 migrations. Audit-log triggers intact after restore. Hash chain verified; anchor #3 from the backup store matched. Drill recorded on the System page |
 
 ## Full production restore
 
