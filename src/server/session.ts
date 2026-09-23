@@ -7,7 +7,10 @@ import { loadViewer, type Viewer } from "./trpc/init";
 
 /** The signed-in, active viewer for this request (deduplicated per render). */
 export const getViewer = cache(async (): Promise<Viewer | null> => {
-  const session = await auth().api.getSession({ headers: await headers() });
+  // Read request headers before touching env/auth: this marks the route as
+  // dynamic, so the build never tries to prerender signed-in pages.
+  const requestHeaders = await headers();
+  const session = await auth().api.getSession({ headers: requestHeaders });
   if (!session) return null;
   const viewer = await loadViewer(session.user.id);
   if (!viewer || viewer.status !== "active") return null;
