@@ -12,7 +12,7 @@ import { isIsoDate, todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { recordAudit } from "../../services/audit";
 import { applyTemplateUpdate, applyToggles, assertValidTemplate, loadTemplate, describeDiff, effectiveToggles, lockProject, previewToggles, projectEdges, reschedule, templateUpdatePreview, unmetPrerequisites } from "../../services/checklist";
-import { afterCompleted, notify, resolveApprover, sharedTaskIds, taskHref, undoRecurrence } from "../../services/tasks";
+import { afterCompleted, canDecideApproval, notify, resolveApprover, sharedTaskIds, taskAudience, taskHref, undoRecurrence } from "../../services/tasks";
 import { projectPeople } from "./tasks";
 import { projectProcedure, router, type AuthedContext, type ProjectAccess } from "../init";
 
@@ -159,9 +159,11 @@ export const checklistRouter = router({
             throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Waiting on: ${parts.join("; ")}. Finish ${unmet.length === 1 ? "it" : "those"} first.` });
           }
           const today = todayET();
-          if (t.requiresApproval && !ctx.project.can("task.approve")) {
+          // Approval tasks: the tick is the approval only for the person who should approve (or the owner).
+          const approverId = t.requiresApproval ? await resolveApprover(tx, t) : null;
+          const selfApproves = t.requiresApproval && canDecideApproval({ approverId }, { id: ctx.viewer.id, role: ctx.actor.role });
+          if (t.requiresApproval && !selfApproves) {
             if (t.status === "awaiting_approval") return { status: "awaiting_approval" as const, version: t.version };
-            const approverId = await resolveApprover(tx, t);
             const version = await bumpTask(tx, t.id, input.version, { status: "awaiting_approval", approverId, approvalRequestedAt: new Date(), approvalDecision: null, approvalNote: null, waitingOn: null, waitingSince: null, followUpOn: null, blockedReason: null });
             await audit(tx, c, `${ctx.viewer.name} sent "${t.title}" for approval`, t.id, { status: "awaiting_approval", approverId });
             if (approverId) {
@@ -180,9 +182,13 @@ export const checklistRouter = router({
             waitingSince: null,
             followUpOn: null,
             blockedReason: null,
-            ...(t.requiresApproval ? { approvalDecision: "approved" as const, approvalDecidedAt: new Date(), approvalDecidedById: ctx.viewer.id, approvalNote: null } : {}),
+            ...(t.requiresApproval ? { approvalDecision: "approved" as const, approvalDecidedAt: new Date(), approvalDecidedById: ctx.viewer.id, approvalNote: null, approverId: null } : {}),
           });
           await audit(tx, c, `${ctx.viewer.name} completed "${t.title}"${t.requiresApproval ? " (approved)" : ""}`, t.id, { status: "done" }, t.requiresApproval ? "approve" : "update");
+          if (t.requiresApproval) {
+            const audience = await taskAudience(tx, t);
+            await notify(tx, ctx.viewer.id, audience.map((userId) => ({ userId, kind: "approval_decided" as const, title: `${ctx.viewer.name} approved “${t.title}”`, projectId: input.projectId, taskId: t.id, href: taskHref(input.projectId, t.id) })));
+          }
           const [fresh] = await tx.select().from(schema.task).where(eq(schema.task.id, t.id));
           const { nextId } = await afterCompleted(tx, fresh!, ctx.viewer.id, today);
           return { status: "done" as const, version, nextId };
@@ -231,6 +237,7 @@ export const checklistRouter = router({
         requiresApproval: z.boolean().optional(),
         approverRole: z.string().trim().max(60).nullish(),
         subItems: z.array(z.object({ id: z.string().min(1).max(40), text: z.string().trim().min(1).max(200), done: z.boolean() })).max(50).optional(),
+        recurrence: z.object({ freq: z.enum(["weekly", "biweekly", "monthly"]) }).nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -252,6 +259,9 @@ export const checklistRouter = router({
         if (input.requiresApproval !== undefined) set.requiresApproval = input.requiresApproval;
         if (input.approverRole !== undefined) set.approverRole = input.approverRole ?? null;
         if (input.subItems !== undefined) set.subItems = input.subItems;
+        if (input.recurrence !== undefined) set.recurrence = input.recurrence ?? null;
+        // The approver is worked out from the role at each request; a changed role takes effect next time.
+        if (touchesApproval) set.approverId = null;
         if (input.phaseKey !== undefined && input.phaseKey !== t.phaseKey) {
           const [ph] = await tx.select().from(schema.projectPhase).where(and(eq(schema.projectPhase.projectId, input.projectId), eq(schema.projectPhase.key, input.phaseKey)));
           if (!ph) throw new TRPCError({ code: "BAD_REQUEST", message: "That phase isn't on this project." });

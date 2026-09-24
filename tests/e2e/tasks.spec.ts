@@ -30,7 +30,7 @@ test.describe("tasks", () => {
     await d.getByLabel("Date", { exact: true }).fill("2031-03-14");
     await d.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("Date added")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Closing/ })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Key dates" }).getByRole("button", { name: /Closing/ })).toBeVisible();
 
     // Bulk: select two tasks and push them a week.
     await page.getByRole("tab", { name: "Checklist" }).click();

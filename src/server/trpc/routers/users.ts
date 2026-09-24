@@ -8,6 +8,7 @@ import { schema } from "../../db";
 import { env } from "../../env";
 import { recordAudit } from "../../services/audit";
 import { renderEmail, sendEmail } from "../../services/email";
+import { rerouteApprovals } from "../../services/tasks";
 import { generateToken, hashToken } from "../../services/tokens";
 import { globalProcedure, protectedProcedure, publicProcedure, router } from "../init";
 
@@ -298,8 +299,9 @@ export const usersRouter = router({
         if (before.status === input.status) return;
         await tx.update(schema.user).set({ status: input.status, updatedAt: new Date() }).where(eq(schema.user.id, input.userId));
         if (input.status === "deactivated") {
-          // End every session immediately.
+          // End every session immediately, and send their pending approvals to someone who can act.
           await tx.delete(schema.session).where(eq(schema.session.userId, input.userId));
+          await rerouteApprovals(tx, input.userId, ctx.viewer.id);
         }
         await recordAudit(tx, {
           actorId: ctx.viewer.id,

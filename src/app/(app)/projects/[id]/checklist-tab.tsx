@@ -9,6 +9,7 @@ import { Badge, Button, Input, Skeleton, StatusPill } from "@/components/ui/prim
 import { toggleLabel } from "@/core/toggles";
 import { formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
+import { useInvalidateTaskViews } from "@/lib/task-cache";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { AddPhaseDialog, RenamePhaseDialog, SaveAsTemplateDialog, TemplateUpdateDialog } from "./checklist-extras";
 import { BulkBar, ShiftPhaseDialog } from "./bulk";
@@ -51,15 +52,7 @@ export function ChecklistTab({
   const [hideDone, setHideDone] = useState(false);
   const [dialog, setDialog] = useState<null | "toggles" | "update" | "save" | "addPhase" | { rename: string } | { shift: string }>(null);
 
-  const refresh = () =>
-    Promise.all([
-      qc.invalidateQueries({ queryKey: trpc.checklist.get.queryKey({ projectId }) }),
-      qc.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ projectId }) }),
-      qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() }),
-      qc.invalidateQueries({ queryKey: trpc.tasks.detail.queryKey() }),
-      qc.invalidateQueries({ queryKey: trpc.tasks.mine.queryKey() }),
-      qc.invalidateQueries({ queryKey: trpc.tasks.needsYou.queryKey() }),
-    ]);
+  const refresh = useInvalidateTaskViews();
 
   const setDone = useMutation(
     trpc.checklist.setDone.mutationOptions({

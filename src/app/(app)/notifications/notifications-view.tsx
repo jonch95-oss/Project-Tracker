@@ -14,9 +14,9 @@ export function NotificationsView() {
   const qc = useQueryClient();
   const q = useInfiniteQuery({
     queryKey: [...trpc.notifications.list.queryKey(), "infinite"],
-    queryFn: ({ pageParam }) => qc.fetchQuery(trpc.notifications.list.queryOptions({ limit: 30, before: pageParam ?? undefined })),
-    initialPageParam: null as Date | null,
-    getNextPageParam: (last) => (last.more ? (last.items.at(-1)?.createdAt ?? null) : null),
+    queryFn: ({ pageParam }) => qc.fetchQuery(trpc.notifications.list.queryOptions({ limit: 30, cursor: pageParam ?? undefined })),
+    initialPageParam: null as { at: string; id: string } | null,
+    getNextPageParam: (last) => last.next,
   });
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: trpc.notifications.list.queryKey() }), qc.invalidateQueries({ queryKey: trpc.notifications.unreadCount.queryKey() })]);
   const markRead = useMutation(trpc.notifications.markRead.mutationOptions({ onSettled: refresh }));

@@ -204,7 +204,7 @@ describe("tasks", () => {
     // Watchers who aren't the assignee can comment but not change status.
     await expect(xc.tasks.setStatus({ projectId, taskId: t.id, version: (await row(t.id)).version, status: "in_progress" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     // They can't drop the share themselves.
-    await expect(xc.tasks.watch({ projectId, taskId: t.id, on: false })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(xc.tasks.watch({ projectId, taskId: t.id, on: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
     const p = await xc.projects.get({ projectId });
     const total = Object.values(p.taskCounts).reduce((s, x) => s + x.total, 0);
     expect(total).toBe(1);
@@ -326,5 +326,147 @@ describe("tasks", () => {
     expect((await c.notifications.unreadCount()).count).toBe(1);
     await c.notifications.markRead({ ids: [l.items[0]!.id] });
     expect((await c.notifications.unreadCount()).count).toBe(0);
+  });
+
+  describe("Milestone 4 review regressions", () => {
+    it("removal from a project ends shares, assignments and notifications at once", async () => {
+      const gc = await createUser("external", { name: "Gina GC" });
+      await addMember(projectId, gc.id);
+      const shared = await addTask(projectId, { title: "Shared with GC" });
+      const theirs = await addTask(projectId, { title: "GC's task", assigneeId: gc.id });
+      await ac.tasks.setWatcher({ projectId, taskId: shared.id, userId: gc.id, on: true });
+      await oc.members.remove({ projectId, userId: gc.id });
+      expect(await db().select().from(schema.taskWatcher).where(eq(schema.taskWatcher.userId, gc.id))).toHaveLength(0);
+      expect((await row(theirs.id)).assigneeId).toBeNull();
+      const before = (await inbox(gc.id)).length;
+      await mc.tasks.addComment({ projectId, taskId: shared.id, body: "Private note after they left" });
+      // Even a stale row wouldn't reach them: notify checks membership.
+      await db().insert(schema.taskWatcher).values({ taskId: shared.id, userId: gc.id });
+      await mc.tasks.addComment({ projectId, taskId: shared.id, body: "Another private note" });
+      expect((await inbox(gc.id)).length).toBe(before);
+      await db().delete(schema.taskWatcher).where(eq(schema.taskWatcher.userId, gc.id));
+    });
+
+    it("an outside approver (e.g. the lender) can open and decide the approval routed to them", async () => {
+      const lender = await createUser("external", { name: "Lou Lender" });
+      await addMember(projectId, lender.id, { canApprove: true });
+      await db().update(schema.projectMember).set({ projectRole: "Lender" }).where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, lender.id)));
+      const t = await addTask(projectId, { assigneeId: member.id, requiresApproval: true, approverRole: "Lender" });
+      await mc.checklist.setDone({ projectId, taskId: t.id, done: true, version: 1 });
+      expect((await row(t.id)).approverId).toBe(lender.id);
+      const lc2 = await callerFor(lender.id);
+      const d = await lc2.tasks.detail({ projectId, taskId: t.id });
+      expect(d.approval.canDecide).toBe(true);
+      expect((await lc2.checklist.get({ projectId })).tasks.some((x) => x.id === t.id)).toBe(true);
+      expect((await lc2.tasks.mine()).sections.find((s) => s.key === "approve")!.groups.flatMap((g) => g.tasks).some((x) => x.id === t.id)).toBe(true);
+      await lc2.tasks.decide({ projectId, taskId: t.id, version: (await row(t.id)).version, decision: "approved" });
+      expect((await row(t.id)).status).toBe("done");
+      // Once decided, it's no longer theirs to see.
+      await expect(lc2.tasks.detail({ projectId, taskId: t.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("only the approver it's routed to (or the owner) decides; others' ticks send it for approval", async () => {
+      const t = await addTask(projectId, { assigneeId: admin.id, requiresApproval: true, approverRole: "Legal" });
+      // The admin has approve rights, but this one is Legal's call.
+      const r = await ac.checklist.setDone({ projectId, taskId: t.id, done: true, version: 1 });
+      expect(r.status).toBe("awaiting_approval");
+      expect((await row(t.id)).approverId).toBe(legal.id);
+      await expect(ac.tasks.decide({ projectId, taskId: t.id, version: (await row(t.id)).version, decision: "approved" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect((await ac.tasks.detail({ projectId, taskId: t.id })).approval.canDecide).toBe(false);
+      // The owner can always decide.
+      await oc.tasks.decide({ projectId, taskId: t.id, version: (await row(t.id)).version, decision: "approved" });
+      expect(await row(t.id)).toMatchObject({ status: "done", approverId: null });
+      // Legal's own tick is the approval, and the assignee hears about it.
+      const u = await addTask(projectId, { assigneeId: member.id, requiresApproval: true, approverRole: "Legal" });
+      await lc.checklist.setDone({ projectId, taskId: u.id, done: true, version: 1 });
+      expect((await row(u.id)).approvalDecision).toBe("approved");
+      expect((await inbox(member.id)).some((n) => n.taskId === u.id && n.kind === "approval_decided")).toBe(true);
+    });
+
+    it("the approver is worked out at each request and re-routed when they can't act", async () => {
+      const t = await addTask(projectId, { assigneeId: member.id, requiresApproval: true, approverRole: "Legal" });
+      await mc.checklist.setDone({ projectId, taskId: t.id, done: true, version: 1 });
+      expect((await row(t.id)).approverId).toBe(legal.id);
+      // Legal loses approve rights: it goes to the owner.
+      const first = (await db().select().from(schema.user).where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active"))).orderBy(schema.user.createdAt))[0]!.id;
+      await oc.members.upsert({ projectId, userId: legal.id, projectRole: "Legal", canViewFinancials: false, canEditChecklist: false, canApprove: false });
+      expect((await row(t.id)).approverId).toBe(first);
+      await oc.members.upsert({ projectId, userId: legal.id, projectRole: "Legal", canViewFinancials: false, canEditChecklist: false, canApprove: true });
+      // Withdraw and resend: Legal again, not the stale owner.
+      await mc.tasks.setStatus({ projectId, taskId: t.id, version: (await row(t.id)).version, status: "in_progress" });
+      expect((await row(t.id)).approverId).toBeNull();
+      await mc.checklist.setDone({ projectId, taskId: t.id, done: true, version: (await row(t.id)).version });
+      expect((await row(t.id)).approverId).toBe(legal.id);
+      // Changing the approver role clears nothing mid-request (refused) but applies on the next one.
+      await expect(ac.checklist.updateTask({ projectId, taskId: t.id, version: (await row(t.id)).version, approverRole: "Owner" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("reopening an older occurrence never deletes the current one", async () => {
+      const today = todayET();
+      const a = await addTask(projectId, { assigneeId: member.id, dueOn: today, recurrence: { freq: "weekly" } });
+      const r1 = await mc.checklist.setDone({ projectId, taskId: a.id, done: true, version: 1 });
+      const b = r1.nextId!;
+      const r2 = await mc.checklist.setDone({ projectId, taskId: b, done: true, version: 1 });
+      const cId = r2.nextId!;
+      await mc.checklist.setDone({ projectId, taskId: a.id, done: false, version: (await row(a.id)).version });
+      expect(await db().select().from(schema.task).where(eq(schema.task.id, cId))).toHaveLength(1);
+      // B's own undo removes exactly C.
+      await mc.checklist.setDone({ projectId, taskId: b, done: false, version: (await row(b)).version });
+      expect(await db().select().from(schema.task).where(eq(schema.task.id, cId))).toHaveLength(0);
+    });
+
+    it("outside collaborators can't share tasks with themselves", async () => {
+      const t = await addTask(projectId, { assigneeId: outsider.id });
+      await expect(xc.tasks.watch({ projectId, taskId: t.id, on: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await ac.tasks.assign({ projectId, taskId: t.id, version: 1, assigneeId: member.id });
+      await expect(xc.tasks.detail({ projectId, taskId: t.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("recurrence can be set on a project task", async () => {
+      const t = await addTask(projectId);
+      await ac.checklist.updateTask({ projectId, taskId: t.id, version: 1, recurrence: { freq: "monthly" } });
+      expect((await row(t.id)).recurrence).toEqual({ freq: "monthly" });
+      await ac.checklist.updateTask({ projectId, taskId: t.id, version: 2, recurrence: null });
+      expect((await row(t.id)).recurrence).toBeNull();
+    });
+
+    it("notification paging never skips rows written in the same instant", async () => {
+      const u = await createUser("member");
+      const c = await callerFor(u.id);
+      const at = new Date();
+      await db().insert(schema.notification).values(Array.from({ length: 35 }, (_, i) => ({ userId: u.id, kind: "system" as const, title: `n${i}`, createdAt: at })));
+      const p1 = await c.notifications.list({ limit: 30 });
+      expect(p1.items).toHaveLength(30);
+      const p2 = await c.notifications.list({ limit: 30, cursor: p1.next! });
+      expect(p2.items).toHaveLength(5);
+      expect(new Set([...p1.items, ...p2.items].map((n) => n.id)).size).toBe(35);
+      expect(p2.next).toBeNull();
+    });
+
+    it("key-date reminders are sent once per threshold, and a missed day catches up", async () => {
+      const p = await newProject(oc);
+      await addMember(p.id, member.id);
+      const today = todayET();
+      const { id } = await oc.keyDates.save({ projectId: p.id, kind: "dd_expiry", date: addDays(today, 5) });
+      const mine = async () => (await inbox(member.id)).filter((n) => n.kind === "key_date" && n.projectId === p.id);
+      await keyDateReminderJob(new Date(`${today}T15:00:00Z`));
+      expect((await mine()).map((n) => n.title)).toEqual(["DD expiry in 5 days"]); // 14 and 7 caught up in one message
+      await keyDateReminderJob(new Date(`${today}T16:00:00Z`));
+      expect(await mine()).toHaveLength(1);
+      await keyDateReminderJob(new Date(`${addDays(today, 4)}T15:00:00Z`));
+      expect((await mine()).map((n) => n.title).sort()).toEqual(["DD expiry in 5 days", "DD expiry is tomorrow"]);
+      // Moving the date re-arms its reminders.
+      await oc.keyDates.save({ id, projectId: p.id, kind: "dd_expiry", date: addDays(today, 10) });
+      await keyDateReminderJob(new Date(`${today}T17:00:00Z`));
+      expect(await mine()).toHaveLength(3);
+    });
+
+    it("the Needs-you rail reports true counts beyond what it lists", async () => {
+      const p = await newProject(oc);
+      await db().insert(schema.task).values(Array.from({ length: 55 }, (_, i) => ({ projectId: p.id, phaseKey: "pipeline", title: `Stuck ${i}`, status: "blocked" as const, blockedReason: "x" })));
+      const r = await oc.tasks.needsYou();
+      expect(r.blocked.length).toBe(50);
+      expect(r.counts.blocked).toBeGreaterThanOrEqual(55);
+    });
   });
 });

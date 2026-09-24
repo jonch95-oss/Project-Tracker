@@ -10,7 +10,7 @@ import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { recordAudit } from "../../services/audit";
 import { reschedule } from "../../services/checklist";
-import { afterCompleted, FOLLOW_UP_DAYS, notify, sharedTaskIds, taskAudience, taskHref } from "../../services/tasks";
+import { afterCompleted, canDecideApproval, FOLLOW_UP_DAYS, notify, sharedTaskIds, taskAudience, taskHref } from "../../services/tasks";
 import { loadHeroes } from "./projects";
 import { projectProcedure, protectedProcedure, router, type AuthedContext, type ProjectAccess } from "../init";
 
@@ -125,6 +125,17 @@ async function waitingOnPrereqs(conn: DbOrTx, taskIds: string[]): Promise<Set<st
   return new Set(rows.map((r) => r.id));
 }
 
+/** Set many due dates (by hand) in one statement. Returns how many rows changed. */
+async function setDueDates(tx: DbOrTx, moves: { id: string; due: string }[]): Promise<number> {
+  if (moves.length === 0) return 0;
+  const r = await tx.execute(sql`
+    update ${schema.task} as t
+    set due_on = v.due, due_manual = true, version = t.version + 1, updated_at = now()
+    from jsonb_to_recordset(${JSON.stringify(moves)}::jsonb) as v(id uuid, due text)
+    where t.id = v.id`);
+  return r.rowCount ?? moves.length;
+}
+
 export const tasksRouter = router({
   /** Everything the task sheet shows beyond the checklist row: comments, watchers, people, approval. */
   detail: projectProcedure()
@@ -163,7 +174,7 @@ export const tasksRouter = router({
           requestedAt: t.approvalRequestedAt,
           decidedAt: t.approvalDecidedAt,
           decidedByName: name(t.approvalDecidedById),
-          canDecide: t.status === "awaiting_approval" && ctx.project.can("task.approve"),
+          canDecide: t.status === "awaiting_approval" && canDecideApproval(t, { id: ctx.viewer.id, role: ctx.actor.role }) && ctx.project.can("task.approve"),
         },
         recurrence: t.recurrence as { freq: string } | null,
         watcherIds: watchers,
@@ -178,6 +189,8 @@ export const tasksRouter = router({
           canPrioritize: ctx.project.can("checklist.edit") || t.assigneeId === ctx.viewer.id,
           canManageWatchers: ctx.project.can("checklist.edit"),
           canComment: true,
+          canModerate: ctx.project.can("project.edit"),
+          canWatch: ctx.project.can("task.viewAll"),
         },
       };
     }),
@@ -234,7 +247,10 @@ export const tasksRouter = router({
           if (from === "waiting") set.waitingOn = null;
         }
         set.blockedReason = input.status === "blocked" ? input.blockedReason! : null;
-        if (from === "awaiting_approval") set.approvalRequestedAt = null;
+        if (from === "awaiting_approval") {
+          set.approvalRequestedAt = null;
+          set.approverId = null;
+        }
         const version = await bump(tx, t.id, input.version, set);
         const what = input.status === "waiting" ? `waiting on ${input.waitingOn}` : input.status === "blocked" ? `blocked: ${input.blockedReason}` : TASK_STATUS_LABEL[input.status].toLowerCase();
         await audit(tx, c, `${ctx.viewer.name} set "${t.title}" to ${what}`, t.id, { status: input.status });
@@ -256,13 +272,14 @@ export const tasksRouter = router({
     }),
 
   /** Approve (the task is done) or send back with a note (it goes back to In progress). */
-  decide: projectProcedure("task.approve")
+  decide: projectProcedure()
     .input(z.object({ taskId: z.uuid(), version: z.number().int().min(1), decision: z.enum(["approved", "rejected"]), note: z.string().trim().max(1000).optional() }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const t = await visibleTask(c, tx, input.taskId);
         if (t.status !== "awaiting_approval") throw new TRPCError({ code: "CONFLICT", message: "This task isn't waiting for approval any more. It has been refreshed." });
+        if (!canDecideApproval(t, { id: ctx.viewer.id, role: ctx.actor.role }) || !ctx.project.can("task.approve")) throw new TRPCError({ code: "FORBIDDEN", message: "This approval is waiting on someone else." });
         if (input.decision === "rejected" && !input.note) throw new TRPCError({ code: "BAD_REQUEST", message: "Add a note saying what needs to change." });
         const today = todayET();
         const approved = input.decision === "approved";
@@ -272,6 +289,8 @@ export const tasksRouter = router({
           approvalNote: input.note || null,
           approvalDecidedAt: new Date(),
           approvalDecidedById: ctx.viewer.id,
+          approverId: null,
+          approvalRequestedAt: null,
           completedOn: approved ? today : null,
           completedAt: approved ? new Date() : null,
           completedById: approved ? (t.assigneeId ?? ctx.viewer.id) : null,
@@ -333,6 +352,7 @@ export const tasksRouter = router({
         const watchers = (await tx.select({ userId: schema.taskWatcher.userId }).from(schema.taskWatcher).where(eq(schema.taskWatcher.taskId, t.id))).map((w) => w.userId);
         const mentions = mentionedIds(input.body, taskReaders(people, t, watchers));
         await tx.update(schema.taskComment).set({ body: input.body, mentions, editedAt: new Date() }).where(eq(schema.taskComment.id, cm.id));
+        await audit(tx, c, `${ctx.viewer.name} edited a comment on "${t.title}"`, t.id, { commentId: cm.id });
         const added = mentions.filter((m) => !cm.mentions.includes(m));
         await notify(tx, ctx.viewer.id, added.map((userId) => ({ userId, kind: "mention" as const, title: `${ctx.viewer.name} mentioned you on “${t.title}”`, body: commentPlainText(input.body), projectId: input.projectId, taskId: t.id, href: taskHref(input.projectId, t.id) })));
         return { ok: true };
@@ -350,6 +370,11 @@ export const tasksRouter = router({
         if (!cm || cm.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Comment not found" });
         if (cm.authorId !== ctx.viewer.id && !ctx.project.can("project.edit")) throw new TRPCError({ code: "FORBIDDEN", message: "You can only remove your own comments." });
         await tx.update(schema.taskComment).set({ deletedAt: new Date() }).where(eq(schema.taskComment.id, cm.id));
+        // The removed text shouldn't live on in people's notifications.
+        await tx
+          .update(schema.notification)
+          .set({ body: "Comment removed." })
+          .where(and(eq(schema.notification.taskId, t.id), inArray(schema.notification.kind, ["mention", "comment"]), eq(schema.notification.body, commentPlainText(cm.body))));
         await audit(tx, c, `${ctx.viewer.name} removed a comment on "${t.title}"`, t.id, { commentId: cm.id }, "delete");
         return { ok: true };
       });
@@ -361,9 +386,9 @@ export const tasksRouter = router({
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       const t = await visibleTask(c, ctx.db, input.taskId);
-      // An outside collaborator who unfollows a shared task would lose it; only the team can unshare.
-      if (!input.on && !ctx.project.can("task.viewAll") && t.assigneeId !== ctx.viewer.id) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "This task was shared with you. Ask the project team to unshare it." });
+      // For outside collaborators a watcher row is a share, and only the team shares or unshares.
+      if (!ctx.project.can("task.viewAll")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "The project team decides what's shared with you." });
       }
       if (input.on) await ctx.db.insert(schema.taskWatcher).values({ taskId: t.id, userId: ctx.viewer.id }).onConflictDoNothing();
       else await ctx.db.delete(schema.taskWatcher).where(and(eq(schema.taskWatcher.taskId, t.id), eq(schema.taskWatcher.userId, ctx.viewer.id)));
@@ -408,7 +433,8 @@ export const tasksRouter = router({
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const ids = [...new Set(input.taskIds)];
-        const rows = await tx.select().from(schema.task).where(and(eq(schema.task.projectId, input.projectId), inArray(schema.task.id, ids)));
+        // Lock the rows so a concurrent edit waits instead of being overwritten.
+        const rows = await tx.select().from(schema.task).where(and(eq(schema.task.projectId, input.projectId), inArray(schema.task.id, ids))).for("update");
         if (rows.length !== ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Some of those tasks aren't on this project any more. Refresh and try again." });
         const open = rows.filter((t) => t.status !== "done");
         const a = input.action;
@@ -423,12 +449,11 @@ export const tasksRouter = router({
           }
           await audit(tx, c, `${ctx.viewer.name} reassigned ${changed} task${changed === 1 ? "" : "s"} to ${who?.name ?? "nobody"}`, input.projectId, { ids: moving.map((t) => t.id), assigneeId: who?.id ?? null }, "update", "checklist");
         } else {
-          for (const t of open) {
+          const moves = open.flatMap((t) => {
             const due = a.kind === "redate" ? a.dueOn : t.dueOn ? shiftDate(t.dueOn, a.days, a.unit) : null;
-            if (!due || due === t.dueOn) continue;
-            await tx.update(schema.task).set({ dueOn: due, dueManual: true, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(eq(schema.task.id, t.id));
-            changed++;
-          }
+            return due && due !== t.dueOn ? [{ id: t.id, due }] : [];
+          });
+          changed = await setDueDates(tx, moves);
           await reschedule(tx, input.projectId);
           const what = a.kind === "redate" ? `re-dated ${changed} task${changed === 1 ? "" : "s"} to ${a.dueOn}` : `moved ${changed} task${changed === 1 ? "" : "s"} ${a.days > 0 ? "later" : "earlier"} by ${Math.abs(a.days)} ${a.unit === "business" ? "business " : ""}day${Math.abs(a.days) === 1 ? "" : "s"}`;
           await audit(tx, c, `${ctx.viewer.name} ${what}`, input.projectId, { ids: open.map((t) => t.id), action: a }, "update", "checklist");
@@ -445,13 +470,11 @@ export const tasksRouter = router({
       return ctx.db.transaction(async (tx) => {
         const [ph] = await tx.select().from(schema.projectPhase).where(and(eq(schema.projectPhase.projectId, input.projectId), eq(schema.projectPhase.key, input.phaseKey)));
         if (!ph) throw new TRPCError({ code: "BAD_REQUEST", message: "That phase isn't on this project." });
-        const rows = await tx.select().from(schema.task).where(and(eq(schema.task.projectId, input.projectId), eq(schema.task.phaseKey, input.phaseKey), ne(schema.task.status, "done")));
-        let changed = 0;
-        for (const t of rows) {
-          if (!t.dueOn) continue;
-          await tx.update(schema.task).set({ dueOn: shiftDate(t.dueOn, input.days, input.unit), dueManual: true, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(eq(schema.task.id, t.id));
-          changed++;
-        }
+        const rows = await tx.select().from(schema.task).where(and(eq(schema.task.projectId, input.projectId), eq(schema.task.phaseKey, input.phaseKey), ne(schema.task.status, "done"))).for("update");
+        const changed = await setDueDates(
+          tx,
+          rows.flatMap((t) => (t.dueOn ? [{ id: t.id, due: shiftDate(t.dueOn, input.days, input.unit) }] : [])),
+        );
         await reschedule(tx, input.projectId);
         await audit(tx, c, `${ctx.viewer.name} moved ${ph.name} ${input.days > 0 ? "later" : "earlier"} by ${Math.abs(input.days)} ${input.unit === "business" ? "business " : ""}day${Math.abs(input.days) === 1 ? "" : "s"} (${changed} tasks)`, input.projectId, input, "update", "checklist");
         return { changed };
@@ -522,12 +545,18 @@ export const tasksRouter = router({
   needsYou: protectedProcedure.query(async ({ ctx }) => {
     const { projectIds, memberships } = await accessibleProjects(ctx);
     const today = todayET();
-    const empty = { approvals: [], blocked: [], overdueByPerson: [], keyDates: [], recordAlerts: [] as { id: string; title: string }[] };
+    const empty = { counts: { approvals: 0, blocked: 0 }, approvals: [], blocked: [], overdueByPerson: [], keyDates: [], recordAlerts: [] as { id: string; title: string }[] };
     if (projectIds.length === 0) return empty;
     const full = projectIds.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "task.viewAll"));
     const approvable = projectIds.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "task.approve"));
     const names = new Map((await ctx.db.select({ id: schema.project.id, name: schema.project.name }).from(schema.project).where(inArray(schema.project.id, projectIds))).map((p) => [p.id, p.name]));
     const base = { id: schema.task.id, projectId: schema.task.projectId, title: schema.task.title, dueOn: schema.task.dueOn, version: schema.task.version };
+    const countOf = async (projectIds: string[], where: ReturnType<typeof and>) =>
+      projectIds.length ? ((await ctx.db.select({ n: sql<number>`count(*)::int` }).from(schema.task).where(and(inArray(schema.task.projectId, projectIds), where)))[0]?.n ?? 0) : 0;
+    const [approvalCount, blockedCount] = await Promise.all([
+      countOf(approvable, and(eq(schema.task.status, "awaiting_approval"), eq(schema.task.approverId, ctx.actor.userId))),
+      countOf(full, eq(schema.task.status, "blocked")),
+    ]);
     const [approvals, blocked, overdue, dates] = await Promise.all([
       approvable.length
         ? ctx.db.select({ ...base, assigneeId: schema.task.assigneeId }).from(schema.task).where(and(inArray(schema.task.projectId, approvable), eq(schema.task.status, "awaiting_approval"), eq(schema.task.approverId, ctx.actor.userId))).orderBy(asc(schema.task.approvalRequestedAt)).limit(50)
@@ -547,6 +576,7 @@ export const tasksRouter = router({
     const ids = [...new Set([...approvals, ...blocked].map((t) => t.assigneeId).filter((x): x is string => !!x))];
     if (ids.length) for (const u of await ctx.db.select({ id: schema.user.id, name: schema.user.name }).from(schema.user).where(inArray(schema.user.id, ids))) people.set(u.id, u.name);
     return {
+      counts: { approvals: approvalCount, blocked: blockedCount },
       approvals: approvals.map((t) => ({ ...t, projectName: names.get(t.projectId)!, assigneeName: t.assigneeId ? (people.get(t.assigneeId) ?? null) : null })),
       blocked: blocked.map((t) => ({ ...t, projectName: names.get(t.projectId)!, assigneeName: t.assigneeId ? (people.get(t.assigneeId) ?? null) : null })),
       overdueByPerson: overdue.map((o) => ({ userId: o.assigneeId, name: o.name ?? "Unassigned", count: o.count, oldest: o.oldest })).sort((a, b) => b.count - a.count),
@@ -608,17 +638,23 @@ export const keyDatesRouter = router({
 /* ------------------------------------------------------------------ */
 
 export const notificationsRouter = router({
-  list: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(30), before: z.date().optional() }).optional()).query(async ({ ctx, input }) => {
-    const limit = input?.limit ?? 30;
-    const rows = await ctx.db
-      .select({ id: schema.notification.id, kind: schema.notification.kind, title: schema.notification.title, body: schema.notification.body, href: schema.notification.href, readAt: schema.notification.readAt, createdAt: schema.notification.createdAt, actorName: schema.user.name })
-      .from(schema.notification)
-      .leftJoin(schema.user, eq(schema.user.id, schema.notification.actorId))
-      .where(and(eq(schema.notification.userId, ctx.actor.userId), input?.before ? lt(schema.notification.createdAt, input.before) : undefined))
-      .orderBy(desc(schema.notification.createdAt))
-      .limit(limit + 1);
-    return { items: rows.slice(0, limit), more: rows.length > limit };
-  }),
+  /** Newest first. Paged on (created time to the millisecond, id) so rows written in the same instant are never skipped. */
+  list: protectedProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(30), cursor: z.object({ at: z.string().max(40), id: z.uuid() }).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const limit = input?.limit ?? 30;
+      const ms = sql`date_trunc('milliseconds', ${schema.notification.createdAt})`;
+      const rows = await ctx.db
+        .select({ id: schema.notification.id, kind: schema.notification.kind, title: schema.notification.title, body: schema.notification.body, href: schema.notification.href, readAt: schema.notification.readAt, createdAt: schema.notification.createdAt, actorName: schema.user.name, at: sql<string>`to_char(${ms} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` })
+        .from(schema.notification)
+        .leftJoin(schema.user, eq(schema.user.id, schema.notification.actorId))
+        .where(and(eq(schema.notification.userId, ctx.actor.userId), input?.cursor ? sql`(${ms}, ${schema.notification.id}) < (${input.cursor.at}::timestamptz, ${input.cursor.id}::uuid)` : undefined))
+        .orderBy(desc(ms), desc(schema.notification.id))
+        .limit(limit + 1);
+      const items = rows.slice(0, limit);
+      const last = items.at(-1);
+      return { items: items.map((r) => ({ id: r.id, kind: r.kind, title: r.title, body: r.body, href: r.href, readAt: r.readAt, createdAt: r.createdAt, actorName: r.actorName })), next: rows.length > limit && last ? { at: last.at, id: last.id } : null };
+    }),
 
   unreadCount: protectedProcedure.query(async ({ ctx }) => {
     const [r] = await ctx.db.select({ n: sql<number>`count(*)::int` }).from(schema.notification).where(and(eq(schema.notification.userId, ctx.actor.userId), isNull(schema.notification.readAt)));

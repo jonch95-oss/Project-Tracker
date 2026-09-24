@@ -1,11 +1,11 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gt, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { addBusinessDays } from "@/core/calendar";
-import { keyDateLabel, reminderDue } from "@/core/key-dates";
+import { KEY_DATE_REMINDERS, keyDateLabel } from "@/core/key-dates";
 import { nextOccurrence, type RecurrenceFreq } from "@/core/tasks";
 import type { Recurrence } from "@/core/templates";
-import { formatIsoDate, todayET } from "@/core/time";
+import { addDays, daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { db, schema, type DbOrTx } from "../db";
 import { reschedule } from "./checklist";
 
@@ -23,14 +23,21 @@ export function taskHref(projectId: string, taskId: string): string {
 /* Visibility                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Task ids on a project that were shared with this person by making them a watcher. */
+/**
+ * Task ids on a project an outside collaborator can see beyond their own:
+ * those shared with them as a watcher, and any waiting on their approval.
+ */
 export async function sharedTaskIds(conn: DbOrTx, projectId: string, userId: string): Promise<Set<string>> {
   const rows = await conn
     .select({ id: schema.taskWatcher.taskId })
     .from(schema.taskWatcher)
     .innerJoin(schema.task, eq(schema.task.id, schema.taskWatcher.taskId))
     .where(and(eq(schema.task.projectId, projectId), eq(schema.taskWatcher.userId, userId)));
-  return new Set(rows.map((r) => r.id));
+  const approving = await conn
+    .select({ id: schema.task.id })
+    .from(schema.task)
+    .where(and(eq(schema.task.projectId, projectId), eq(schema.task.approverId, userId), eq(schema.task.status, "awaiting_approval")));
+  return new Set([...rows, ...approving].map((r) => r.id));
 }
 
 /* ------------------------------------------------------------------ */
@@ -56,11 +63,19 @@ export async function notify(tx: DbOrTx, actorId: string | null, rows: NotifyInp
   const seen = new Set<string>();
   const out = rows.filter((r) => r.userId && r.userId !== actorId && !seen.has(r.userId) && seen.add(r.userId));
   if (out.length === 0) return 0;
-  const active = new Set(
-    (await tx.select({ id: schema.user.id }).from(schema.user).where(and(inArray(schema.user.id, out.map((r) => r.userId)), eq(schema.user.status, "active")))).map((r) => r.id),
-  );
+  const users = await tx.select({ id: schema.user.id, role: schema.user.role }).from(schema.user).where(and(inArray(schema.user.id, out.map((r) => r.userId)), eq(schema.user.status, "active")));
+  const active = new Map(users.map((u) => [u.id, u.role]));
+  // Project news only reaches people still on the project (or the owner): removal cuts it off at once.
+  const projectIds = [...new Set(out.map((r) => r.projectId).filter((x): x is string => !!x))];
+  const members = projectIds.length
+    ? new Set(
+        (await tx.select({ p: schema.projectMember.projectId, u: schema.projectMember.userId }).from(schema.projectMember).where(and(inArray(schema.projectMember.projectId, projectIds), inArray(schema.projectMember.userId, [...active.keys()])))).map(
+          (m) => `${m.p}:${m.u}`,
+        ),
+      )
+    : new Set<string>();
   const values = out
-    .filter((r) => active.has(r.userId))
+    .filter((r) => active.has(r.userId) && (!r.projectId || active.get(r.userId) === "owner" || members.has(`${r.projectId}:${r.userId}`)))
     .map((r) => ({ userId: r.userId, kind: r.kind, title: r.title.slice(0, 300), body: r.body?.slice(0, 1000) ?? null, projectId: r.projectId ?? null, taskId: r.taskId ?? null, href: r.href ?? null, actorId }));
   if (values.length) await tx.insert(schema.notification).values(values);
   return values.length;
@@ -87,12 +102,12 @@ async function activeOwners(tx: DbOrTx): Promise<string[]> {
 }
 
 /**
- * Who approves a task: the person named on it; else, for the "Owner" role,
- * the owner; else a project member in that role who may approve; else the
- * owner.
+ * Who approves a task, worked out fresh at each request from its approver
+ * role: for "Owner", the owner; else an active project member in that role
+ * who may approve; else the owner. The result is stored on the task while
+ * the request is open and cleared when it is decided or withdrawn.
  */
-export async function resolveApprover(tx: DbOrTx, t: Pick<TaskRow, "projectId" | "approverId" | "approverRole">): Promise<string | null> {
-  if (t.approverId) return t.approverId;
+export async function resolveApprover(tx: DbOrTx, t: Pick<TaskRow, "projectId" | "approverRole">): Promise<string | null> {
   const role = (t.approverRole ?? "Owner").trim();
   if (role.toLowerCase() !== "owner") {
     const [m] = await tx
@@ -142,7 +157,6 @@ export async function afterCompleted(tx: DbOrTx, t: TaskRow, actorId: string, co
       dueManual: true,
       requiresApproval: t.requiresApproval,
       approverRole: t.approverRole,
-      approverId: t.approverId,
       requiredAttachment: t.requiredAttachment,
       subItems: t.subItems.map((s) => ({ ...s, done: false })),
       recurrence: t.recurrence,
@@ -152,23 +166,49 @@ export async function afterCompleted(tx: DbOrTx, t: TaskRow, actorId: string, co
     });
     const w = await tx.select({ userId: schema.taskWatcher.userId }).from(schema.taskWatcher).where(eq(schema.taskWatcher.taskId, t.id));
     if (w.length) await tx.insert(schema.taskWatcher).values(w.map((r) => ({ taskId: nextId!, userId: r.userId })));
+    await tx.update(schema.task).set({ nextOccurrenceId: nextId }).where(eq(schema.task.id, t.id));
   }
   await reschedule(tx, t.projectId);
   await notifyUnblocked(tx, t, actorId);
   return { nextId };
 }
 
-/** Undo the automatic next occurrence when a recurring task is reopened (only if nobody has touched it). */
+/** Undo the automatic next occurrence when a recurring task is reopened: exactly the one it created, and only if nobody has touched it. */
 export async function undoRecurrence(tx: DbOrTx, t: TaskRow): Promise<void> {
-  if (!t.recurrence || !t.completedAt) return;
-  const series = t.seriesId ?? t.id;
-  const [next] = await tx
-    .select({ id: schema.task.id })
+  if (!t.nextOccurrenceId) return;
+  await tx.delete(schema.task).where(and(eq(schema.task.id, t.nextOccurrenceId), eq(schema.task.status, "not_started"), eq(schema.task.version, 1)));
+  await tx.update(schema.task).set({ nextOccurrenceId: null }).where(eq(schema.task.id, t.id));
+}
+
+/**
+ * Someone leaves a project: their shares (watcher rows) go, their open tasks
+ * are unassigned, and approvals waiting on them are re-routed.
+ */
+export async function releaseFromProject(tx: DbOrTx, projectId: string, userId: string, actorId: string | null): Promise<void> {
+  const taskIds = tx.select({ id: schema.task.id }).from(schema.task).where(eq(schema.task.projectId, projectId));
+  await tx.delete(schema.taskWatcher).where(and(eq(schema.taskWatcher.userId, userId), inArray(schema.taskWatcher.taskId, taskIds)));
+  await tx.update(schema.task).set({ assigneeId: null, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(and(eq(schema.task.projectId, projectId), eq(schema.task.assigneeId, userId), ne(schema.task.status, "done")));
+  await rerouteApprovals(tx, userId, actorId, projectId);
+}
+
+/** Approvals waiting on someone who can no longer act go to whoever should approve now. */
+export async function rerouteApprovals(tx: DbOrTx, fromUserId: string, actorId: string | null, projectId?: string): Promise<number> {
+  const waiting = await tx
+    .select()
     .from(schema.task)
-    .where(and(eq(schema.task.seriesId, series), ne(schema.task.id, t.id), eq(schema.task.status, "not_started"), eq(schema.task.version, 1), gt(schema.task.createdAt, new Date(t.completedAt.getTime() - 1000))))
-    .orderBy(desc(schema.task.createdAt))
-    .limit(1);
-  if (next) await tx.delete(schema.task).where(eq(schema.task.id, next.id));
+    .where(and(eq(schema.task.status, "awaiting_approval"), eq(schema.task.approverId, fromUserId), projectId ? eq(schema.task.projectId, projectId) : undefined));
+  for (const t of waiting) {
+    const to = await resolveApprover(tx, t);
+    if (to === fromUserId) continue; // still the right person
+    await tx.update(schema.task).set({ approverId: to, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(eq(schema.task.id, t.id));
+    if (to) await notify(tx, actorId, [{ userId: to, kind: "approval_requested", title: `“${t.title}” needs your approval`, body: await projectName(tx, t.projectId), projectId: t.projectId, taskId: t.id, href: taskHref(t.projectId, t.id) }]);
+  }
+  return waiting.length;
+}
+
+/** May this person decide an approval? The approver it's waiting on, or the owner. */
+export function canDecideApproval(t: Pick<TaskRow, "approverId">, viewer: { id: string; role: string }): boolean {
+  return viewer.role === "owner" || t.approverId === viewer.id;
 }
 
 /** Tasks whose last unfinished prerequisite was `done`: tell their assignees they can start. */
@@ -237,7 +277,11 @@ export async function followUpJob(now = new Date()): Promise<{ nudged: number }>
   });
 }
 
-/** Key-date reminders at 14, 7 and 1 days out to the project's internal team. */
+/**
+ * Key-date reminders at 14, 7 and 1 days out to the project's internal team.
+ * Each (date, threshold) is logged once, so a re-run never double-sends; a
+ * missed day is caught up (one message, marking every threshold it covers).
+ */
 export async function keyDateReminderJob(now = new Date()): Promise<{ reminded: number }> {
   const today = todayET(now);
   return db().transaction(async (tx) => {
@@ -245,19 +289,24 @@ export async function keyDateReminderJob(now = new Date()): Promise<{ reminded: 
       .select({ id: schema.keyDate.id, projectId: schema.keyDate.projectId, kind: schema.keyDate.kind, label: schema.keyDate.label, date: schema.keyDate.date, projectName: schema.project.name })
       .from(schema.keyDate)
       .innerJoin(schema.project, eq(schema.project.id, schema.keyDate.projectId))
-      .where(and(eq(schema.keyDate.done, false), sql`${schema.keyDate.date} >= ${today}`, isNull(schema.project.archivedAt)));
-    const hits = dates.filter((d) => reminderDue(d.date, today) !== null);
-    if (hits.length === 0) return { reminded: 0 };
-    const projectIds = [...new Set(hits.map((d) => d.projectId))];
+      .where(and(eq(schema.keyDate.done, false), sql`${schema.keyDate.date} >= ${today}`, sql`${schema.keyDate.date} <= ${addDays(today, KEY_DATE_REMINDERS[0])}`, isNull(schema.project.archivedAt)));
+    if (dates.length === 0) return { reminded: 0 };
+    const sent = await tx.select().from(schema.keyDateReminder).where(inArray(schema.keyDateReminder.keyDateId, dates.map((d) => d.id)));
+    const owners = await activeOwners(tx);
+    const projectIds = [...new Set(dates.map((d) => d.projectId))];
     const members = await tx
       .select({ projectId: schema.projectMember.projectId, userId: schema.projectMember.userId })
       .from(schema.projectMember)
       .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
       .where(and(inArray(schema.projectMember.projectId, projectIds), ne(schema.user.role, "external")));
-    const owners = await activeOwners(tx);
     let reminded = 0;
-    for (const d of hits) {
-      const n = reminderDue(d.date, today)!;
+    for (const d of dates) {
+      const n = daysBetween(today, d.date);
+      const due = KEY_DATE_REMINDERS.filter((th) => n <= th && !sent.some((x) => x.keyDateId === d.id && x.date === d.date && x.threshold === th));
+      if (due.length === 0) continue;
+      // Claim the thresholds first; if another run got there, send nothing.
+      const claimed = await tx.insert(schema.keyDateReminder).values(due.map((threshold) => ({ keyDateId: d.id, date: d.date, threshold }))).onConflictDoNothing().returning();
+      if (claimed.length === 0) continue;
       const people = [...new Set([...owners, ...members.filter((m) => m.projectId === d.projectId).map((m) => m.userId)])];
       reminded += await notify(
         tx,
@@ -265,7 +314,7 @@ export async function keyDateReminderJob(now = new Date()): Promise<{ reminded: 
         people.map((userId) => ({
           userId,
           kind: "key_date" as const,
-          title: `${keyDateLabel(d.kind, d.label)} ${n === 1 ? "is tomorrow" : `in ${n} days`}`,
+          title: `${keyDateLabel(d.kind, d.label)} ${n === 0 ? "is today" : n === 1 ? "is tomorrow" : `in ${n} days`}`,
           body: `${d.projectName} · ${formatIsoDate(d.date, { weekday: "short", month: "short", day: "numeric" })}`,
           projectId: d.projectId,
           href: `/projects/${d.projectId}?tab=dates`,

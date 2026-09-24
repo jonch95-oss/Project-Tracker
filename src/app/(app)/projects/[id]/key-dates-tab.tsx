@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconPlus } from "@/components/ui/icons";
@@ -9,6 +9,7 @@ import { Button, Field, Input, Select, Skeleton, StatusPill, Switch, Textarea } 
 import { KEY_DATE_KINDS } from "@/core/key-dates";
 import { daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
+import { useInvalidateTaskViews } from "@/lib/task-cache";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 
 type KeyDate = RouterOutputs["keyDates"]["list"]["dates"][number];
@@ -16,16 +17,9 @@ type KeyDate = RouterOutputs["keyDates"]["list"]["dates"][number];
 /** Key dates (brief §6): DD expiry, closing, TOE, TCO expiry, loan maturity, 1031 deadlines, auction. */
 export function KeyDatesTab({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
-  const qc = useQueryClient();
   const q = useQuery(trpc.keyDates.list.queryOptions({ projectId }));
   const [editing, setEditing] = useState<KeyDate | "new" | null>(null);
-  const refresh = () =>
-    Promise.all([
-      qc.invalidateQueries({ queryKey: trpc.keyDates.list.queryKey({ projectId }) }),
-      qc.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ projectId }) }),
-      qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() }),
-      qc.invalidateQueries({ queryKey: trpc.tasks.needsYou.queryKey() }),
-    ]);
+  const refresh = useInvalidateTaskViews();
 
   if (q.isPending) return <Skeleton className="h-64 rounded-card" />;
   if (q.isError) return <ErrorState onRetry={() => q.refetch()} />;

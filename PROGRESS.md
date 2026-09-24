@@ -1,5 +1,64 @@
 # Progress
 
+## Milestone 4 — Tasks (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (My Tasks, Inbox, the Needs-you rail on Portfolio, and each project's Checklist and Key Dates tabs)
+
+### What shipped
+
+- **Task sheet:**
+  - assignee (anyone on the project) and priority
+  - status: To do / Doing / Waiting on a third party (who, e.g. "Expediter — DOB plan exam") / Blocked (why)
+  - approvals: approve or send back with a note
+  - repeats weekly, every 2 weeks or monthly
+  - watchers, including sharing a single task with an outside collaborator
+  - comments with @mentions (type @ and pick a name; only people who can see the task are offered)
+- **Waiting on a third party follows up by itself:** every 2 business days the assignee gets a nudge naming who they're waiting on.
+- **Approvals** go to the person in the task's approver role on the project, or the owner. It's worked out at each request and re-routed if that person is removed, deactivated or loses approve rights. Only that person or the owner decides, and anyone else's tick sends it for approval.
+- **Recurring tasks:** completing one creates the next occurrence on the next business day. Reopening it removes exactly the one it created, as long as nobody has touched it.
+- **Bulk actions on the checklist:** Select, then reassign, re-date or shift by N business or calendar days. Each phase also has **Shift** to move all its open dates at once. Done tasks are never moved.
+- **My Tasks:** Overdue / Today / This week / Later / Waiting on others / Awaiting my approval, grouped by project with its photo. One tap completes, and long sections fold.
+- **Needs you** on Portfolio: approvals waiting on me (with Approve), blocked tasks, overdue by person, and key dates in the next 14 days. Public-record alerts join in Milestone 8.
+- **Cards and table:** next action and its owner, blocked and overdue counts, next key date. The project Overview has a "What's next" panel.
+- **Key Dates tab:** DD expiry, closing, TOE, TCO expiry, loan maturity, the 1031 deadlines, auction and custom dates. The team gets in-app reminders 14, 7 and 1 day before each date, sent once each, with missed days caught up.
+- **Inbox:** in-app notifications for assignments, mentions, comments, approval requests and decisions, unblocked tasks, follow-ups and key dates. There's an unread badge in the sidebar and the iPhone tab bar, and every notification links straight to the task.
+
+### Review
+
+The independent review found 15 issues; all fixed, with regression tests:
+- **P0:** someone removed from a project kept getting that project's task notifications, including comment text. Removal now drops their shares, unassigns their open tasks and re-routes their approvals, and notifications only ever reach people currently on the project.
+- **P1:**
+  - an outside approver (e.g. the lender) can now open and decide the approval routed to them
+  - approvers are re-resolved at each request, and re-routed when they can no longer act
+  - only the routed approver or the owner decides
+  - reopening an older occurrence no longer deletes the current one
+  - outside collaborators can't share tasks with themselves
+  - recurrence can be set on any task
+  - notification paging never skips notifications created at the same moment
+- **P2:**
+  - approvals pending from before this release go to the owner
+  - bulk edits lock their rows and run as one statement
+  - key-date reminders are logged per threshold
+  - true counts on the rail
+  - every view refreshes after any task change
+  - an accessible unread badge
+  - comment editing in the UI, admin removal, and removed comments scrubbed from notifications
+  - an index for recurring series
+
+### Test results
+
+- Unit: 192 tests
+- Integration: 1,055 tests, including the permission matrix for every task, key-date and notification procedure (each role, assigned/unassigned, financials on/off) and the review regressions above
+- E2E: 21/21. New:
+  - owner: Needs-you, approve from the rail, add a key date, bulk shift
+  - member: My Tasks, waiting on a third party, @mention; the mention lands in the other person's inbox and opens the task
+- Checked at 1440px and at iPhone size (393px) with no horizontal scroll: Portfolio with the rail, My Tasks, task sheet, Key Dates, Inbox
+
+### Known limitations
+
+- Push, the daily digest, quiet hours and preferences come in Milestone 7. Until then notifications are in-app only.
+- Required attachments are shown and enforced from Milestone 5 (Files).
+
 ## Milestone 3 — Templates, phases, checklists, toggles (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (Templates in the sidebar for the owner and admins; each project's Checklist tab)

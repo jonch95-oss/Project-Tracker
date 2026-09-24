@@ -76,7 +76,7 @@ type Caller = Awaited<ReturnType<typeof callerFor>>;
 
 interface Row {
   allowed: Scenario[];
-  call: (c: Caller, f: Fixture) => Promise<unknown>;
+  call: (c: Caller, f: Fixture, me: string | null) => Promise<unknown>;
 }
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -293,7 +293,8 @@ const MATRIX: Record<string, Row | "public"> = {
   },
   "tasks.decide": {
     allowed: EDITORS,
-    call: async (c, f) => c.tasks.decide({ projectId: f.projectId, taskId: await freshTask(f.projectId, { status: "awaiting_approval", requiresApproval: true }), version: 1, decision: "approved" }),
+    // Each caller is the named approver; only those with approve rights may act on it.
+    call: async (c, f, me) => c.tasks.decide({ projectId: f.projectId, taskId: await freshTask(f.projectId, { status: "awaiting_approval", requiresApproval: true, approverId: me }), version: 1, decision: "approved" }),
   },
   "tasks.addComment": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.tasks.addComment({ projectId: f.projectId, taskId: f.taskId, body: "Matrix comment" }) },
   "tasks.editComment": {
@@ -418,7 +419,7 @@ describe("permission matrix", () => {
           const caller = await callerFor(users[scenario]);
           let error: unknown = null;
           try {
-            await row.call(caller, fixture);
+            await row.call(caller, fixture, users[scenario]);
           } catch (e) {
             error = e;
           }

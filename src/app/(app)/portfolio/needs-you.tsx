@@ -1,12 +1,13 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { IconAlert, IconBlocked, IconCalendar, IconCheckCircle } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
 import { Button } from "@/components/ui/primitives";
 import { daysBetween, formatIsoDate, todayET } from "@/core/time";
+import { useInvalidateTaskViews } from "@/lib/task-cache";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 
 const taskHref = (projectId: string, taskId: string) => `/projects/${projectId}?tab=checklist&task=${taskId}`;
@@ -18,14 +19,14 @@ const taskHref = (projectId: string, taskId: string) => `/projects/${projectId}?
  */
 export function NeedsYouRail() {
   const trpc = useTRPC();
-  const qc = useQueryClient();
+  const invalidate = useInvalidateTaskViews();
   const toast = useToast();
   const q = useQuery(trpc.tasks.needsYou.queryOptions());
   const decide = useMutation(
     trpc.tasks.decide.mutationOptions({
       onSuccess: () => toast("success", "Approved"),
       onError: (e) => toast("error", errorMessage(e)),
-      onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: trpc.tasks.needsYou.queryKey() }), qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() })]),
+      onSettled: () => invalidate(),
     }),
   );
   if (!q.data) return null;
@@ -46,7 +47,7 @@ export function NeedsYouRail() {
       </h2>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {d.approvals.length > 0 && (
-          <Box title="Waiting on your approval" count={d.approvals.length} icon={<IconCheckCircle size={16} />}>
+          <Box title="Waiting on your approval" count={d.counts.approvals} icon={<IconCheckCircle size={16} />}>
             {d.approvals.slice(0, 5).map((t) => (
               <li key={t.id} className="flex items-center gap-2 py-2">
                 <Link href={taskHref(t.projectId, t.id)} className="min-w-0 flex-1">
@@ -64,7 +65,7 @@ export function NeedsYouRail() {
           </Box>
         )}
         {d.blocked.length > 0 && (
-          <Box title="Blocked" count={d.blocked.length} icon={<IconBlocked size={16} className="text-blocked-text" />}>
+          <Box title="Blocked" count={d.counts.blocked} icon={<IconBlocked size={16} className="text-blocked-text" />}>
             {d.blocked.slice(0, 5).map((t) => (
               <li key={t.id} className="py-2">
                 <Link href={taskHref(t.projectId, t.id)} className="block">

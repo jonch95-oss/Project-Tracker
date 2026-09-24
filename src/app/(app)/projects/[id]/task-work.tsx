@@ -6,7 +6,7 @@ import { SegmentedControl } from "@/components/project/visuals";
 import { IconClose, IconComment, IconEye } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
 import { Avatar, Button, Field, Input, Select, Skeleton, StatusPill, Textarea } from "@/components/ui/primitives";
-import { mentionMatches, mentionToken, parseComment, type Person } from "@/core/mentions";
+import { commentPlainText, mentionMatches, mentionToken, parseComment, type Person } from "@/core/mentions";
 import { formatDateTimeET, formatIsoDate } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
@@ -210,7 +210,7 @@ export function Watchers({ projectId, taskId, detail: d, onChanged }: { projectI
         <h3 id="td-watch-h" className="text-[13px] font-medium">
           Watchers
         </h3>
-        {(!d.watching || canLeave) && (
+        {d.access.canWatch && (!d.watching || canLeave) && (
           <Button variant="ghost" size="sm" loading={watch.isPending} onClick={() => watch.mutate({ projectId, taskId, on: !d.watching })}>
             <IconEye size={16} /> {d.watching ? "Stop watching" : "Watch"}
           </Button>
@@ -280,6 +280,16 @@ export function Comments({ projectId, taskId, detail: d, onChanged }: { projectI
     }),
   );
   const remove = useMutation(trpc.tasks.deleteComment.mutationOptions({ onSuccess: refresh, onError }));
+  const [editing, setEditing] = useState<string | null>(null);
+  const edit = useMutation(
+    trpc.tasks.editComment.mutationOptions({
+      onSuccess: async () => {
+        setEditing(null);
+        await refresh();
+      },
+      onError,
+    }),
+  );
   const matches = query ? mentionMatches(query.q, d.mentionable) : [];
 
   const onInput = (value: string, caret: number) => {
@@ -349,6 +359,31 @@ export function Comments({ projectId, taskId, detail: d, onChanged }: { projectI
                 </p>
                 {c.deletedAt ? (
                   <p className="text-sm italic text-muted">Comment removed.</p>
+                ) : editing === c.id ? (
+                  <form
+                    className="mt-1 flex flex-col gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      let body = String(new FormData(e.currentTarget).get("body") ?? "").trim();
+                      // Turn the "@Name" of people already mentioned back into mentions.
+                      const had = parseComment(c.body, d.people).flatMap((p) => (p.kind === "mention" ? [{ id: p.id, name: p.name }] : []));
+                      for (const p of had.sort((a, b) => b.name.length - a.name.length)) body = body.split(`@${p.name}`).join(mentionToken(p));
+                      if (body) edit.mutate({ projectId, taskId, commentId: c.id, body });
+                    }}
+                  >
+                    <label htmlFor={`edit-${c.id}`} className="sr-only">
+                      Edit comment
+                    </label>
+                    <Textarea id={`edit-${c.id}`} name="body" rows={2} maxLength={3500} defaultValue={commentPlainText(c.body)} autoFocus />
+                    <div className="flex gap-2">
+                      <Button type="submit" size="sm" loading={edit.isPending}>
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
                 ) : (
                   <p className="whitespace-pre-line break-words text-[15px] leading-relaxed">
                     {parseComment(c.body, d.people).map((part, i) =>
@@ -362,10 +397,17 @@ export function Comments({ projectId, taskId, detail: d, onChanged }: { projectI
                     )}
                   </p>
                 )}
-                {c.mine && !c.deletedAt && (
-                  <button type="button" onClick={() => remove.mutate({ projectId, taskId, commentId: c.id })} className="mt-1 text-[12px] text-muted underline-offset-4 hover:underline">
-                    Remove
-                  </button>
+                {!c.deletedAt && editing !== c.id && (c.mine || d.access.canModerate) && (
+                  <span className="mt-1 flex gap-3 text-[12px] text-muted">
+                    {c.mine && (
+                      <button type="button" onClick={() => setEditing(c.id)} className="underline-offset-4 hover:underline">
+                        Edit
+                      </button>
+                    )}
+                    <button type="button" onClick={() => remove.mutate({ projectId, taskId, commentId: c.id })} className="underline-offset-4 hover:underline">
+                      Remove
+                    </button>
+                  </span>
                 )}
               </div>
             </li>

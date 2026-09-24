@@ -11,6 +11,7 @@ import { Button, Skeleton, StatusPill } from "@/components/ui/primitives";
 import { daysOverdue, MY_TASK_SECTION_LABEL, type MyTaskSection } from "@/core/tasks";
 import { formatIsoDate } from "@/core/time";
 import { cn } from "@/lib/cn";
+import { useInvalidateTaskViews } from "@/lib/task-cache";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 
 type Mine = RouterOutputs["tasks"]["mine"];
@@ -38,7 +39,7 @@ export function MyTasksView() {
   const q = useQuery(trpc.tasks.mine.queryOptions());
   const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
   const key = trpc.tasks.mine.queryKey();
-  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: key }), qc.invalidateQueries({ queryKey: trpc.checklist.get.queryKey() }), qc.invalidateQueries({ queryKey: trpc.notifications.unreadCount.queryKey() })]);
+  const refresh = useInvalidateTaskViews();
   const done = useMutation(
     trpc.checklist.setDone.mutationOptions({
       onMutate: async (v) => {

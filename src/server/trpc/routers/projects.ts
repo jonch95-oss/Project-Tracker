@@ -14,6 +14,7 @@ import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
+import { releaseFromProject, rerouteApprovals } from "../../services/tasks";
 import { globalProcedure, projectProcedure, protectedProcedure, router, type AuthedContext } from "../init";
 
 const bblSchema = z
@@ -116,9 +117,13 @@ async function loadPhases(conn: DbOrTx, projectIds: string[]) {
 /** Task totals per phase, for "% complete" (counts only; no task content). */
 const dependent = alias(schema.task, "dependent");
 
-/** Tasks an outside collaborator can see: assigned to them or shared with them as a watcher. */
+/** Tasks an outside collaborator can see: assigned to them, shared with them as a watcher, or waiting on their approval. */
 function visibleToOutsider(userId: string) {
-  return or(eq(schema.task.assigneeId, userId), sql`exists (select 1 from ${schema.taskWatcher} where ${schema.taskWatcher.taskId} = ${schema.task.id} and ${schema.taskWatcher.userId} = ${userId})`);
+  return or(
+    eq(schema.task.assigneeId, userId),
+    and(eq(schema.task.approverId, userId), eq(schema.task.status, "awaiting_approval")),
+    sql`exists (select 1 from ${schema.taskWatcher} where ${schema.taskWatcher.taskId} = ${schema.task.id} and ${schema.taskWatcher.userId} = ${userId})`,
+  );
 }
 
 export interface CardFacts {
@@ -721,6 +726,8 @@ export const membersRouter = router({
             .update(schema.projectMember)
             .set({ ...flags, updatedAt: new Date() })
             .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId)));
+          // Lost approve rights (or changed role): approvals waiting on them go to whoever should approve now.
+          if ((before.canApprove && !flags.canApprove) || before.projectRole !== flags.projectRole) await rerouteApprovals(tx, userId, ctx.viewer.id, projectId);
         } else {
           await tx.insert(schema.projectMember).values({ projectId, userId, ...flags, addedById: ctx.viewer.id });
         }
@@ -762,6 +769,8 @@ export const membersRouter = router({
         await tx
           .delete(schema.projectMember)
           .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)));
+        // Their shares, open assignments and pending approvals on this project go with them.
+        await releaseFromProject(tx, input.projectId, input.userId, ctx.viewer.id);
         const [u] = await tx.select({ name: schema.user.name }).from(schema.user).where(eq(schema.user.id, input.userId));
         await recordAudit(tx, {
           actorId: ctx.viewer.id,

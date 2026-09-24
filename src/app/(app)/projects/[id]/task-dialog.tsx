@@ -101,6 +101,7 @@ export function TaskDialog({
         ...(due !== (t.dueOn ?? "") ? { dueOn: due || null } : {}),
         requiresApproval,
         approverRole: requiresApproval ? str("approverRole") || "Owner" : null,
+        recurrence: str("recurrence") ? { freq: str("recurrence") as "weekly" | "biweekly" | "monthly" } : null,
       },
       {
         onSuccess: () => {
@@ -196,6 +197,14 @@ export function TaskDialog({
             </Field>
             <Field label="Due date" htmlFor="td-due" hint={t.dueManual ? "Set by hand. Clear it to go back to the rule." : rule ? `Rule: ${rule}.` : undefined}>
               <Input id="td-due" name="dueOn" type="date" defaultValue={t.dueOn ?? ""} className="num" />
+            </Field>
+            <Field label="Repeats" htmlFor="td-recur" hint="When it's done, the next one is created automatically.">
+              <Select id="td-recur" name="recurrence" defaultValue={t.recurrence?.freq ?? ""}>
+                <option value="">Doesn&apos;t repeat</option>
+                <option value="weekly">Every week</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="monthly">Every month</option>
+              </Select>
             </Field>
             <div className="flex flex-col justify-end gap-3">
               <Switch id="td-approval" checked={requiresApproval} onChange={setRequiresApproval} label="Requires approval" />

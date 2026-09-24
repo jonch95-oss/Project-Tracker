@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTRPC } from "@/lib/trpc";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/cn";
@@ -67,6 +67,11 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
   const [moreOpen, setMoreOpen] = useState(false);
   const trpc = useTRPC();
   const unread = useQuery({ ...trpc.notifications.unreadCount.queryOptions(), refetchInterval: 60_000, refetchOnWindowFocus: true }).data?.count ?? 0;
+  const qc = useQueryClient();
+  useEffect(() => {
+    // A new notification arrived (or some were read elsewhere): refresh the list too.
+    void qc.invalidateQueries({ queryKey: trpc.notifications.list.queryKey() });
+  }, [unread, qc, trpc]);
   const badge = (href: string) => (href === "/notifications" && unread > 0 ? unread : 0);
   const items = NAV.filter((n) => n.roles.includes(viewer.role));
   // Owners and admins land on Portfolio; everyone else on My Tasks.
@@ -110,8 +115,9 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
                 <I size={18} />
                 {item.label}
                 {badge(item.href) > 0 && (
-                  <span className="num ml-auto rounded-full bg-accent px-1.5 text-[11px] font-medium leading-5 text-on-accent" aria-label={`${badge(item.href)} unread`}>
+                  <span className="num ml-auto rounded-full bg-accent px-1.5 text-[11px] font-medium leading-5 text-on-accent">
                     {badge(item.href) > 99 ? "99+" : badge(item.href)}
+                    <span className="sr-only"> unread</span>
                   </span>
                 )}
               </Link>
@@ -155,8 +161,9 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
                   <span className="relative">
                     <I size={22} />
                     {badge(item.href) > 0 && (
-                      <span className="num absolute -right-2 -top-1 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] font-medium leading-4 text-on-accent" aria-label={`${badge(item.href)} unread`}>
+                      <span className="num absolute -right-2 -top-1 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] font-medium leading-4 text-on-accent">
                         {badge(item.href) > 99 ? "99+" : badge(item.href)}
+                        <span className="sr-only"> unread</span>
                       </span>
                     )}
                   </span>

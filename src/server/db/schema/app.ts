@@ -413,6 +413,8 @@ export const task = pgTable(
     followUpOn: text("follow_up_on"),
     /** Recurring tasks: the first task of the series. */
     seriesId: uuid("series_id"),
+    /** The occurrence this task's completion created (so reopening removes exactly that one). */
+    nextOccurrenceId: uuid("next_occurrence_id"),
     requiredAttachment: text("required_attachment"),
     subItems: jsonb("sub_items").$type<{ id: string; text: string; done: boolean }[]>().notNull().default([]),
     recurrence: jsonb("recurrence"),
@@ -432,6 +434,8 @@ export const task = pgTable(
     index("task_project_idx").on(t.projectId, t.phaseKey, t.sortOrder),
     index("task_assignee_idx").on(t.assigneeId, t.status),
     index("task_due_idx").on(t.dueOn),
+    index("task_series_idx").on(t.seriesId),
+    index("task_approver_idx").on(t.approverId, t.status),
   ],
 );
 
@@ -502,6 +506,21 @@ export const keyDate = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [index("key_date_project_idx").on(t.projectId, t.date), index("key_date_date_idx").on(t.date)],
+);
+
+/** One row per key-date reminder sent, so a re-run or a moved date never double-sends. */
+export const keyDateReminder = pgTable(
+  "key_date_reminder",
+  {
+    keyDateId: uuid("key_date_id")
+      .notNull()
+      .references(() => keyDate.id, { onDelete: "cascade" }),
+    /** The date the reminder was for (a moved date gets fresh reminders). */
+    date: text("date").notNull(),
+    threshold: integer("threshold").notNull(),
+    sentAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.keyDateId, t.date, t.threshold] })],
 );
 
 export const NOTIFICATION_KINDS = [
