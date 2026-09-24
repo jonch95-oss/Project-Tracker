@@ -189,7 +189,7 @@ export function VendorView({ id }: { id: string }) {
             {v.rating != null ? (
               <p className="text-[24px] text-accent" aria-label={`Rated ${v.rating} of 5`}>
                 {"★".repeat(v.rating)}
-                <span className="text-faint">{"★".repeat(5 - v.rating)}</span>
+                <span className="opacity-25">{"★".repeat(5 - v.rating)}</span>
               </p>
             ) : (
               <p className="text-[13px] text-muted">Not rated.</p>

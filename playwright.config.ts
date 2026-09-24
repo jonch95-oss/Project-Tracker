@@ -38,6 +38,7 @@ export default defineConfig({
       CRON_SECRET: "e2e-job-secret-0123456789abcdef",
       E2E_DISABLE_RATE_LIMIT: "1",
       GEOCODER: "off",
+      PLUTO: "stub",
       VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? vapid.publicKey,
       VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY ?? vapid.privateKey,
       NODE_ENV: process.env.CI ? "production" : "development",

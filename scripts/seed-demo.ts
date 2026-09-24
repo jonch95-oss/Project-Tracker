@@ -27,6 +27,7 @@ async function main() {
     { email: "elias@demo.test", name: "Elias Ariel", role: "admin", title: "Partner" },
     { email: "ariel@demo.test", name: "Ariel Cohen", role: "member", title: "Project Manager" },
     { email: "architect@demo.test", name: "Maya Brooks", role: "external", title: "Architect", company: "Brooks Studio" },
+    { email: "investor@demo.test", name: "Rachel Stern", role: "investor", title: "Managing Partner", company: "Harbor Capital" },
   ] as const;
 
   const ids: Record<string, string> = {};
@@ -191,7 +192,9 @@ async function main() {
           // Integer math only: +3% a floor, rounded to $5,000.
           const ask = roundDiv(base * (100 + (floor - 2) * 3), 100 * 5000) * 5000;
           const st = status(floor, line);
-          return { unit: `${floor}${line}`, floor: String(floor), sf, beds, baths, askCents: ask * 100, contractCents: st === "contract" || st === "closed" ? (ask - 25_000) * 100 : null, status: st };
+          const exposure = { A: "SE", B: "N", C: "SW" }[line];
+          const outdoor = floor === 7 ? { outdoorType: "Terrace", outdoorSf: 320 } : line === "C" ? { outdoorType: "Balcony", outdoorSf: 60 } : {};
+          return { unit: `${floor}${line}`, floor: String(floor), sf, beds, baths, exposure, ...outdoor, askCents: ask * 100, contractCents: st === "contract" || st === "closed" ? (ask - 25_000) * 100 : null, status: st };
         }),
       );
       await db.insert(schema.saleUnit).values(units.map((u, i) => ({ projectId: row!.id, ...u, sortOrder: i })));
@@ -237,10 +240,79 @@ async function main() {
         { projectId: pid, number: 1, title: "Patch slab edge at stair 2", trade: "Concrete", vendorName: "Stone & Sons", floor: "3", unit: null, dueOn: addDays(today, 5), status: "open" },
         { projectId: pid, number: 2, title: "Reset outlet box height", trade: "Electrical", vendorName: "Volt Electric", floor: "4", unit: "4B", dueOn: addDays(today, 8), status: "ready" },
       ]);
+
+      // Module L: buyers' selections on units in contract; each drives a GC task waiting on the sign-off.
+      const unitRows = await db.select().from(schema.saleUnit).where(eq(schema.saleUnit.projectId, pid));
+      const u6c = unitRows.find((u) => u.unit === "6C")!;
+      const u7c = unitRows.find((u) => u.unit === "7C")!;
+      for (const [unit, category, choice, upgrade, by, signed] of [
+        [u6c, "Kitchen", "Calacatta quartz counters, waterfall island", 18_500_00, addDays(today, 12), null],
+        [u6c, "Flooring", "Wide-plank white oak, matte", null, addDays(today, -2), null],
+        [u7c, "Bath", "Heated floors in the primary bath", 6_200_00, addDays(today, -20), addDays(today, -21)],
+      ] as const) {
+        const [t] = await db
+          .insert(schema.task)
+          .values({ projectId: pid, phaseKey: "construction", title: `Unit ${unit.unit} · ${category}: ${choice}`, role: "Construction", description: `Buyer selection for unit ${unit.unit}. Sign-off due ${by}.`, assigneeId: ids["ariel@demo.test"]!, dueOn: by, dueManual: true, status: signed ? "not_started" : "waiting", waitingOn: signed ? null : "Buyer sign-off", waitingSince: signed ? null : addDays(today, -10), createdById: ids["jon@demo.test"]! })
+          .returning({ id: schema.task.id });
+        await db.insert(schema.unitSelection).values({ projectId: pid, unitId: unit.id, category, choice, upgradeCents: upgrade, signOffBy: by, signedOffOn: signed, signedOffName: signed ? "Dana & Lee Park" : null, taskId: t!.id, createdById: ids["jon@demo.test"]! });
+      }
+
+      // Module C: the directory, with a COI that lapsed (it flags the condo, where Stone & Sons has punch work).
+      const { vendorKey } = await import("../src/core/expiries");
+      const vendors = [
+        { name: "Brick & Beam Builders", kind: "contractor", trade: "GC", phone: "(718) 555-0142", email: "office@brickbeam.example", rating: 4, notes: "Strong super; slow on submittals." },
+        { name: "Stone & Sons", kind: "contractor", trade: "Concrete", phone: "(718) 555-0199", rating: 3 },
+        { name: "Volt Electric", kind: "contractor", trade: "Electrical", phone: "(347) 555-0110", rating: 5 },
+        { name: "Brooks Studio", kind: "consultant", trade: "Architect", email: "maya@brooksstudio.example", rating: 5 },
+      ] as const;
+      const vid: Record<string, string> = {};
+      for (const v of vendors) {
+        const [row2] = await db.insert(schema.vendor).values({ ...v, key: vendorKey(v.name), createdById: ids["jon@demo.test"]! }).returning({ id: schema.vendor.id });
+        vid[v.name] = row2!.id;
+      }
+      await db.insert(schema.contact).values([
+        { vendorId: vid["Brick & Beam Builders"]!, name: "Tom Reyes", title: "Project Manager", email: "tom@brickbeam.example", phone: "(718) 555-0143" },
+        { vendorId: vid["Brooks Studio"]!, name: "Maya Brooks", title: "Principal", email: "architect@demo.test" },
+        { vendorId: vid["Volt Electric"]!, name: "Sam Okafor", title: "Master electrician", email: "sam@volt.example" },
+      ]);
+      await db.insert(schema.vendorDocument).values([
+        { vendorId: vid["Brick & Beam Builders"]!, kind: "license", category: "gc_license", number: "GC-2041187", expiresOn: addDays(today, 300) },
+        { vendorId: vid["Brick & Beam Builders"]!, kind: "coi", category: "vendor_coi_gl", number: "GL-88-2210", label: "Hudson Mutual, $2M/$4M", expiresOn: addDays(today, 150) },
+        { vendorId: vid["Brick & Beam Builders"]!, kind: "coi", category: "vendor_coi_wc", number: "WC-55190", expiresOn: addDays(today, 12) },
+        { vendorId: vid["Brick & Beam Builders"]!, kind: "w9", category: "w9", number: "2026" },
+        { vendorId: vid["Stone & Sons"]!, kind: "coi", category: "vendor_coi_gl", number: "GL-4410", expiresOn: addDays(today, -9) },
+        { vendorId: vid["Volt Electric"]!, kind: "license", category: "master_electrician", number: "ME-12093", expiresOn: addDays(today, 25) },
+      ]);
+      await db.update(schema.commitment).set({ vendorId: vid["Brick & Beam Builders"]! }).where(and(eq(schema.commitment.projectId, pid), eq(schema.commitment.vendorName, "Brick & Beam Builders")));
+
+      // Module J: two equity investors; Harbor's partner reads the portal with their capital account.
+      const [harbor] = await db.insert(schema.investor).values({ name: "Harbor Capital LP", kind: "equity", contactName: "Rachel Stern", email: "investor@demo.test", userId: ids["investor@demo.test"]! }).returning({ id: schema.investor.id });
+      const [pine] = await db.insert(schema.investor).values({ name: "Pine Street Partners", kind: "jv_partner", contactName: "Omar Haddad" }).returning({ id: schema.investor.id });
+      await db.insert(schema.capitalCommitment).values([
+        { projectId: pid, investorId: harbor!.id, committedCents: 3_000_000_00 },
+        { projectId: pid, investorId: pine!.id, committedCents: 2_000_000_00 },
+      ]);
+      await db.insert(schema.capitalTerms).values({ projectId: pid, tiers: [{ kind: "pref", rateBps: 800 }, { kind: "return_of_capital" }, { kind: "split", lpBps: 8000, untilMultipleMilli: 1750 }, { kind: "split", lpBps: 6500, untilMultipleMilli: null }] });
+      const [call1] = await db.insert(schema.capitalCall).values({ projectId: pid, number: 1, noticeOn: addDays(today, -400), dueOn: addDays(today, -385), note: "Land and closing costs", createdById: ids["jon@demo.test"]! }).returning();
+      await db.insert(schema.capitalCallItem).values([
+        { callId: call1!.id, investorId: harbor!.id, amountCents: 1_500_000_00, receivedCents: 1_500_000_00, receivedOn: addDays(today, -386) },
+        { callId: call1!.id, investorId: pine!.id, amountCents: 1_000_000_00, receivedCents: 1_000_000_00, receivedOn: addDays(today, -385) },
+      ]);
+      const [call2] = await db.insert(schema.capitalCall).values({ projectId: pid, number: 2, noticeOn: addDays(today, -20), dueOn: addDays(today, 5), note: "Construction equity ahead of the loan", createdById: ids["jon@demo.test"]! }).returning();
+      await db.insert(schema.capitalCallItem).values([
+        { callId: call2!.id, investorId: harbor!.id, amountCents: 900_000_00, receivedCents: 900_000_00, receivedOn: addDays(today, -4) },
+        { callId: call2!.id, investorId: pine!.id, amountCents: 600_000_00 },
+      ]);
+      await db.insert(schema.projectSequence).values([
+        { projectId: pid, kind: "capital_call", last: 2 },
+      ]);
+      await db.insert(schema.projectMember).values({ projectId: pid, userId: ids["investor@demo.test"]!, projectRole: "Investor", canViewFinancials: true });
+      const [photosFolder] = await db.select({ id: schema.folder.id }).from(schema.folder).where(and(eq(schema.folder.projectId, pid), eq(schema.folder.isPhotos, true)));
+      if (photosFolder) await db.insert(schema.folderShare).values({ folderId: photosFolder.id, userId: ids["investor@demo.test"]! }).onConflictDoNothing();
     }
   }
   await pool.end();
-  console.log("Demo seed complete. Users: jon@ / elias@ / ariel@ / architect@demo.test — password: demo password 1");
+  console.log("Demo seed complete. Users: jon@ / elias@ / ariel@ / architect@ / investor@demo.test — password: demo password 1");
   process.exit(0);
 }
 

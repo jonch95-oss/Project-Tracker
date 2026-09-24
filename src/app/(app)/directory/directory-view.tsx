@@ -87,7 +87,7 @@ export function DirectoryView() {
                   {v.rating != null && (
                     <span className="num text-[13px] text-muted" aria-label={`Rated ${v.rating} of 5`}>
                       {"★".repeat(v.rating)}
-                      <span className="text-faint">{"★".repeat(5 - v.rating)}</span>
+                      <span className="opacity-25">{"★".repeat(5 - v.rating)}</span>
                     </span>
                   )}
                   {v.lapsedCoi && <StatusPill tone="blocked">COI expired</StatusPill>}

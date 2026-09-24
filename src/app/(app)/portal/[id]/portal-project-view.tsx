@@ -101,10 +101,8 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
             )}
           </Panel>
 
-          <section>
-            <h2 className="serif mb-4 text-heading">Documents</h2>
-            <FilesTab projectId={projectId} onOpenPhotos={() => undefined} />
-          </section>
+          {/* The folders shared with them, read-only (the Files tab brings its own heading). */}
+          <FilesTab projectId={projectId} onOpenPhotos={() => undefined} />
         </div>
 
         <aside className="flex flex-col gap-8">
