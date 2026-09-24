@@ -1,0 +1,51 @@
+name: Create account
+
+# Run by hand (Actions → Create account → Run workflow) to give someone a
+# sign-in name and a temporary password. They must choose their own password
+# the first time they sign in. Running it again for the same username resets
+# their password the same way.
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Full name, as shown in the app"
+        required: true
+      username:
+        description: "Sign-in name (letters, numbers, _ or .)"
+        required: true
+      role:
+        description: "Role"
+        required: true
+        default: admin
+        type: choice
+        options: [admin, member, owner, external]
+      password:
+        description: "Temporary password (they must change it at first sign-in)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Hide the password in the logs
+        run: |
+          PW=$(jq -r '.inputs.password' "$GITHUB_EVENT_PATH")
+          echo "::add-mask::$PW"
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Create or reset the account
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_UNPOOLED }}
+          ACCOUNT_NAME: ${{ inputs.name }}
+          ACCOUNT_USERNAME: ${{ inputs.username }}
+          ACCOUNT_ROLE: ${{ inputs.role }}
+          ACCOUNT_PASSWORD: ${{ inputs.password }}
+        run: npx tsx --conditions=react-server scripts/create-account.ts

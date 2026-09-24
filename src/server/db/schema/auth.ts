@@ -27,6 +27,11 @@ export const user = pgTable(
     phone: text("phone"),
     /** Last completed sign-in (sessions are deleted on sign-out, so they can't answer "last active"). */
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    /** Sign-in name as an alternative to the email (Better Auth username plugin); stored lower-case. */
+    username: text("username").unique(),
+    displayUsername: text("display_username"),
+    /** Set for an account made with a temporary password: they must choose their own before anything else. */
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
   },
   (t) => [index("user_role_idx").on(t.role)],
 );

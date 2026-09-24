@@ -13,6 +13,12 @@ import { GLOBAL_ROLES, type GlobalRole } from "@/core/permissions";
 import { formatDateTimeET } from "@/core/time";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 
+/** How someone signs in: their email, or "signs in as ariel" for a username-only account (no real email). */
+function signInLabel(u: { email: string; username?: string | null }): string {
+  if (u.username && u.email.endsWith("@users.invalid")) return `Signs in as ${u.username}`;
+  return u.username ? `${u.email} · ${u.username}` : u.email;
+}
+
 /** The invitation message, with the iPhone install guide, for WhatsApp or text. */
 function inviteText(): string {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
@@ -63,7 +69,7 @@ export function TeamView({ viewerId }: { viewerId: string }) {
                         {u.name} {u.id === viewerId && <span className="text-[13px] font-normal text-muted">(you)</span>}
                       </p>
                       <p className="truncate text-[13px] text-muted">
-                        {u.email}
+                        {signInLabel(u)}
                         {u.title ? ` · ${u.title}` : ""}
                       </p>
                     </div>
@@ -268,7 +274,7 @@ function UserDialog({
   isSelf,
   onClose,
 }: {
-  user: { id: string; name: string; email: string; role: GlobalRole; status: "active" | "deactivated"; twoFactorEnabled: boolean; lastSeenAt: Date | null };
+  user: { id: string; name: string; email: string; role: GlobalRole; status: "active" | "deactivated"; twoFactorEnabled: boolean; lastSeenAt: Date | null; username?: string | null; mustChangePassword?: boolean };
   isSelf: boolean;
   onClose: () => void;
 }) {
@@ -315,7 +321,8 @@ function UserDialog({
       title={user.name}
       description={
         <>
-          {user.email}
+          {signInLabel(user)}
+          {user.mustChangePassword ? " · Hasn't chosen their own password yet" : ""}
           {user.lastSeenAt ? ` · Last active ${formatDateTimeET(new Date(user.lastSeenAt))}` : " · Never signed in"}
         </>
       }

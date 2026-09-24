@@ -126,3 +126,16 @@ describe("two-factor authentication", () => {
     expect(ctx.viewer?.id).toBe(u.id);
   });
 });
+
+describe("temporary passwords", () => {
+  it("an account that must choose its own password can't use the app yet", async () => {
+    const { callerFor, createUser } = await import("../support/fixtures");
+    const { db, schema } = await import("@/server/db");
+    const { eq } = await import("drizzle-orm");
+    const u = await createUser("admin");
+    await db().update(schema.user).set({ mustChangePassword: true }).where(eq(schema.user.id, u.id));
+    await expect((await callerFor(u.id)).projects.list({})).rejects.toMatchObject({ code: "FORBIDDEN", message: "Choose your own password first." });
+    await db().update(schema.user).set({ mustChangePassword: false }).where(eq(schema.user.id, u.id));
+    await expect((await callerFor(u.id)).projects.list({})).resolves.toBeDefined();
+  });
+});

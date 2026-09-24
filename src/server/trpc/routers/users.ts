@@ -151,6 +151,8 @@ export const usersRouter = router({
         id: schema.user.id,
         name: schema.user.name,
         email: schema.user.email,
+        username: schema.user.username,
+        mustChangePassword: schema.user.mustChangePassword,
         role: schema.user.role,
         status: schema.user.status,
         title: schema.user.title,

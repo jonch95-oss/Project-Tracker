@@ -42,10 +42,12 @@ export function LoginForm({ next, justReset }: { next: string; justReset: boolea
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const { data, error } = await authClient.signIn.email({ email: email.trim(), password });
+    // An address signs in by email; anything else is a username (e.g. "ariel").
+    const who = email.trim();
+    const { data, error } = who.includes("@") ? await authClient.signIn.email({ email: who, password }) : await authClient.signIn.username({ username: who.toLowerCase(), password });
     setBusy(false);
     if (error) {
-      setError(error.status === 429 ? "Too many attempts. Wait a minute and try again." : "That email and password don't match.");
+      setError(error.status === 429 ? "Too many attempts. Wait a minute and try again." : "That sign-in name and password don't match.");
       return;
     }
     if (data && "twoFactorRedirect" in data && data.twoFactorRedirect) {
@@ -160,8 +162,8 @@ export function LoginForm({ next, justReset }: { next: string; justReset: boolea
       )}
 
       <form onSubmit={onPassword} className="flex flex-col gap-5" noValidate>
-        <Field label="Email" htmlFor="email">
-          <Input id="email" name="email" type="email" autoComplete="username webauthn" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        <Field label="Email or username" htmlFor="email">
+          <Input id="email" name="email" type="text" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="username webauthn" required value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
         <Field label="Password" htmlFor="password" error={error}>
           <Input

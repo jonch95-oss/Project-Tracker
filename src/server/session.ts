@@ -21,6 +21,8 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
 export async function requireViewer(): Promise<Viewer> {
   const viewer = await getViewer();
   if (!viewer) redirect("/login");
+  // Signed in with a temporary password: choosing their own comes first.
+  if (viewer.mustChangePassword) redirect("/change-password");
   return viewer;
 }
 

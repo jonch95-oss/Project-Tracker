@@ -25,6 +25,8 @@ export interface Viewer {
   title: string | null;
   company: string | null;
   twoFactorEnabled: boolean;
+  /** Signed in with a temporary password: must choose their own first. */
+  mustChangePassword: boolean;
 }
 
 export interface Context {
@@ -46,6 +48,7 @@ export async function loadViewer(userId: string, conn: Database = db()): Promise
       title: schema.user.title,
       company: schema.user.company,
       twoFactorEnabled: schema.user.twoFactorEnabled,
+      mustChangePassword: schema.user.mustChangePassword,
     })
     .from(schema.user)
     .where(eq(schema.user.id, userId));
@@ -102,6 +105,8 @@ export const publicProcedure = t.procedure.use(errorLogging);
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.viewer || !ctx.actor) throw new TRPCError({ code: "UNAUTHORIZED" });
   if (ctx.actor.status !== "active") throw new TRPCError({ code: "FORBIDDEN", message: "Account deactivated" });
+  // A temporary password opens nothing until they've chosen their own (the change itself is a Better Auth endpoint).
+  if (ctx.viewer.mustChangePassword) throw new TRPCError({ code: "FORBIDDEN", message: "Choose your own password first." });
   return next({ ctx: { ...ctx, viewer: ctx.viewer, actor: ctx.actor } });
 });
 

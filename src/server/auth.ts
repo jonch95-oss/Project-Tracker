@@ -4,11 +4,11 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { twoFactor } from "better-auth/plugins";
+import { twoFactor, username } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db";
 import { allowedOrigins, env } from "./env";
-import { passwordProblem } from "@/core/password";
+import { PASSWORD_MIN, passwordProblem } from "@/core/password";
 import { clientIp, TRUSTED_IP_HEADERS } from "./request-ip";
 import { recordAudit } from "./services/audit";
 import { renderEmail, sendEmail } from "./services/email";
@@ -29,7 +29,7 @@ function createAuth() {
       enabled: true,
       // Invite-only: accounts are created by accepting an invitation (see invites router).
       disableSignUp: true,
-      minPasswordLength: 12,
+      minPasswordLength: PASSWORD_MIN,
       maxPasswordLength: 256,
       revokeSessionsOnPasswordReset: true,
       resetPasswordTokenExpiresIn: 60 * 60,
@@ -71,6 +71,7 @@ function createAuth() {
         title: { type: "string", required: false, input: false },
         company: { type: "string", required: false, input: false },
         phone: { type: "string", required: false, input: false },
+        mustChangePassword: { type: "boolean", required: false, defaultValue: false, input: false },
       },
     },
 
@@ -89,6 +90,7 @@ function createAuth() {
       max: 60,
       customRules: {
         "/sign-in/email": { window: 60, max: 10 }, // per IP; the office may share one
+        "/sign-in/username": { window: 60, max: 10 },
         "/request-password-reset": { window: 300, max: 3 },
         "/reset-password": { window: 300, max: 5 },
         "/two-factor/verify-totp": { window: 60, max: 5 },
@@ -123,6 +125,8 @@ function createAuth() {
         if (ctx.path === "/sign-up/email") {
           throw new APIError("FORBIDDEN", { message: "Accounts are created by invitation only." });
         }
+        // No public "is this name taken?" lookup: it would let anyone list sign-in names.
+        if (ctx.path === "/is-username-available") throw new APIError("NOT_FOUND");
         // Same password rule everywhere (invite, reset, change).
         if (ctx.path === "/reset-password" || ctx.path === "/change-password") {
           const pw = typeof ctx.body?.newPassword === "string" ? ctx.body.newPassword : "";
@@ -138,16 +142,23 @@ function createAuth() {
         const actorName = session?.user.name ?? null;
         const ip = clientIp(ctx.request?.headers ?? ctx.headers);
 
-        if (ctx.path === "/sign-in/email" && failed) {
+        if ((ctx.path === "/sign-in/email" || ctx.path === "/sign-in/username") && failed) {
           const email = typeof ctx.body?.email === "string" ? ctx.body.email.toLowerCase() : null;
+          const name = typeof ctx.body?.username === "string" ? ctx.body.username.toLowerCase().slice(0, 60) : null;
           await recordAudit(db(), {
             actorId: null,
             action: "login.failed",
             entityType: "session",
-            summary: `Failed sign-in for ${email ?? "unknown email"}`,
-            data: { email },
+            summary: `Failed sign-in for ${email ?? (name ? `username ${name}` : "unknown email")}`,
+            data: { email, username: name },
             ip,
           });
+          return;
+        }
+        // Chose their own password: the temporary one no longer holds them up.
+        if (ctx.path === "/change-password" && !failed && actorId) {
+          await db().update(schema.user).set({ mustChangePassword: false }).where(eq(schema.user.id, actorId));
+          await recordAudit(db(), { actorId, actorName, action: "password.change", entityType: "user", entityId: actorId, summary: `${actorName} changed their password`, ip });
           return;
         }
         if (failed || !actorId) return;
@@ -156,7 +167,7 @@ function createAuth() {
         // password sign-in without 2FA, the 2FA challenge (no prior session),
         // or a passkey. The 2FA plugin creates and deletes a provisional
         // session first, so session-create hooks would log false sign-ins.
-        const signInPaths = ["/sign-in/email", "/two-factor/verify-totp", "/two-factor/verify-backup-code", "/passkey/verify-authentication"];
+        const signInPaths = ["/sign-in/email", "/sign-in/username", "/two-factor/verify-totp", "/two-factor/verify-backup-code", "/passkey/verify-authentication"];
         const pendingTwoFactor = typeof returned === "object" && returned !== null && "twoFactorRedirect" in returned;
         if (signInPaths.includes(ctx.path) && ctx.context.newSession && !ctx.context.session && !pendingTwoFactor) {
           const s = ctx.context.newSession;
@@ -199,6 +210,8 @@ function createAuth() {
 
     plugins: [
       twoFactor({ issuer: APP_NAME }),
+      // Sign in with a name (e.g. "ariel") as well as the email; letters, numbers, "_" and ".".
+      username({ minUsernameLength: 3, maxUsernameLength: 30 }),
       passkey({
         rpID: appUrl.hostname,
         rpName: APP_NAME,

@@ -9,7 +9,7 @@ export async function authedContextFrom(req: Request): Promise<AuthedContext | n
   const session = await auth().api.getSession({ headers: req.headers });
   if (!session) return null;
   const viewer = await loadViewer(session.user.id);
-  if (!viewer || viewer.status !== "active") return null;
+  if (!viewer || viewer.status !== "active" || viewer.mustChangePassword) return null;
   return {
     db: db(),
     headers: req.headers,
