@@ -1,0 +1,45 @@
+name: Records probe
+# Manual only: prints live NYC Open Data metadata (dataset names, freshness, column names)
+# so the public-records watch is coded against the real schemas (brief §10). Public data only.
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: "Space-separated dataset ids"
+        required: false
+        default: ""
+      search:
+        description: "Semicolon-separated catalog searches"
+        required: false
+        default: ""
+      queries:
+        description: "Newline-free, '|'-separated resource queries (id?params)"
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Metadata
+        env:
+          IDS: ${{ inputs.ids }}
+          SEARCH: ${{ inputs.search }}
+          QUERIES: ${{ inputs.queries }}
+        run: |
+          for id in $IDS; do
+            echo "=== $id"
+            curl -s "https://data.cityofnewyork.us/api/views/$id.json" | jq -c '{name, rowsUpdatedAt: (.rowsUpdatedAt|todate?), cols: [.columns[]? | .fieldName]}' || true
+          done
+          IFS=';'
+          for q in $SEARCH; do
+            echo "=== search: $q"
+            curl -s -G "https://api.us.socrata.com/api/catalog/v1" --data-urlencode "domains=data.cityofnewyork.us" --data-urlencode "q=$q" --data-urlencode "limit=8" | jq -c '.results[] | {id: .resource.id, name: .resource.name, updated: .resource.data_updated_at}' || true
+          done
+          IFS='|'
+          for q in $QUERIES; do
+            echo "=== query: $q"
+            curl -s "https://data.cityofnewyork.us/resource/$q" | head -c 3000; echo
+          done
