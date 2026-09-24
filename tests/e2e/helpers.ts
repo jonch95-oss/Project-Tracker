@@ -7,5 +7,6 @@ export async function signIn(page: Page, email: string, password = PASSWORD) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).not.toHaveURL(/\/login/);
+  // Signed in and landed: "/" always sends people on to their start page, so wait until that's done too.
+  await page.waitForURL((u) => !u.pathname.startsWith("/login") && u.pathname !== "/");
 }

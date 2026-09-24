@@ -67,7 +67,8 @@ Also fixed along the way: CI had been failing since Milestone 10 because the new
   - offline tick, reopen offline, then sync
   - offline comment plus a conflict resolved with "Tick it anyway"
   - sign-out leaves no pages, data or queue behind
-- **CI:** the iPhone WebKit project now runs the offline tests as well.
+- **CI:** the iPhone WebKit project now runs the offline tests as well. Each run creates its own task, so no test depends on shared demo data.
+- **One step skipped on WebKit:** reopening a page offline. Playwright's WebKit can't load any page while it emulates offline, even from the service worker. Chromium covers that step, and the real iPhone check covers it on the phone.
 - **Screens:** checked at 390px and desktop (install guide, the offline bar, Photos, task attachments).
 
 ### Needs a real iPhone (can't be done from here)

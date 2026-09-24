@@ -25,6 +25,24 @@ async function swReady(page: Page): Promise<boolean> {
   return page.evaluate(() => !!navigator.serviceWorker.controller);
 }
 
+const DB_URL = process.env.E2E_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/pc_e2e_test";
+
+/** A plain open task of Elias's in the Macon project's current phase, just for this test run (no shared demo data). */
+async function freshTask(tag: string): Promise<string> {
+  const title = `Offline check ${tag} ${Date.now()}`;
+  const db = new Client({ connectionString: DB_URL });
+  await db.connect();
+  await db.query(
+    `insert into task (project_id, phase_key, title, assignee_id, due_on)
+     select p.id, ph.key, $1, u.id, current_date
+     from project p join project_phase ph on ph.project_id = p.id and ph.status = 'active', "user" u
+     where p.name = 'Macon Street Auction' and u.email = 'elias@demo.test'`,
+    [title],
+  );
+  await db.end();
+  return title;
+}
+
 /** Wait until this page has been saved for opening offline. */
 async function saved(page: Page, url: string) {
   // The page (saved by path) and this person's data (saved a few seconds after it loads).
@@ -76,25 +94,15 @@ async function saved(page: Page, url: string) {
     .toBeGreaterThan(0);
 }
 
-test("iPhone offline: a tick made offline is shown at once, survives a reload, and syncs when back online", async ({
-  page,
-  context,
-}) => {
+test("iPhone offline: a tick made offline is shown at once, survives a reload, and syncs when back online", async ({ page, context }, testInfo) => {
+  const label = await freshTask(testInfo.project.name);
   await signIn(page, "elias@demo.test");
   await page.goto("/portfolio");
   const sw = await swReady(page);
   await page.getByRole("heading", { name: "Macon Street Auction" }).click();
   await page.getByRole("tab", { name: "Checklist" }).click();
-  const box = page
-    .locator(
-      '[role="checkbox"][aria-label^="Complete: "]:not([aria-disabled="true"])',
-    )
-    .first();
+  const box = page.getByRole("checkbox", { name: `Complete: ${label}` });
   await expect(box).toBeVisible();
-  const label = (await box.getAttribute("aria-label"))!.replace(
-    /^Complete: /,
-    "",
-  );
   const url = page.url();
   if (sw) await saved(page, url);
 
@@ -111,7 +119,8 @@ test("iPhone offline: a tick made offline is shown at once, survives a reload, a
   ).toBeVisible();
 
   // Closing and reopening the app offline: the saved copy still shows the tick.
-  if (sw) {
+  // (Playwright's WebKit can't load a page while emulating offline, even from the service worker; the real iPhone check covers it.)
+  if (sw && testInfo.project.name !== "iphone-webkit") {
     await page.goto(url);
     await page.getByRole("tab", { name: "Checklist" }).click();
     await expect(
@@ -133,33 +142,24 @@ test("iPhone offline: a tick made offline is shown at once, survives a reload, a
   ).toBeVisible();
 });
 
-test("iPhone offline: a comment waits on the phone; a tick on a task someone changed meanwhile asks first", async ({
-  page,
-  context,
-}) => {
+test("iPhone offline: a comment waits on the phone; a tick on a task someone changed meanwhile asks first", async ({ page, context }, testInfo) => {
+  const label = await freshTask(testInfo.project.name);
   await signIn(page, "elias@demo.test");
   await page.goto("/portfolio");
   await swReady(page);
   await page.getByRole("heading", { name: "Macon Street Auction" }).click();
   await page.getByRole("tab", { name: "Checklist" }).click();
-  const box = page
-    .locator(
-      '[role="checkbox"][aria-label^="Complete: "]:not([aria-disabled="true"])',
-    )
-    .first();
-  const label = (await box.getAttribute("aria-label"))!.replace(
-    /^Complete: /,
-    "",
-  );
+  const box = page.getByRole("checkbox", { name: `Complete: ${label}` });
+  await expect(box).toBeVisible();
 
   // Open the task and comment while offline.
   await page.getByRole("button", { name: label }).first().click();
   const sheet = page.getByRole("dialog");
   await expect(sheet.locator("#td-comment")).toBeVisible();
   await context.setOffline(true);
-  await sheet.locator("#td-comment").fill("Measured on site, offline");
+  await sheet.locator("#td-comment").fill(`Measured on site, ${label}`);
   await sheet.getByRole("button", { name: "Comment", exact: true }).click();
-  await expect(sheet.getByText("Measured on site, offline")).toBeVisible();
+  await expect(sheet.getByText(`Measured on site, ${label}`)).toBeVisible();
   await expect(sheet.getByText("You · waiting to sync")).toBeVisible();
   await page.keyboard.press("Escape");
 
@@ -200,7 +200,7 @@ test("iPhone offline: a comment waits on the phone; a tick on a task someone cha
   // The comment went through too.
   await page.getByRole("button", { name: label }).first().click();
   await expect(
-    page.getByRole("dialog").getByText("Measured on site, offline"),
+    page.getByRole("dialog").getByText(`Measured on site, ${label}`),
   ).toBeVisible();
   await expect(
     page.getByRole("dialog").getByText("You · waiting to sync"),
