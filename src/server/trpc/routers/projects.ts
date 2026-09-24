@@ -1,10 +1,36 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { FINANCIAL_ENTITY_TYPES, isFinancialEntity } from "@/core/audit";
-import { canGlobal, canGrantFlags, canProject, canRemoveMember, defaultFlags, PROJECT_ROLES, type Membership, isInternalRole } from "@/core/permissions";
-import { setCurrentPhase, setPhaseSkipped, type PhaseState } from "@/core/phases";
+import {
+  canGlobal,
+  canGrantFlags,
+  canProject,
+  canRemoveMember,
+  defaultFlags,
+  PROJECT_ROLES,
+  type Membership,
+  isInternalRole,
+} from "@/core/permissions";
+import {
+  setCurrentPhase,
+  setPhaseSkipped,
+  type PhaseState,
+} from "@/core/phases";
 import { isToggleKey } from "@/core/toggles";
 import { PROJECT_STATUSES } from "@/core/portfolio";
 import { keyDateLabel, nextKeyDate } from "@/core/key-dates";
@@ -14,24 +40,56 @@ import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { expiredCoiFlags, expiredCounts } from "../../services/expiries";
-import { queueFirstSnapshot, resetProjectRecords } from "../../services/records";
+import {
+  queueFirstSnapshot,
+  resetProjectRecords,
+} from "../../services/records";
 import { lookupLot } from "../../services/pluto";
-import { inboundAddress } from "../../services/inbound";
-import { lockBaselineOnPreConstruction, slippageFor } from "../../services/field";
-import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
+import { inboundAddress, rotateInboundAddress } from "../../services/inbound";
+import {
+  lockBaselineOnPreConstruction,
+  slippageFor,
+} from "../../services/field";
+import {
+  buildProjectChecklist,
+  defaultTemplateFor,
+  loadTemplate,
+  reschedule,
+} from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
 import { cardHeadlines } from "../../services/financials";
 import { releaseFromProject, rerouteApprovals } from "../../services/tasks";
-import { globalProcedure, projectProcedure, protectedProcedure, router, type AuthedContext } from "../init";
+import {
+  globalProcedure,
+  projectProcedure,
+  protectedProcedure,
+  router,
+  type AuthedContext,
+} from "../init";
 
 const bblSchema = z
   .string()
   .trim()
-  .regex(/^[1-5]\d{9}$/, "BBL is 10 digits: borough (1–5), 5-digit block, 4-digit lot")
+  .regex(
+    /^[1-5]\d{9}$/,
+    "BBL is 10 digits: borough (1–5), 5-digit block, 4-digit lot",
+  )
   .nullable();
 
-const BOROUGHS = ["Brooklyn", "Manhattan", "Queens", "Bronx", "Staten Island"] as const;
-export const BOROUGH_CODE = { Manhattan: "1", Bronx: "2", Brooklyn: "3", Queens: "4", "Staten Island": "5" } as const;
+const BOROUGHS = [
+  "Brooklyn",
+  "Manhattan",
+  "Queens",
+  "Bronx",
+  "Staten Island",
+] as const;
+export const BOROUGH_CODE = {
+  Manhattan: "1",
+  Bronx: "2",
+  Brooklyn: "3",
+  Queens: "4",
+  "Staten Island": "5",
+} as const;
 const BBL_BOROUGH_MESSAGE =
   "The BBL's first digit is the borough (1 Manhattan, 2 Bronx, 3 Brooklyn, 4 Queens, 5 Staten Island) and doesn't match the borough chosen.";
 
@@ -70,7 +128,10 @@ const baseInput = z.object({
   companyId: z.uuid(),
 });
 
-const bblMatchesBorough = (p: { bbl?: string | null; borough: (typeof BOROUGHS)[number] }) => !p.bbl || p.bbl.startsWith(BOROUGH_CODE[p.borough]);
+const bblMatchesBorough = (p: {
+  bbl?: string | null;
+  borough: (typeof BOROUGHS)[number];
+}) => !p.bbl || p.bbl.startsWith(BOROUGH_CODE[p.borough]);
 
 const createInput = baseInput
   .extend({
@@ -115,7 +176,10 @@ async function loadPhases(conn: DbOrTx, projectIds: string[]) {
     .select()
     .from(schema.projectPhase)
     .where(inArray(schema.projectPhase.projectId, projectIds))
-    .orderBy(asc(schema.projectPhase.projectId), asc(schema.projectPhase.sortOrder));
+    .orderBy(
+      asc(schema.projectPhase.projectId),
+      asc(schema.projectPhase.sortOrder),
+    );
   const out = new Map<string, PhaseState[]>();
   for (const r of rows) {
     const list = out.get(r.projectId) ?? [];
@@ -132,13 +196,21 @@ const dependent = alias(schema.task, "dependent");
 function visibleToOutsider(userId: string) {
   return or(
     eq(schema.task.assigneeId, userId),
-    and(eq(schema.task.approverId, userId), eq(schema.task.status, "awaiting_approval")),
+    and(
+      eq(schema.task.approverId, userId),
+      eq(schema.task.status, "awaiting_approval"),
+    ),
     sql`exists (select 1 from ${schema.taskWatcher} where ${schema.taskWatcher.taskId} = ${schema.task.id} and ${schema.taskWatcher.userId} = ${userId})`,
   );
 }
 
 export interface CardFacts {
-  nextAction: { id: string; title: string; assigneeName: string | null; dueOn: string | null } | null;
+  nextAction: {
+    id: string;
+    title: string;
+    assigneeName: string | null;
+    dueOn: string | null;
+  } | null;
   blocked: number;
   overdue: number;
   nextKeyDate: { label: string; date: string } | null;
@@ -156,13 +228,31 @@ export interface CardFacts {
  * blocked and overdue counts, and the next key date. `outsider` limits it to
  * the tasks that person can see (and no key dates).
  */
-async function loadCardFacts(conn: DbOrTx, projectIds: string[], outsider: string | null): Promise<Map<string, CardFacts>> {
+async function loadCardFacts(
+  conn: DbOrTx,
+  projectIds: string[],
+  outsider: string | null,
+): Promise<Map<string, CardFacts>> {
   const out = new Map<string, CardFacts>();
   if (projectIds.length === 0) return out;
   const today = todayET();
-  const scope = outsider ? and(inArray(schema.task.projectId, projectIds), visibleToOutsider(outsider)) : inArray(schema.task.projectId, projectIds);
+  const scope = outsider
+    ? and(
+        inArray(schema.task.projectId, projectIds),
+        visibleToOutsider(outsider),
+      )
+    : inArray(schema.task.projectId, projectIds);
   const open = await conn
-    .select({ id: schema.task.id, projectId: schema.task.projectId, title: schema.task.title, status: schema.task.status, dueOn: schema.task.dueOn, sortOrder: schema.task.sortOrder, phaseKey: schema.task.phaseKey, assigneeName: schema.user.name })
+    .select({
+      id: schema.task.id,
+      projectId: schema.task.projectId,
+      title: schema.task.title,
+      status: schema.task.status,
+      dueOn: schema.task.dueOn,
+      sortOrder: schema.task.sortOrder,
+      phaseKey: schema.task.phaseKey,
+      assigneeName: schema.user.name,
+    })
     .from(schema.task)
     .leftJoin(schema.user, eq(schema.user.id, schema.task.assigneeId))
     .where(and(scope, ne(schema.task.status, "done")));
@@ -171,24 +261,72 @@ async function loadCardFacts(conn: DbOrTx, projectIds: string[], outsider: strin
       await conn
         .selectDistinct({ id: schema.taskDependency.taskId })
         .from(schema.taskDependency)
-        .innerJoin(schema.task, eq(schema.task.id, schema.taskDependency.dependsOnId))
+        .innerJoin(
+          schema.task,
+          eq(schema.task.id, schema.taskDependency.dependsOnId),
+        )
         .innerJoin(dependent, eq(dependent.id, schema.taskDependency.taskId))
-        .where(and(inArray(dependent.projectId, projectIds), ne(dependent.status, "done"), ne(schema.task.status, "done")))
+        .where(
+          and(
+            inArray(dependent.projectId, projectIds),
+            ne(dependent.status, "done"),
+            ne(schema.task.status, "done"),
+          ),
+        )
     ).map((r) => r.id),
   );
   const phaseOrder = new Map(
-    (await conn.select({ projectId: schema.projectPhase.projectId, key: schema.projectPhase.key, sortOrder: schema.projectPhase.sortOrder }).from(schema.projectPhase).where(inArray(schema.projectPhase.projectId, projectIds))).map((p) => [`${p.projectId}:${p.key}`, p.sortOrder]),
+    (
+      await conn
+        .select({
+          projectId: schema.projectPhase.projectId,
+          key: schema.projectPhase.key,
+          sortOrder: schema.projectPhase.sortOrder,
+        })
+        .from(schema.projectPhase)
+        .where(inArray(schema.projectPhase.projectId, projectIds))
+    ).map((p) => [`${p.projectId}:${p.key}`, p.sortOrder]),
   );
-  const dates = outsider ? [] : await conn.select().from(schema.keyDate).where(and(inArray(schema.keyDate.projectId, projectIds), eq(schema.keyDate.done, false), sql`${schema.keyDate.date} >= ${today}`));
+  const dates = outsider
+    ? []
+    : await conn
+        .select()
+        .from(schema.keyDate)
+        .where(
+          and(
+            inArray(schema.keyDate.projectId, projectIds),
+            eq(schema.keyDate.done, false),
+            sql`${schema.keyDate.date} >= ${today}`,
+          ),
+        );
   for (const id of projectIds) {
     const mine = open.filter((t) => t.projectId === id);
-    const na = nextAction(mine.map((t) => ({ ...t, status: t.status as TaskStatus, phaseOrder: phaseOrder.get(`${id}:${t.phaseKey}`) ?? 0, blockedByDeps: held.has(t.id) })));
-    const kd = nextKeyDate(dates.filter((d) => d.projectId === id), today);
+    const na = nextAction(
+      mine.map((t) => ({
+        ...t,
+        status: t.status as TaskStatus,
+        phaseOrder: phaseOrder.get(`${id}:${t.phaseKey}`) ?? 0,
+        blockedByDeps: held.has(t.id),
+      })),
+    );
+    const kd = nextKeyDate(
+      dates.filter((d) => d.projectId === id),
+      today,
+    );
     out.set(id, {
-      nextAction: na ? { id: na.id, title: na.title, assigneeName: na.assigneeName, dueOn: na.dueOn } : null,
+      nextAction: na
+        ? {
+            id: na.id,
+            title: na.title,
+            assigneeName: na.assigneeName,
+            dueOn: na.dueOn,
+          }
+        : null,
       blocked: mine.filter((t) => t.status === "blocked").length,
       overdue: mine.filter((t) => t.dueOn && t.dueOn < today).length,
-      nextKeyDate: kd ? { label: keyDateLabel(kd.kind, kd.label), date: kd.date } : null,
+      nextKeyDate: kd
+        ? { label: keyDateLabel(kd.kind, kd.label), date: kd.date }
+        : null,
       expired: 0,
       coiFlags: [],
       ordersInForce: 0,
@@ -200,7 +338,12 @@ async function loadCardFacts(conn: DbOrTx, projectIds: string[], outsider: strin
 }
 
 /** Expiries, COI flags, orders in force and open violations for the internal team's cards (money expiries only with financial access). */
-async function addRiskFacts(conn: DbOrTx, ids: string[], fin: Set<string>, facts: Map<string, CardFacts>) {
+async function addRiskFacts(
+  conn: DbOrTx,
+  ids: string[],
+  fin: Set<string>,
+  facts: Map<string, CardFacts>,
+) {
   const today = todayET();
   const [expired, coi, risk] = await Promise.all([
     expiredCounts(conn, ids, today, (id) => fin.has(id)),
@@ -211,13 +354,30 @@ async function addRiskFacts(conn: DbOrTx, ids: string[], fin: Set<string>, facts
         open: sql<number>`count(*)::int`,
       })
       .from(schema.violationCase)
-      .where(and(inArray(schema.violationCase.projectId, ids), notInArray(schema.violationCase.stage, ["dismissed", "paid", "resolved"])))
+      .where(
+        and(
+          inArray(schema.violationCase.projectId, ids),
+          notInArray(schema.violationCase.stage, [
+            "dismissed",
+            "paid",
+            "resolved",
+          ]),
+        ),
+      )
       .groupBy(schema.violationCase.projectId),
   ]);
   const orders = await conn
-    .select({ projectId: schema.recordItem.projectId, n: sql<number>`count(*)::int` })
+    .select({
+      projectId: schema.recordItem.projectId,
+      n: sql<number>`count(*)::int`,
+    })
     .from(schema.recordItem)
-    .where(and(inArray(schema.recordItem.projectId, ids), eq(schema.recordItem.critical, true)))
+    .where(
+      and(
+        inArray(schema.recordItem.projectId, ids),
+        eq(schema.recordItem.critical, true),
+      ),
+    )
     .groupBy(schema.recordItem.projectId);
   const slip = await slippageFor(conn, ids, today);
   for (const id of ids) {
@@ -231,11 +391,23 @@ async function addRiskFacts(conn: DbOrTx, ids: string[], fin: Set<string>, facts
   }
 }
 
-async function loadTaskCounts(conn: DbOrTx, projectIds: string[], onlyAssignee: string | null = null) {
-  const out = new Map<string, Record<string, { total: number; done: number }>>();
+async function loadTaskCounts(
+  conn: DbOrTx,
+  projectIds: string[],
+  onlyAssignee: string | null = null,
+) {
+  const out = new Map<
+    string,
+    Record<string, { total: number; done: number }>
+  >();
   if (projectIds.length === 0) return out;
   // Outside collaborators only count the tasks they can see (their own and those shared with them).
-  const scope = onlyAssignee ? and(inArray(schema.task.projectId, projectIds), visibleToOutsider(onlyAssignee)) : inArray(schema.task.projectId, projectIds);
+  const scope = onlyAssignee
+    ? and(
+        inArray(schema.task.projectId, projectIds),
+        visibleToOutsider(onlyAssignee),
+      )
+    : inArray(schema.task.projectId, projectIds);
   const rows = await conn
     .select({
       projectId: schema.task.projectId,
@@ -255,28 +427,53 @@ async function loadTaskCounts(conn: DbOrTx, projectIds: string[], onlyAssignee: 
 }
 
 /** Hero photo per project: the pinned one, else the newest. */
-export async function loadHeroes(conn: DbOrTx, projects: { id: string; heroPhotoId: string | null }[]) {
+export async function loadHeroes(
+  conn: DbOrTx,
+  projects: { id: string; heroPhotoId: string | null }[],
+) {
   const out = new Map<string, { id: string; width: number; height: number }>();
   if (projects.length === 0) return out;
   const ids = projects.map((p) => p.id);
-  const pinnedIds = projects.map((p) => p.heroPhotoId).filter((x): x is string => !!x);
+  const pinnedIds = projects
+    .map((p) => p.heroPhotoId)
+    .filter((x): x is string => !!x);
   const pinned = pinnedIds.length
     ? await conn
-        .select({ id: schema.projectPhoto.id, projectId: schema.projectPhoto.projectId, width: schema.projectPhoto.width, height: schema.projectPhoto.height })
+        .select({
+          id: schema.projectPhoto.id,
+          projectId: schema.projectPhoto.projectId,
+          width: schema.projectPhoto.width,
+          height: schema.projectPhoto.height,
+        })
         .from(schema.projectPhoto)
         .where(inArray(schema.projectPhoto.id, pinnedIds))
     : [];
-  for (const p of pinned) out.set(p.projectId, { id: p.id, width: p.width, height: p.height });
-  const newest = await conn.execute<{ id: string; project_id: string; width: number; height: number }>(sql`
+  for (const p of pinned)
+    out.set(p.projectId, { id: p.id, width: p.width, height: p.height });
+  const newest = await conn.execute<{
+    id: string;
+    project_id: string;
+    width: number;
+    height: number;
+  }>(sql`
     select distinct on (project_id) id, project_id, width, height
     from project_photo
-    where project_id in (${sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `)})
+    where project_id in (${sql.join(
+      ids.map((i) => sql`${i}::uuid`),
+      sql`, `,
+    )})
     order by project_id, created_at desc, id desc`);
-  for (const r of newest.rows) if (!out.has(r.project_id)) out.set(r.project_id, { id: r.id, width: r.width, height: r.height });
+  for (const r of newest.rows)
+    if (!out.has(r.project_id))
+      out.set(r.project_id, { id: r.id, width: r.width, height: r.height });
   return out;
 }
 
-async function membershipsOf(conn: DbOrTx, userId: string, projectIds: string[]) {
+async function membershipsOf(
+  conn: DbOrTx,
+  userId: string,
+  projectIds: string[],
+) {
   const out = new Map<string, Membership>();
   if (projectIds.length === 0) return out;
   const rows = await conn
@@ -288,60 +485,115 @@ async function membershipsOf(conn: DbOrTx, userId: string, projectIds: string[])
       canApprove: schema.projectMember.canApprove,
     })
     .from(schema.projectMember)
-    .where(and(eq(schema.projectMember.userId, userId), inArray(schema.projectMember.projectId, projectIds)));
+    .where(
+      and(
+        eq(schema.projectMember.userId, userId),
+        inArray(schema.projectMember.projectId, projectIds),
+      ),
+    );
   for (const r of rows) out.set(r.projectId, r);
   return out;
 }
 
-
 const conflict = () =>
   new TRPCError({
     code: "CONFLICT",
-    message: "Someone else changed this project while you were editing. Your changes weren't saved; reload to see theirs, then try again.",
+    message:
+      "Someone else changed this project while you were editing. Your changes weren't saved; reload to see theirs, then try again.",
   });
 
 /** Optimistic lock: bump the version, or tell the user someone else saved first. */
-async function bumpVersion(tx: DbOrTx, projectId: string, expected: number | null, set: Partial<typeof schema.project.$inferInsert> = {}) {
-  const where = expected === null ? eq(schema.project.id, projectId) : and(eq(schema.project.id, projectId), eq(schema.project.version, expected));
+async function bumpVersion(
+  tx: DbOrTx,
+  projectId: string,
+  expected: number | null,
+  set: Partial<typeof schema.project.$inferInsert> = {},
+) {
+  const where =
+    expected === null
+      ? eq(schema.project.id, projectId)
+      : and(
+          eq(schema.project.id, projectId),
+          eq(schema.project.version, expected),
+        );
   const updated = await tx
     .update(schema.project)
-    .set({ ...set, version: sql`${schema.project.version} + 1`, updatedAt: new Date() })
+    .set({
+      ...set,
+      version: sql`${schema.project.version} + 1`,
+      updatedAt: new Date(),
+    })
     .where(where)
     .returning({ version: schema.project.version });
   if (updated.length === 0) throw conflict();
   return updated[0]!.version;
 }
 
-async function savePhases(tx: DbOrTx, projectId: string, before: PhaseState[], after: PhaseState[]) {
+async function savePhases(
+  tx: DbOrTx,
+  projectId: string,
+  before: PhaseState[],
+  after: PhaseState[],
+) {
   for (const p of after) {
     const b = before.find((x) => x.key === p.key);
-    if (b && b.status === p.status && b.startedOn === p.startedOn && b.completedOn === p.completedOn) continue;
+    if (
+      b &&
+      b.status === p.status &&
+      b.startedOn === p.startedOn &&
+      b.completedOn === p.completedOn
+    )
+      continue;
     await tx
       .update(schema.projectPhase)
-      .set({ status: p.status, startedOn: p.startedOn, completedOn: p.completedOn })
-      .where(and(eq(schema.projectPhase.projectId, projectId), eq(schema.projectPhase.key, p.key)));
+      .set({
+        status: p.status,
+        startedOn: p.startedOn,
+        completedOn: p.completedOn,
+      })
+      .where(
+        and(
+          eq(schema.projectPhase.projectId, projectId),
+          eq(schema.projectPhase.key, p.key),
+        ),
+      );
   }
 }
 
 export const companiesRouter = router({
   list: protectedProcedure.query(({ ctx }) =>
     ctx.db
-      .select({ id: schema.company.id, name: schema.company.name, shortName: schema.company.shortName })
+      .select({
+        id: schema.company.id,
+        name: schema.company.name,
+        shortName: schema.company.shortName,
+      })
       .from(schema.company)
       .orderBy(asc(schema.company.sortOrder)),
   ),
 });
 
-async function visibleProjectIds(ctx: AuthedContext, includeArchived: boolean): Promise<string[]> {
-  const archived = includeArchived ? isNotNull(schema.project.archivedAt) : isNull(schema.project.archivedAt);
+async function visibleProjectIds(
+  ctx: AuthedContext,
+  includeArchived: boolean,
+): Promise<string[]> {
+  const archived = includeArchived
+    ? isNotNull(schema.project.archivedAt)
+    : isNull(schema.project.archivedAt);
   if (canGlobal(ctx.actor, "projects.viewAll")) {
-    const rows = await ctx.db.select({ id: schema.project.id }).from(schema.project).where(archived);
+    const rows = await ctx.db
+      .select({ id: schema.project.id })
+      .from(schema.project)
+      .where(archived);
     return rows.map((r) => r.id);
   }
   const rows = await ctx.db
     .select({ id: schema.project.id })
     .from(schema.project)
-    .innerJoin(schema.projectMember, eq(schema.projectMember.projectId, schema.project.id))
+    .innerJoin(
+      schema.projectMember,
+      eq(schema.projectMember.projectId, schema.project.id),
+    )
     .where(and(archived, eq(schema.projectMember.userId, ctx.actor.userId)));
   return rows.map((r) => r.id);
 }
@@ -353,67 +605,104 @@ export const projectsRouter = router({
    * has financial visibility on that project; team membership only for the
    * internal team (outside collaborators never see who else is on what).
    */
-  list: protectedProcedure.input(z.object({ archived: z.boolean().default(false) }).optional()).query(async ({ ctx, input }) => {
-    const ids = await visibleProjectIds(ctx, input?.archived ?? false);
-    if (ids.length === 0) return { projects: [], people: [] };
-    const rows = await ctx.db
-      .select({
-        id: schema.project.id,
-        name: schema.project.name,
-        address: schema.project.address,
-        borough: schema.project.borough,
-        bbl: schema.project.bbl,
-        type: schema.project.type,
-        status: schema.project.status,
-        companyId: schema.project.companyId,
-        companyName: schema.company.name,
-        companyShort: schema.company.shortName,
-        units: schema.project.units,
-        sellableSf: schema.project.sellableSf,
-        latitude: schema.project.latitude,
-        longitude: schema.project.longitude,
-        heroPhotoId: schema.project.heroPhotoId,
-        archivedAt: schema.project.archivedAt,
-        createdAt: schema.project.createdAt,
-      })
-      .from(schema.project)
-      .innerJoin(schema.company, eq(schema.company.id, schema.project.companyId))
-      .where(inArray(schema.project.id, ids))
-      .orderBy(asc(schema.project.name));
+  list: protectedProcedure
+    .input(z.object({ archived: z.boolean().default(false) }).optional())
+    .query(async ({ ctx, input }) => {
+      const ids = await visibleProjectIds(ctx, input?.archived ?? false);
+      if (ids.length === 0) return { projects: [], people: [] };
+      const rows = await ctx.db
+        .select({
+          id: schema.project.id,
+          name: schema.project.name,
+          address: schema.project.address,
+          borough: schema.project.borough,
+          bbl: schema.project.bbl,
+          type: schema.project.type,
+          status: schema.project.status,
+          companyId: schema.project.companyId,
+          companyName: schema.company.name,
+          companyShort: schema.company.shortName,
+          units: schema.project.units,
+          sellableSf: schema.project.sellableSf,
+          latitude: schema.project.latitude,
+          longitude: schema.project.longitude,
+          heroPhotoId: schema.project.heroPhotoId,
+          archivedAt: schema.project.archivedAt,
+          createdAt: schema.project.createdAt,
+        })
+        .from(schema.project)
+        .innerJoin(
+          schema.company,
+          eq(schema.company.id, schema.project.companyId),
+        )
+        .where(inArray(schema.project.id, ids))
+        .orderBy(asc(schema.project.name));
 
-    const outsider = !isInternalRole(ctx.actor.role) ? ctx.actor.userId : null;
-    // Outside collaborators see a project's photos only when its Photos folder is shared with them.
-    const photoOk = outsider ? await projectsWithSharedPhotos(ctx.db, outsider, ids) : null;
-    const [phases, heroes, mine, counts, facts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, photoOk ? rows.filter((r) => photoOk.has(r.id)) : rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, outsider), loadCardFacts(ctx.db, ids, outsider)]);
-    const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
-    // Computed: once a project has a budget or unit schedule, its card follows them.
-    const headlines = await cardHeadlines(ctx.db, finIds);
-    if (!outsider) await addRiskFacts(ctx.db, ids, new Set(finIds), facts);
+      const outsider = !isInternalRole(ctx.actor.role)
+        ? ctx.actor.userId
+        : null;
+      // Outside collaborators see a project's photos only when its Photos folder is shared with them.
+      const photoOk = outsider
+        ? await projectsWithSharedPhotos(ctx.db, outsider, ids)
+        : null;
+      const [phases, heroes, mine, counts, facts] = await Promise.all([
+        loadPhases(ctx.db, ids),
+        loadHeroes(
+          ctx.db,
+          photoOk ? rows.filter((r) => photoOk.has(r.id)) : rows,
+        ),
+        membershipsOf(ctx.db, ctx.actor.userId, ids),
+        loadTaskCounts(ctx.db, ids, outsider),
+        loadCardFacts(ctx.db, ids, outsider),
+      ]);
+      const finIds = ids.filter((id) =>
+        canProject(ctx.actor, mine.get(id) ?? null, "financials.view"),
+      );
+      // Computed: once a project has a budget or unit schedule, its card follows them.
+      const headlines = await cardHeadlines(ctx.db, finIds);
+      if (!outsider) await addRiskFacts(ctx.db, ids, new Set(finIds), facts);
 
-    const internal = isInternalRole(ctx.actor.role);
-    const members = internal
-      ? await ctx.db
-          .select({ projectId: schema.projectMember.projectId, userId: schema.user.id, name: schema.user.name })
-          .from(schema.projectMember)
-          .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-          .where(inArray(schema.projectMember.projectId, ids))
-      : [];
-    const people = new Map<string, string>();
-    for (const m of members) people.set(m.userId, m.name);
+      const internal = isInternalRole(ctx.actor.role);
+      const members = internal
+        ? await ctx.db
+            .select({
+              projectId: schema.projectMember.projectId,
+              userId: schema.user.id,
+              name: schema.user.name,
+            })
+            .from(schema.projectMember)
+            .innerJoin(
+              schema.user,
+              eq(schema.user.id, schema.projectMember.userId),
+            )
+            .where(inArray(schema.projectMember.projectId, ids))
+        : [];
+      const people = new Map<string, string>();
+      for (const m of members) people.set(m.userId, m.name);
 
-    return {
-      projects: rows.map((p) => ({
-        ...p,
-        phases: phases.get(p.id) ?? [],
-        taskCounts: counts.get(p.id) ?? {},
-        facts: facts.get(p.id)!,
-        hero: heroes.get(p.id) ?? null,
-        memberIds: members.filter((m) => m.projectId === p.id).map((m) => m.userId),
-        headline: finIds.includes(p.id) ? (headlines.get(p.id) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
-      })),
-      people: [...people].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
-    };
-  }),
+      return {
+        projects: rows.map((p) => ({
+          ...p,
+          phases: phases.get(p.id) ?? [],
+          taskCounts: counts.get(p.id) ?? {},
+          facts: facts.get(p.id)!,
+          hero: heroes.get(p.id) ?? null,
+          memberIds: members
+            .filter((m) => m.projectId === p.id)
+            .map((m) => m.userId),
+          headline: finIds.includes(p.id)
+            ? (headlines.get(p.id) ?? {
+                purchasePriceCents: null,
+                totalBudgetCents: null,
+                projectedSelloutCents: null,
+              })
+            : null,
+        })),
+        people: [...people]
+          .map(([id, name]) => ({ id, name }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      };
+    }),
 
   get: projectProcedure().query(async ({ ctx, input }) => {
     const [p] = await ctx.db
@@ -445,14 +734,24 @@ export const projectsRouter = router({
         version: schema.project.version,
       })
       .from(schema.project)
-      .innerJoin(schema.company, eq(schema.company.id, schema.project.companyId))
+      .innerJoin(
+        schema.company,
+        eq(schema.company.id, schema.project.companyId),
+      )
       .where(eq(schema.project.id, input.projectId));
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
     const outsider = ctx.project.can("task.viewAll") ? null : ctx.actor.userId;
     const photosOk = await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id);
-    const [phases, heroes, counts, facts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, photosOk ? [p] : []), loadTaskCounts(ctx.db, [p.id], outsider), loadCardFacts(ctx.db, [p.id], outsider)]);
+    const [phases, heroes, counts, facts] = await Promise.all([
+      loadPhases(ctx.db, [p.id]),
+      loadHeroes(ctx.db, photosOk ? [p] : []),
+      loadTaskCounts(ctx.db, [p.id], outsider),
+      loadCardFacts(ctx.db, [p.id], outsider),
+    ]);
     const canFin = ctx.project.can("financials.view");
-    const h = canFin ? (await cardHeadlines(ctx.db, [p.id])).get(p.id) : undefined;
+    const h = canFin
+      ? (await cardHeadlines(ctx.db, [p.id])).get(p.id)
+      : undefined;
     return {
       ...p,
       phases: phases.get(p.id) ?? [],
@@ -460,9 +759,17 @@ export const projectsRouter = router({
       facts: facts.get(p.id)!,
       hero: heroes.get(p.id) ?? null,
       heroPhotoId: photosOk ? p.heroPhotoId : null,
-      headline: canFin ? (h ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
+      headline: canFin
+        ? (h ?? {
+            purchasePriceCents: null,
+            totalBudgetCents: null,
+            projectedSelloutCents: null,
+          })
+        : null,
       access: {
-        projectRole: ctx.project.membership?.projectRole ?? (ctx.actor.role === "owner" ? "Owner" : null),
+        projectRole:
+          ctx.project.membership?.projectRole ??
+          (ctx.actor.role === "owner" ? "Owner" : null),
         canViewFinancials: canFin,
         canEditFinancials: ctx.project.can("financials.edit"),
         canEditChecklist: ctx.project.can("checklist.edit"),
@@ -473,7 +780,9 @@ export const projectsRouter = router({
         canManagePhotos: ctx.project.can("photos.manage"),
         canViewActivity: ctx.project.can("activity.view"),
         canSeeAllTasks: ctx.project.can("task.viewAll"),
-        canSaveTemplate: ctx.project.can("checklist.edit") && (ctx.actor.role === "owner" || ctx.actor.role === "admin"),
+        canSaveTemplate:
+          ctx.project.can("checklist.edit") &&
+          (ctx.actor.role === "owner" || ctx.actor.role === "admin"),
       },
     };
   }),
@@ -484,15 +793,25 @@ export const projectsRouter = router({
    * fields from the answer.
    */
   lookupLot: globalProcedure("project.create")
-    .input(z.object({ bbl: bblSchema.optional(), address: z.string().trim().max(200).optional(), borough: z.enum(BOROUGHS) }))
+    .input(
+      z.object({
+        bbl: bblSchema.optional(),
+        address: z.string().trim().max(200).optional(),
+        borough: z.enum(BOROUGHS),
+      }),
+    )
     .mutation(async ({ input }) => {
       let bbl = input.bbl ?? null;
       if (!bbl && input.address && input.address.length >= 3) {
         const geo = await tryGeocode(input.address, input.borough);
-        bbl = geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough]) ? geo.bbl : null;
+        bbl =
+          geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough])
+            ? geo.bbl
+            : null;
       }
       if (!bbl) return { status: "no_bbl" as const };
-      if (!bbl.startsWith(BOROUGH_CODE[input.borough])) return { status: "wrong_borough" as const, bbl };
+      if (!bbl.startsWith(BOROUGH_CODE[input.borough]))
+        return { status: "wrong_borough" as const, bbl };
       return { ...(await lookupLot(bbl)), bbl };
     }),
 
@@ -501,14 +820,33 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const geo = await tryGeocode(input.address, input.borough);
       // A BBL from the city's address data fills in when none was typed, if it's in the right borough.
-      const bbl = input.bbl ?? (geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough]) ? geo.bbl : null);
+      const bbl =
+        input.bbl ??
+        (geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough])
+          ? geo.bbl
+          : null);
       const today = todayET();
       const flags = defaultFlags(ctx.actor.role);
       const toggles = [...new Set(input.toggles)];
-      for (const k of toggles) if (!isToggleKey(k)) throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown toggle: ${k}` });
-      const tpl = input.templateId ? await loadTemplate(ctx.db, input.templateId) : await defaultTemplateFor(ctx.db, input.type);
-      if (!tpl || tpl.row.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
-      if (tpl.row.projectType !== input.type) throw new TRPCError({ code: "BAD_REQUEST", message: "That template is for a different project type." });
+      for (const k of toggles)
+        if (!isToggleKey(k))
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Unknown toggle: ${k}`,
+          });
+      const tpl = input.templateId
+        ? await loadTemplate(ctx.db, input.templateId)
+        : await defaultTemplateFor(ctx.db, input.type);
+      if (!tpl || tpl.row.archivedAt)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Template not found",
+        });
+      if (tpl.row.projectType !== input.type)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That template is for a different project type.",
+        });
       const created = await ctx.db.transaction(async (tx) => {
         const [p] = await tx
           .insert(schema.project)
@@ -526,9 +864,24 @@ export const projectsRouter = router({
           })
           .returning({ id: schema.project.id });
         const id = p!.id;
-        const built = await buildProjectChecklist(tx, { projectId: id, type: input.type, template: tpl, chosenToggles: toggles, today, userId: ctx.viewer.id });
+        const built = await buildProjectChecklist(tx, {
+          projectId: id,
+          type: input.type,
+          template: tpl,
+          chosenToggles: toggles,
+          today,
+          userId: ctx.viewer.id,
+        });
         // The creator is always a member (admins need membership to see it).
-        await tx.insert(schema.projectMember).values({ projectId: id, userId: ctx.viewer.id, projectRole: "PM", ...flags, addedById: ctx.viewer.id });
+        await tx
+          .insert(schema.projectMember)
+          .values({
+            projectId: id,
+            userId: ctx.viewer.id,
+            projectRole: "PM",
+            ...flags,
+            addedById: ctx.viewer.id,
+          });
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
           actorName: ctx.viewer.name,
@@ -537,12 +890,28 @@ export const projectsRouter = router({
           entityId: id,
           projectId: id,
           summary: `${ctx.viewer.name} created project ${input.name}`,
-          data: { name: input.name, address: input.address, type: input.type, bbl, geocoded: !!geo, template: tpl.row.name, templateVersion: tpl.row.version, toggles, ...built },
+          data: {
+            name: input.name,
+            address: input.address,
+            type: input.type,
+            bbl,
+            geocoded: !!geo,
+            template: tpl.row.name,
+            templateVersion: tpl.row.version,
+            toggles,
+            ...built,
+          },
           ip: ctx.ip,
         });
         const h = input.headline;
-        if (h && Object.values(h).some((v) => v != null) && (ctx.actor.role === "owner" || flags.canViewFinancials)) {
-          await tx.insert(schema.projectHeadline).values({ projectId: id, ...h });
+        if (
+          h &&
+          Object.values(h).some((v) => v != null) &&
+          (ctx.actor.role === "owner" || flags.canViewFinancials)
+        ) {
+          await tx
+            .insert(schema.projectHeadline)
+            .values({ projectId: id, ...h });
           await recordAudit(tx, {
             actorId: ctx.viewer.id,
             actorName: ctx.viewer.name,
@@ -565,14 +934,25 @@ export const projectsRouter = router({
   update: projectProcedure("project.edit")
     .input(updateInput)
     .mutation(async ({ ctx, input }) => {
-      const [before] = await ctx.db.select().from(schema.project).where(eq(schema.project.id, input.projectId));
+      const [before] = await ctx.db
+        .select()
+        .from(schema.project)
+        .where(eq(schema.project.id, input.projectId));
       if (!before) throw new TRPCError({ code: "NOT_FOUND" });
       if (before.version !== input.version) throw conflict();
-      const moved = before.address !== input.address || before.borough !== input.borough;
+      const moved =
+        before.address !== input.address || before.borough !== input.borough;
       const needBbl = !input.bbl;
-      const geo = moved || needBbl ? await tryGeocode(input.address, input.borough) : null;
+      const geo =
+        moved || needBbl
+          ? await tryGeocode(input.address, input.borough)
+          : null;
       // As on create: a blank BBL is filled from the city's address data when it's in the right borough.
-      const bbl = input.bbl ?? (geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough]) ? geo.bbl : null);
+      const bbl =
+        input.bbl ??
+        (geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough])
+          ? geo.bbl
+          : null);
       const changes = {
         name: input.name,
         address: input.address,
@@ -581,18 +961,34 @@ export const projectsRouter = router({
         companyId: input.companyId,
         status: input.status,
         ...input.facts,
-        ...(moved ? { latitude: geo?.latitude ?? null, longitude: geo?.longitude ?? null } : {}),
+        ...(moved
+          ? {
+              latitude: geo?.latitude ?? null,
+              longitude: geo?.longitude ?? null,
+            }
+          : {}),
       };
       let lotChanged = false;
       const saved = await ctx.db.transaction(async (tx) => {
-        const version = await bumpVersion(tx, input.projectId, input.version, changes);
+        const version = await bumpVersion(
+          tx,
+          input.projectId,
+          input.version,
+          changes,
+        );
         // A different lot (or street address, which drives the DOB BIS and complaint lookups): start the records watch fresh.
-        if (before.bbl !== bbl || before.address.trim().toUpperCase() !== input.address.trim().toUpperCase()) {
+        if (
+          before.bbl !== bbl ||
+          before.address.trim().toUpperCase() !==
+            input.address.trim().toUpperCase()
+        ) {
           await resetProjectRecords(tx, input.projectId);
           lotChanged = !!bbl;
         }
         const changed = Object.fromEntries(
-          Object.entries(changes).filter(([k, v]) => (before as Record<string, unknown>)[k] !== v),
+          Object.entries(changes).filter(
+            ([k, v]) => (before as Record<string, unknown>)[k] !== v,
+          ),
         );
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
@@ -615,22 +1011,36 @@ export const projectsRouter = router({
   /** Headline numbers (gated): owner, or an admin with financial visibility. */
   /** Move the project to a phase (forwards or back). */
   setPhase: projectProcedure("project.edit")
-    .input(z.object({ key: z.string().min(1).max(60), version: z.number().int().min(1) }))
+    .input(
+      z.object({
+        key: z.string().min(1).max(60),
+        version: z.number().int().min(1),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.transaction(async (tx) => {
         const version = await bumpVersion(tx, input.projectId, input.version);
-        const before = (await loadPhases(tx, [input.projectId])).get(input.projectId) ?? [];
+        const before =
+          (await loadPhases(tx, [input.projectId])).get(input.projectId) ?? [];
         let after: PhaseState[];
         try {
           after = setCurrentPhase(before, input.key, todayET());
         } catch (e) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (e as Error).message,
+          });
         }
         await savePhases(tx, input.projectId, before, after);
         // A phase that just started gives its tasks their due dates.
         await reschedule(tx, input.projectId);
         // Module E: entering Pre-Construction locks the schedule baseline (once), on the dates just set.
-        await lockBaselineOnPreConstruction(tx, input.projectId, after.find((p) => p.status === "active")?.key ?? null, ctx.viewer.id);
+        await lockBaselineOnPreConstruction(
+          tx,
+          input.projectId,
+          after.find((p) => p.status === "active")?.key ?? null,
+          ctx.viewer.id,
+        );
         const from = before.find((p) => p.status === "active");
         const to = after.find((p) => p.key === input.key)!;
         await recordAudit(tx, {
@@ -649,20 +1059,35 @@ export const projectsRouter = router({
     }),
 
   skipPhase: projectProcedure("project.edit")
-    .input(z.object({ key: z.string().min(1).max(60), skipped: z.boolean(), version: z.number().int().min(1) }))
+    .input(
+      z.object({
+        key: z.string().min(1).max(60),
+        skipped: z.boolean(),
+        version: z.number().int().min(1),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.transaction(async (tx) => {
         const version = await bumpVersion(tx, input.projectId, input.version);
-        const before = (await loadPhases(tx, [input.projectId])).get(input.projectId) ?? [];
+        const before =
+          (await loadPhases(tx, [input.projectId])).get(input.projectId) ?? [];
         let after: PhaseState[];
         try {
           after = setPhaseSkipped(before, input.key, input.skipped);
         } catch (e) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (e as Error).message,
+          });
         }
         await savePhases(tx, input.projectId, before, after);
         // Skipping can make Pre-Construction the current phase: the baseline locks then too.
-        await lockBaselineOnPreConstruction(tx, input.projectId, after.find((p) => p.status === "active")?.key ?? null, ctx.viewer.id);
+        await lockBaselineOnPreConstruction(
+          tx,
+          input.projectId,
+          after.find((p) => p.status === "active")?.key ?? null,
+          ctx.viewer.id,
+        );
         const ph = after.find((p) => p.key === input.key)!;
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
@@ -684,8 +1109,13 @@ export const projectsRouter = router({
     .input(z.object({ archived: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction(async (tx) => {
-        const [p] = await tx.select({ name: schema.project.name }).from(schema.project).where(eq(schema.project.id, input.projectId));
-        await bumpVersion(tx, input.projectId, null, { archivedAt: input.archived ? new Date() : null });
+        const [p] = await tx
+          .select({ name: schema.project.name })
+          .from(schema.project)
+          .where(eq(schema.project.id, input.projectId));
+        await bumpVersion(tx, input.projectId, null, {
+          archivedAt: input.archived ? new Date() : null,
+        });
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
           actorName: ctx.viewer.name,
@@ -702,19 +1132,55 @@ export const projectsRouter = router({
     }),
 
   /** Module I: the address that emails into this project (null while the feature is off). */
-  inboundAddress: projectProcedure("activity.view").query(async ({ ctx, input }) => ({ address: await inboundAddress(ctx.db, input.projectId) })),
+  inboundAddress: projectProcedure("activity.view").query(
+    async ({ ctx, input }) => ({
+      address: await inboundAddress(ctx.db, input.projectId),
+      canChange: ctx.project.can("project.edit"),
+    }),
+  ),
+
+  /** A new inbound address for the project (the old one stops working), e.g. after someone leaves the team. */
+  newInboundAddress: projectProcedure("project.edit").mutation(
+    async ({ ctx, input }) => {
+      const address = await rotateInboundAddress(ctx.db, input.projectId);
+      if (!address)
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Email into projects isn't set up.",
+        });
+      await recordAudit(ctx.db, {
+        actorId: ctx.viewer.id,
+        actorName: ctx.viewer.name,
+        action: "update",
+        entityType: "project",
+        entityId: input.projectId,
+        projectId: input.projectId,
+        summary: `${ctx.viewer.name} replaced the project's email-in address`,
+        ip: ctx.ip,
+      });
+      return { address };
+    },
+  ),
 
   /**
    * The project's activity feed, newest first. Entries about money are left
    * out for anyone without financial visibility on this project.
    */
   activity: projectProcedure("activity.view")
-    .input(z.object({ cursor: z.number().int().positive().nullish(), limit: z.number().int().min(1).max(100).default(40) }))
+    .input(
+      z.object({
+        cursor: z.number().int().positive().nullish(),
+        limit: z.number().int().min(1).max(100).default(40),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       const canFin = ctx.project.can("financials.view");
       const filters = [eq(schema.auditLog.projectId, input.projectId)];
       if (input.cursor) filters.push(lt(schema.auditLog.seq, input.cursor));
-      if (!canFin) filters.push(notInArray(schema.auditLog.entityType, [...FINANCIAL_ENTITY_TYPES]));
+      if (!canFin)
+        filters.push(
+          notInArray(schema.auditLog.entityType, [...FINANCIAL_ENTITY_TYPES]),
+        );
       const rows = await ctx.db
         .select({
           seq: schema.auditLog.seq,
@@ -729,9 +1195,15 @@ export const projectsRouter = router({
         .orderBy(desc(schema.auditLog.seq))
         .limit(input.limit + 1);
       // Belt and braces: never return a financial entry to someone without the flag.
-      const safe = canFin ? rows : rows.filter((r) => !isFinancialEntity(r.entityType));
+      const safe = canFin
+        ? rows
+        : rows.filter((r) => !isFinancialEntity(r.entityType));
       const items = safe.slice(0, input.limit);
-      return { items, nextCursor: rows.length > input.limit ? items[items.length - 1]!.seq : null };
+      return {
+        items,
+        nextCursor:
+          rows.length > input.limit ? items[items.length - 1]!.seq : null,
+      };
     }),
 });
 
@@ -769,7 +1241,13 @@ export const membersRouter = router({
       status: r.status,
       email: isExternal ? null : r.email,
       globalRole: showFlags ? r.globalRole : null,
-      flags: showFlags ? { canViewFinancials: r.canViewFinancials, canEditChecklist: r.canEditChecklist, canApprove: r.canApprove } : null,
+      flags: showFlags
+        ? {
+            canViewFinancials: r.canViewFinancials,
+            canEditChecklist: r.canEditChecklist,
+            canApprove: r.canApprove,
+          }
+        : null,
     }));
   }),
 
@@ -778,19 +1256,50 @@ export const membersRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { projectId, userId, ...flags } = input;
       await ctx.db.transaction(async (tx) => {
-        const [target] = await tx.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role, status: schema.user.status }).from(schema.user).where(eq(schema.user.id, userId));
-        if (!target || target.status !== "active") throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
-        if (target.role === "investor" && (flags.canEditChecklist || flags.canApprove)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Investors and lenders have a read-only portal." });
+        const [target] = await tx
+          .select({
+            id: schema.user.id,
+            name: schema.user.name,
+            role: schema.user.role,
+            status: schema.user.status,
+          })
+          .from(schema.user)
+          .where(eq(schema.user.id, userId));
+        if (!target || target.status !== "active")
+          throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+        if (
+          target.role === "investor" &&
+          (flags.canEditChecklist || flags.canApprove)
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Investors and lenders have a read-only portal.",
+          });
         }
         if (!isInternalRole(target.role) && flags.canEditChecklist) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Outside collaborators cannot edit checklists." });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Outside collaborators cannot edit checklists.",
+          });
         }
         const [before] = await tx
           .select()
           .from(schema.projectMember)
-          .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId)));
-        if (!canGrantFlags(ctx.actor, ctx.project.membership, flags, before ?? null, target.role)) {
+          .where(
+            and(
+              eq(schema.projectMember.projectId, projectId),
+              eq(schema.projectMember.userId, userId),
+            ),
+          );
+        if (
+          !canGrantFlags(
+            ctx.actor,
+            ctx.project.membership,
+            flags,
+            before ?? null,
+            target.role,
+          )
+        ) {
           throw new TRPCError({
             code: "FORBIDDEN",
             message:
@@ -803,15 +1312,38 @@ export const membersRouter = router({
           await tx
             .update(schema.projectMember)
             .set({ ...flags, updatedAt: new Date() })
-            .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId)));
+            .where(
+              and(
+                eq(schema.projectMember.projectId, projectId),
+                eq(schema.projectMember.userId, userId),
+              ),
+            );
           // Lost approve rights (or changed role): approvals waiting on them go to whoever should approve now.
-          if ((before.canApprove && !flags.canApprove) || before.projectRole !== flags.projectRole) await rerouteApprovals(tx, userId, ctx.viewer.id, projectId);
+          if (
+            (before.canApprove && !flags.canApprove) ||
+            before.projectRole !== flags.projectRole
+          )
+            await rerouteApprovals(tx, userId, ctx.viewer.id, projectId);
         } else {
-          await tx.insert(schema.projectMember).values({ projectId, userId, ...flags, addedById: ctx.viewer.id });
+          await tx
+            .insert(schema.projectMember)
+            .values({ projectId, userId, ...flags, addedById: ctx.viewer.id });
           // Module J: an investor or lender sees the project's photos from the start (the share can be removed on the Files tab).
           if (target.role === "investor") {
-            const [photos] = await tx.select({ id: schema.folder.id }).from(schema.folder).where(and(eq(schema.folder.projectId, projectId), eq(schema.folder.isPhotos, true)));
-            if (photos) await tx.insert(schema.folderShare).values({ folderId: photos.id, userId }).onConflictDoNothing();
+            const [photos] = await tx
+              .select({ id: schema.folder.id })
+              .from(schema.folder)
+              .where(
+                and(
+                  eq(schema.folder.projectId, projectId),
+                  eq(schema.folder.isPhotos, true),
+                ),
+              );
+            if (photos)
+              await tx
+                .insert(schema.folderShare)
+                .values({ folderId: photos.id, userId })
+                .onConflictDoNothing();
           }
         }
         await recordAudit(tx, {
@@ -826,7 +1358,12 @@ export const membersRouter = router({
             : `${ctx.viewer.name} added ${target.name} to the project as ${flags.projectRole}`,
           data: {
             before: before
-              ? { projectRole: before.projectRole, canViewFinancials: before.canViewFinancials, canEditChecklist: before.canEditChecklist, canApprove: before.canApprove }
+              ? {
+                  projectRole: before.projectRole,
+                  canViewFinancials: before.canViewFinancials,
+                  canEditChecklist: before.canEditChecklist,
+                  canApprove: before.canApprove,
+                }
               : null,
             after: flags,
           },
@@ -841,20 +1378,47 @@ export const membersRouter = router({
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction(async (tx) => {
         const [target] = await tx
-          .select({ role: schema.user.role, canViewFinancials: schema.projectMember.canViewFinancials })
+          .select({
+            role: schema.user.role,
+            canViewFinancials: schema.projectMember.canViewFinancials,
+          })
           .from(schema.projectMember)
-          .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-          .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)));
+          .innerJoin(
+            schema.user,
+            eq(schema.user.id, schema.projectMember.userId),
+          )
+          .where(
+            and(
+              eq(schema.projectMember.projectId, input.projectId),
+              eq(schema.projectMember.userId, input.userId),
+            ),
+          );
         if (!target) throw new TRPCError({ code: "NOT_FOUND" });
         if (!canRemoveMember(ctx.actor, ctx.project.membership, target)) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Only the owner can remove this person." });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the owner can remove this person.",
+          });
         }
         await tx
           .delete(schema.projectMember)
-          .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)));
+          .where(
+            and(
+              eq(schema.projectMember.projectId, input.projectId),
+              eq(schema.projectMember.userId, input.userId),
+            ),
+          );
         // Their shares, open assignments and pending approvals on this project go with them.
-        await releaseFromProject(tx, input.projectId, input.userId, ctx.viewer.id);
-        const [u] = await tx.select({ name: schema.user.name }).from(schema.user).where(eq(schema.user.id, input.userId));
+        await releaseFromProject(
+          tx,
+          input.projectId,
+          input.userId,
+          ctx.viewer.id,
+        );
+        const [u] = await tx
+          .select({ name: schema.user.name })
+          .from(schema.user)
+          .where(eq(schema.user.id, input.userId));
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
           actorName: ctx.viewer.name,
@@ -870,19 +1434,26 @@ export const membersRouter = router({
     }),
 
   /** Active users who could be added (for the add-member picker). */
-  candidates: projectProcedure("project.manageMembers").query(async ({ ctx, input }) => {
-    const current = ctx.db
-      .select({ id: schema.projectMember.userId })
-      .from(schema.projectMember)
-      .where(eq(schema.projectMember.projectId, input.projectId));
-    const rows = await ctx.db
-      .select({ id: schema.user.id, name: schema.user.name, email: schema.user.email, role: schema.user.role })
-      .from(schema.user)
-      .where(eq(schema.user.status, "active"))
-      .orderBy(asc(schema.user.name));
-    const taken = new Set((await current).map((r) => r.id));
-    return rows.filter((r) => !taken.has(r.id));
-  }),
+  candidates: projectProcedure("project.manageMembers").query(
+    async ({ ctx, input }) => {
+      const current = ctx.db
+        .select({ id: schema.projectMember.userId })
+        .from(schema.projectMember)
+        .where(eq(schema.projectMember.projectId, input.projectId));
+      const rows = await ctx.db
+        .select({
+          id: schema.user.id,
+          name: schema.user.name,
+          email: schema.user.email,
+          role: schema.user.role,
+        })
+        .from(schema.user)
+        .where(eq(schema.user.status, "active"))
+        .orderBy(asc(schema.user.name));
+      const taken = new Set((await current).map((r) => r.id));
+      return rows.filter((r) => !taken.has(r.id));
+    },
+  ),
 });
 
 export { PROJECT_ROLES };

@@ -10,11 +10,15 @@ import {
 import { safeFileName } from "@/core/images";
 import {
   emailAddressOf,
+  headerValues,
+  htmlToText,
   INBOX_FOLDER,
   inboundKeyFor,
   inboundKeyFromRecipient,
   MAX_INBOUND_ATTACHMENT_BYTES,
   MAX_INBOUND_ATTACHMENTS,
+  senderAuthenticated,
+  type InboundAttachment,
   type InboundMessage,
 } from "@/core/inbound";
 import { canProject, isInternalRole } from "@/core/permissions";
@@ -37,6 +41,56 @@ export function inboundEnabled(): boolean {
   return !!(e.INBOUND_EMAIL_DOMAIN && e.INBOUND_EMAIL_SECRET);
 }
 
+const isUniqueViolation = (e: unknown) =>
+  (e as { code?: string }).code === "23505" ||
+  (e as { cause?: { code?: string } }).cause?.code === "23505";
+
+/** Give the project a new random key (a fresh address); the old one stops working at once. */
+async function assignKey(
+  conn: DbOrTx,
+  p: { id: string; address: string; name: string },
+  onlyIfUnset: boolean,
+): Promise<string | null> {
+  for (let i = 0; i < 5; i++) {
+    const key = inboundKeyFor(p.address, p.name, randomBytes(4));
+    const set = await conn
+      .update(schema.project)
+      .set({ inboundKey: key })
+      .where(
+        onlyIfUnset
+          ? and(eq(schema.project.id, p.id), isNull(schema.project.inboundKey))
+          : eq(schema.project.id, p.id),
+      )
+      .returning({ key: schema.project.inboundKey })
+      .catch((e: unknown) => {
+        if (isUniqueViolation(e)) return null;
+        throw e;
+      });
+    if (set === null) continue; // key taken by another project: roll again
+    if (set.length) return set[0]!.key;
+    // Someone else set it first.
+    const [again] = await conn
+      .select({ key: schema.project.inboundKey })
+      .from(schema.project)
+      .where(eq(schema.project.id, p.id));
+    if (again?.key) return again.key;
+  }
+  return null;
+}
+
+async function projectForKey(conn: DbOrTx, projectId: string) {
+  const [p] = await conn
+    .select({
+      id: schema.project.id,
+      key: schema.project.inboundKey,
+      address: schema.project.address,
+      name: schema.project.name,
+    })
+    .from(schema.project)
+    .where(eq(schema.project.id, projectId));
+  return p ?? null;
+}
+
 /** A project's inbound address, creating its key on first use; null when the feature is off. */
 export async function inboundAddress(
   conn: DbOrTx,
@@ -44,58 +98,23 @@ export async function inboundAddress(
 ): Promise<string | null> {
   const domain = env().INBOUND_EMAIL_DOMAIN;
   if (!domain || !env().INBOUND_EMAIL_SECRET) return null;
-  const [p] = await conn
-    .select({
-      key: schema.project.inboundKey,
-      address: schema.project.address,
-      name: schema.project.name,
-    })
-    .from(schema.project)
-    .where(eq(schema.project.id, projectId));
+  const p = await projectForKey(conn, projectId);
   if (!p) return null;
-  if (p.key) return `${p.key}@${domain}`;
-  for (let i = 0; i < 5; i++) {
-    const key = inboundKeyFor(p.address, p.name, randomBytes(4));
-    const set = await conn
-      .update(schema.project)
-      .set({ inboundKey: key })
-      .where(
-        and(
-          eq(schema.project.id, projectId),
-          isNull(schema.project.inboundKey),
-        ),
-      )
-      .returning({ key: schema.project.inboundKey })
-      .catch((e: unknown) => {
-        if (
-          (e as { code?: string }).code === "23505" ||
-          (e as { cause?: { code?: string } }).cause?.code === "23505"
-        )
-          return null;
-        throw e;
-      });
-    if (set === null) continue; // key taken by another project: roll again
-    if (set.length) return `${set[0]!.key}@${domain}`;
-    // Someone else set it first.
-    const [again] = await conn
-      .select({ key: schema.project.inboundKey })
-      .from(schema.project)
-      .where(eq(schema.project.id, projectId));
-    if (again?.key) return `${again.key}@${domain}`;
-  }
-  return null;
+  const key = p.key ?? (await assignKey(conn, p, true));
+  return key ? `${key}@${domain}` : null;
 }
 
-/** Inbound messages that count toward today's email budget (accepted or not, the provider received them). */
-export async function inboundCountedToday(
+/** Replace a project's inbound address (e.g. after someone leaves the team); null when the feature is off. */
+export async function rotateInboundAddress(
   conn: DbOrTx,
-  today = quotaDay(),
-): Promise<number> {
-  const [row] = await conn
-    .select({ n: sql<number>`count(*)::int` })
-    .from(schema.inboundEmail)
-    .where(eq(schema.inboundEmail.quotaDay, today));
-  return row?.n ?? 0;
+  projectId: string,
+): Promise<string | null> {
+  const domain = env().INBOUND_EMAIL_DOMAIN;
+  if (!domain || !env().INBOUND_EMAIL_SECRET) return null;
+  const p = await projectForKey(conn, projectId);
+  if (!p) return null;
+  const key = await assignKey(conn, p, false);
+  return key ? `${key}@${domain}` : null;
 }
 
 export type InboundResult = {
@@ -188,6 +207,15 @@ async function route(
       to: target,
       senderId: u.id,
     };
+  // A From line proves nothing on its own: the receiving server must have verified it.
+  if (!senderAuthenticated(msg.authResults, from))
+    return {
+      reason:
+        "The sender's address couldn't be verified (no DMARC or DKIM pass).",
+      projectId: p.id,
+      to: target,
+      senderId: u.id,
+    };
   return {
     projectId: p.id,
     projectName: p.name,
@@ -195,6 +223,98 @@ async function route(
     to: target,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* The full message                                                    */
+/* ------------------------------------------------------------------ */
+
+type Fetcher = (msg: InboundMessage) => Promise<InboundMessage>;
+let fetcherForTests: Fetcher | null = null;
+/** Tests swap the provider call for a stub (null restores it). */
+export function setInboundFetcherForTests(f: Fetcher | null) {
+  fetcherForTests = f;
+}
+
+const RESEND_API = "https://api.resend.com";
+
+/**
+ * The provider's `email.received` webhook may carry only the message's
+ * metadata. Fetch the body, headers and attachments by the message id when
+ * they're missing (needs RESEND_API_KEY). Attachments come from their
+ * download links, each capped at the attachment limit.
+ */
+async function completeMessage(msg: InboundMessage): Promise<InboundMessage> {
+  if (fetcherForTests) return fetcherForTests(msg);
+  const key = env().RESEND_API_KEY;
+  const needsBody = !msg.hasBody || !msg.authResults;
+  const needsFiles = msg.attachments.some((a) => !a.content);
+  if (!key || (!needsBody && !needsFiles)) return msg;
+  const get = (path: string) =>
+    fetch(`${RESEND_API}${path}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+  let out = msg;
+  if (needsBody) {
+    const res = await get(
+      `/emails/receiving/${encodeURIComponent(msg.providerId)}`,
+    );
+    if (!res.ok)
+      throw new Error(`Couldn't fetch the received email (${res.status})`);
+    const d = (await res.json()) as Record<string, unknown>;
+    const text =
+      typeof d.text === "string"
+        ? d.text
+        : typeof d.html === "string"
+          ? htmlToText(d.html)
+          : out.text;
+    const auth =
+      headerValues(d.headers, "authentication-results").join("; ") ||
+      out.authResults;
+    const listed = Array.isArray(d.attachments)
+      ? (d.attachments as Record<string, unknown>[])
+      : [];
+    const attachments: InboundAttachment[] = out.attachments.map((a) => {
+      if (a.content || a.downloadUrl) return a;
+      const hit = listed.find((x) => x.filename === a.filename);
+      return {
+        ...a,
+        downloadUrl:
+          typeof hit?.download_url === "string" ? hit.download_url : null,
+      };
+    });
+    out = {
+      ...out,
+      text: text.slice(0, 200_000),
+      authResults: auth,
+      attachments,
+      hasBody: true,
+    };
+  }
+  const attachments: InboundAttachment[] = [];
+  for (const a of out.attachments) {
+    if (a.content || !a.downloadUrl || !/^https:\/\//.test(a.downloadUrl)) {
+      attachments.push(a);
+      continue;
+    }
+    const res = await fetch(a.downloadUrl, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    const size = Number(res.headers.get("content-length") ?? "0");
+    if (!res.ok || size > MAX_INBOUND_ATTACHMENT_BYTES) {
+      await res.body?.cancel().catch(() => undefined);
+      attachments.push(a);
+      continue;
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    attachments.push({ ...a, content: buf.length ? buf : null });
+  }
+  return { ...out, attachments };
+}
+
+/* ------------------------------------------------------------------ */
+/* Saving                                                              */
+/* ------------------------------------------------------------------ */
 
 type Stored = {
   name: string;
@@ -223,15 +343,16 @@ async function storeObject(
 
 /**
  * Save one inbound email (brief Module I). Only mail from a registered, active
- * member of the project's internal team is accepted; everything else is
- * recorded as rejected and nothing is saved. Accepted mail becomes a text file
- * of the message plus its attachments in the project's "Inbox" folder, and an
- * entry in the Activity feed. Every message received counts toward the day's
- * email budget. A redelivered message (same provider id) is a no-op.
+ * member of the project's internal team, verified by the receiving server
+ * (DMARC or DKIM), is accepted; everything else is recorded as rejected and
+ * nothing is saved. Accepted mail becomes a text file of the message plus its
+ * attachments in the project's "Inbox" folder, and an entry in the Activity
+ * feed. A redelivered message (same provider id) is a no-op. A storage or
+ * database failure throws, so the provider retries later.
  */
 export async function receiveInbound(
   conn: Database,
-  msg: InboundMessage,
+  incoming: InboundMessage,
   now = new Date(),
 ): Promise<InboundResult> {
   const domain = env().INBOUND_EMAIL_DOMAIN;
@@ -239,30 +360,46 @@ export async function receiveInbound(
   const [seen] = await conn
     .select({ status: schema.inboundEmail.status })
     .from(schema.inboundEmail)
-    .where(eq(schema.inboundEmail.providerId, msg.providerId));
+    .where(eq(schema.inboundEmail.providerId, incoming.providerId));
   if (seen) return { status: "duplicate" };
   const day = quotaDay(now);
   const base = {
-    providerId: msg.providerId,
-    fromAddress: msg.from.slice(0, 320),
-    subject: msg.subject || null,
+    providerId: incoming.providerId,
+    fromAddress: incoming.from.slice(0, 320),
+    subject: incoming.subject || null,
     quotaDay: day,
   };
-  const r = await route(conn, msg, domain);
-  if (!("sender" in r)) {
+  const refuse = async (
+    reason: string,
+    to: string,
+    projectId?: string,
+    senderId?: string,
+  ): Promise<InboundResult> => {
     await conn
       .insert(schema.inboundEmail)
       .values({
         ...base,
-        toAddress: r.to.slice(0, 320),
-        projectId: r.projectId ?? null,
-        senderId: r.senderId ?? null,
+        toAddress: to.slice(0, 320),
+        projectId: projectId ?? null,
+        senderId: senderId ?? null,
         status: "rejected",
-        reason: r.reason,
+        reason,
       })
       .onConflictDoNothing();
-    return { status: "rejected", reason: r.reason, projectId: r.projectId };
-  }
+    return { status: "rejected", reason, projectId };
+  };
+
+  // Cheap checks first: most junk is refused without calling the provider.
+  const first = await route(
+    conn,
+    { ...incoming, authResults: incoming.authResults ?? "dmarc=pass" },
+    domain,
+  );
+  if (!("sender" in first))
+    return refuse(first.reason, first.to, first.projectId, first.senderId);
+  const msg = await completeMessage(incoming);
+  const r = await route(conn, msg, domain);
+  if (!("sender" in r)) return refuse(r.reason, r.to, r.projectId, r.senderId);
 
   // Store the objects first (outside the transaction), then record everything at once.
   const subject = msg.subject.trim() || "(no subject)";
@@ -278,21 +415,34 @@ export async function receiveInbound(
     `Date: ${now.toISOString()}`,
     `Subject: ${subject}`,
   ];
-  try {
-    const bodyBytes = new TextEncoder().encode(
-      `${header.join("\n")}\n\n${msg.text}`,
+  const bodyBytes = new TextEncoder().encode(
+    `${header.join("\n")}\n\n${msg.text}`,
+  );
+  const wanted =
+    bodyBytes.length +
+    candidates.reduce(
+      (s, a) =>
+        s +
+        (a.content && a.content.length <= MAX_INBOUND_ATTACHMENT_BYTES
+          ? a.content.length
+          : 0),
+      0,
     );
-    const wanted =
-      bodyBytes.length +
-      candidates.reduce(
-        (s, a) =>
-          s +
-          (a.content && a.content.length <= MAX_INBOUND_ATTACHMENT_BYTES
-            ? a.content.length
-            : 0),
-        0,
-      );
+  try {
     await assertUploadBudget(wanted, conn);
+  } catch {
+    return refuse(
+      "File storage is nearly full.",
+      r.to,
+      r.projectId,
+      r.sender.id,
+    );
+  }
+  const discard = () =>
+    storage()
+      .delete(saved.map((s) => s.pathname))
+      .catch(() => undefined);
+  try {
     for (const a of candidates) {
       if (!a.content)
         skipped.push(`${a.filename} (not included by the mail service)`);
@@ -319,92 +469,82 @@ export async function receiveInbound(
       await storeObject(r.projectId, emailName, text, "text/plain"),
     );
   } catch (e) {
-    await storage()
-      .delete(saved.map((s) => s.pathname))
-      .catch(() => undefined);
-    const reason =
-      (e as { code?: string }).code === "PRECONDITION_FAILED"
-        ? "File storage is nearly full."
-        : "Couldn't store the message.";
-    await conn
-      .insert(schema.inboundEmail)
-      .values({
-        ...base,
-        toAddress: r.to.slice(0, 320),
-        projectId: r.projectId,
-        senderId: r.sender.id,
-        status: "rejected",
-        reason,
-      })
-      .onConflictDoNothing();
-    return { status: "rejected", reason, projectId: r.projectId };
+    await discard();
+    throw e; // storage trouble: let the provider retry
   }
 
   const bytes = saved.reduce((s, x) => s + x.size, 0);
-  const inserted = await conn.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(schema.inboundEmail)
-      .values({
-        ...base,
-        toAddress: r.to.slice(0, 320),
-        projectId: r.projectId,
-        senderId: r.sender.id,
-        status: "accepted",
-        attachments: saved.length - 1,
-      })
-      .onConflictDoNothing()
-      .returning({ id: schema.inboundEmail.id });
-    if (!row) return false; // a concurrent delivery of the same message won
-    await ensureProjectFolders(tx, r.projectId, [INBOX_FOLDER]);
-    const [folder] = await tx
-      .select({ id: schema.folder.id })
-      .from(schema.folder)
-      .where(
-        and(
-          eq(schema.folder.projectId, r.projectId),
-          sql`lower(${schema.folder.name}) = lower(${INBOX_FOLDER})`,
-        ),
-      );
-    for (const s of saved) {
-      const [f] = await tx
-        .insert(schema.file)
+  let inserted: boolean;
+  try {
+    inserted = await conn.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(schema.inboundEmail)
         .values({
+          ...base,
+          toAddress: r.to.slice(0, 320),
           projectId: r.projectId,
-          folderId: folder!.id,
-          name: s.name,
-          createdById: r.sender.id,
+          senderId: r.sender.id,
+          status: "accepted",
+          attachments: saved.length - 1,
         })
-        .returning({ id: schema.file.id });
-      await tx
-        .insert(schema.fileVersion)
-        .values({
-          fileId: f!.id,
-          number: 1,
-          objectKey: s.pathname,
-          originalName: s.name,
-          contentType: s.contentType,
-          sizeBytes: s.size,
-          uploadedById: r.sender.id,
-          note: "Emailed in",
-        });
-    }
-    await recordAudit(tx, {
-      actorId: r.sender.id,
-      actorName: r.sender.name,
-      action: "create",
-      entityType: "inbound_email",
-      entityId: row.id,
-      projectId: r.projectId,
-      summary: `${r.sender.name} emailed in "${subject}"${saved.length > 1 ? ` with ${saved.length - 1} attachment${saved.length === 2 ? "" : "s"}` : ""} (saved to ${INBOX_FOLDER})`,
-      data: {
-        subject,
-        attachments: saved.slice(1).map((s) => s.name),
-        skipped,
-      },
-      ip: null,
+        .onConflictDoNothing()
+        .returning({ id: schema.inboundEmail.id });
+      if (!row) return false; // a concurrent delivery of the same message won
+      await ensureProjectFolders(tx, r.projectId, [INBOX_FOLDER]);
+      const [folder] = await tx
+        .select({ id: schema.folder.id })
+        .from(schema.folder)
+        .where(
+          and(
+            eq(schema.folder.projectId, r.projectId),
+            sql`lower(${schema.folder.name}) = lower(${INBOX_FOLDER})`,
+          ),
+        );
+      if (!folder) throw new Error("The Inbox folder is missing");
+      for (const s of saved) {
+        const [f] = await tx
+          .insert(schema.file)
+          .values({
+            projectId: r.projectId,
+            folderId: folder.id,
+            name: s.name,
+            createdById: r.sender.id,
+          })
+          .returning({ id: schema.file.id });
+        await tx
+          .insert(schema.fileVersion)
+          .values({
+            fileId: f!.id,
+            number: 1,
+            objectKey: s.pathname,
+            originalName: s.name,
+            contentType: s.contentType,
+            sizeBytes: s.size,
+            uploadedById: r.sender.id,
+            note: "Emailed in",
+          });
+      }
+      await recordAudit(tx, {
+        actorId: r.sender.id,
+        actorName: r.sender.name,
+        action: "create",
+        entityType: "inbound_email",
+        entityId: row.id,
+        projectId: r.projectId,
+        summary: `${r.sender.name} emailed in "${subject}"${saved.length > 1 ? ` with ${saved.length - 1} attachment${saved.length === 2 ? "" : "s"}` : ""} (saved to ${INBOX_FOLDER})`,
+        data: {
+          subject,
+          attachments: saved.slice(1).map((s) => s.name),
+          skipped,
+        },
+        ip: null,
+      });
+      return true;
     });
-    return true;
-  });
+  } catch (e) {
+    await discard();
+    throw e;
+  }
   if (!inserted) {
     await deleteStoredObjects(
       saved.map((s) => s.pathname),

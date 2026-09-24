@@ -147,6 +147,8 @@ export interface InboundAttachment {
   contentType: string;
   /** Decoded bytes; null when the provider didn't include the content. */
   content: Uint8Array | null;
+  /** Where to fetch the content when it isn't inline. */
+  downloadUrl?: string | null;
 }
 
 export interface InboundMessage {
@@ -156,6 +158,67 @@ export interface InboundMessage {
   subject: string;
   text: string;
   attachments: InboundAttachment[];
+  /** The receiving server's Authentication-Results header(s), when the provider passed them on. */
+  authResults: string | null;
+  /** False when the webhook carried only metadata (no body), so the full message must be fetched. */
+  hasBody: boolean;
+}
+
+/** One header's values from `headers` given as an object ({ name: value }) or a list ([{ name, value }]). */
+export function headerValues(headers: unknown, name: string): string[] {
+  const want = name.toLowerCase();
+  if (Array.isArray(headers)) {
+    return headers.flatMap((h) => {
+      if (!h || typeof h !== "object") return [];
+      const x = h as Record<string, unknown>;
+      return String(x.name ?? x.key ?? "").toLowerCase() === want &&
+        typeof x.value === "string"
+        ? [x.value]
+        : [];
+    });
+  }
+  if (headers && typeof headers === "object") {
+    return Object.entries(headers as Record<string, unknown>).flatMap(
+      ([k, v]) =>
+        k.toLowerCase() === want
+          ? Array.isArray(v)
+            ? v.filter((x): x is string => typeof x === "string")
+            : typeof v === "string"
+              ? [v]
+              : []
+          : [],
+    );
+  }
+  return [];
+}
+
+/**
+ * Was the From address really the sender's? Anyone can type any From, so an
+ * inbound message is only trusted when the receiving server recorded DMARC
+ * passing, or a DKIM signature passing for the sender's own domain (or a
+ * parent of it). No verdict at all counts as not verified.
+ */
+export function senderAuthenticated(
+  authResults: string | null,
+  fromAddress: string,
+): boolean {
+  if (!authResults) return false;
+  const text = authResults.toLowerCase();
+  const domain = fromAddress
+    .slice(fromAddress.lastIndexOf("@") + 1)
+    .toLowerCase();
+  const dmarc = /\bdmarc=(\w+)[^;]*?header\.from=([^\s;]+)/g;
+  for (const m of text.matchAll(dmarc))
+    if (m[1] === "pass" && m[2] === domain) return true;
+  if (/\bdmarc=pass\b/.test(text) && !/header\.from=/.test(text)) return true;
+  for (const m of text.matchAll(
+    /\bdkim=(\w+)[^;]*?header\.(?:d|i)=@?([^\s;]+)/g,
+  )) {
+    const d = m[2]!.replace(/^.*@/, "");
+    if (m[1] === "pass" && (domain === d || domain.endsWith(`.${d}`)))
+      return true;
+  }
+  return false;
 }
 
 type Json = Record<string, unknown>;
@@ -220,6 +283,7 @@ export function parseInboundPayload(
     }
     return [
       {
+        downloadUrl: str(x.download_url) || str(x.downloadUrl) || null,
         filename: str(x.filename) || str(x.name) || "attachment",
         contentType:
           str(x.content_type) ||
@@ -236,5 +300,8 @@ export function parseInboundPayload(
     subject: str(d.subject).slice(0, 300),
     text: (str(d.text) || htmlToText(str(d.html))).slice(0, 200_000),
     attachments,
+    authResults:
+      headerValues(d.headers, "authentication-results").join("; ") || null,
+    hasBody: typeof d.text === "string" || typeof d.html === "string",
   };
 }

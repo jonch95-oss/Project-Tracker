@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { signWebhook } from "@/core/inbound";
+import { setInboundFetcherForTests } from "@/server/services/inbound";
 import { addDays, todayET } from "@/core/time";
 import { db, schema } from "@/server/db";
 import { resetEnvForTests } from "@/server/env";
@@ -24,6 +25,11 @@ type Caller = Awaited<ReturnType<typeof callerFor>>;
 const today = todayET();
 const SECRET = `whsec_${Buffer.from("m11-inbound-signing-secret-000000").toString("base64")}`;
 const DOMAIN = "in.example.test";
+/** What the receiving server records for genuine mail from the test users' domain. */
+const AUTH = {
+  "Authentication-Results":
+    "mx.provider.test; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass (p=none) header.from=example.com",
+};
 
 async function getFeed(url: string) {
   const file = url.split("/api/calendar/")[1]!;
@@ -345,6 +351,96 @@ describe("Milestone 11", () => {
     });
   });
 
+  describe("import (N): review fixes", () => {
+    it("a re-imported budget skips lines that exist; rejected rows keep their sheet row numbers", async () => {
+      const rows = [
+        ["Soft costs", `Survey ${Date.now()}`, "$5,000"],
+        ["Soft costs", "", "$1"],
+      ];
+      const first = await ac.import.commit({
+        kind: "budget",
+        projectId,
+        rows,
+        rowNumbers: [4, 9],
+        mapping: { category: 0, name: 1, originalCents: 2 },
+      });
+      expect(first).toMatchObject({ imported: 1 });
+      expect(first.rejected.map((r) => r.row)).toEqual([9]);
+      const again = await ac.import.commit({
+        kind: "budget",
+        projectId,
+        rows,
+        rowNumbers: [4, 9],
+        mapping: { category: 0, name: 1, originalCents: 2 },
+      });
+      expect(again).toMatchObject({ imported: 0 });
+      expect(again.rejected.find((r) => r.row === 4)!.reasons[0]).toMatch(
+        /already has a budget line/,
+      );
+    });
+
+    it("a template whose tasks wait on each other is refused before anything is created", async () => {
+      const name = `Looping ${Date.now()}`;
+      const r = await oc.import.commit({
+        kind: "template",
+        templateName: name,
+        projectType: "contract_flip",
+        rows: [
+          ["P", "A", "PM", "1", "B"],
+          ["P", "B", "PM", "1", "A"],
+        ],
+        mapping: { phase: 0, title: 1, role: 2, days: 3, after: 4 },
+      });
+      expect(r.imported).toBe(0);
+      expect(r.rejected[0]!.reasons[0]).toMatch(/The template isn't valid/);
+      expect((await oc.templates.list()).some((t) => t.name === name)).toBe(
+        false,
+      );
+    });
+
+    it("projects import at most 50 at a time; nobody imports into a project they aren't on", async () => {
+      const rows = Array.from({ length: 51 }, (_, i) => [
+        `P${i}`,
+        `${i} Road`,
+        "Gut renovation",
+      ]);
+      await expect(
+        oc.import.commit({
+          kind: "projects",
+          companyId: await companyId(),
+          rows,
+          mapping: { name: 0, address: 1, type: 2 },
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      const outsiderAdmin = await callerFor((await createUser("admin")).id);
+      await expect(
+        outsiderAdmin.import.commit({
+          kind: "budget",
+          projectId,
+          rows: [["Soft costs", "X", "1"]],
+          mapping: { category: 0, name: 1, originalCents: 2 },
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      // The same project twice (name and address) is only created once.
+      const name = `Twice ${Date.now()}`;
+      const once = await oc.import.commit({
+        kind: "projects",
+        companyId: await companyId(),
+        rows: [[name, "5 Same St", "Gut renovation"]],
+        mapping: { name: 0, address: 1, type: 2 },
+      });
+      expect(once.imported).toBe(1);
+      const twice = await oc.import.commit({
+        kind: "projects",
+        companyId: await companyId(),
+        rows: [[name, "5 same st", "Gut renovation"]],
+        mapping: { name: 0, address: 1, type: 2 },
+      });
+      expect(twice).toMatchObject({ imported: 0 });
+      expect(twice.rejected[0]!.reasons[0]).toMatch(/already a project/);
+    });
+  });
+
   describe("email into a project (I)", () => {
     const saved = {
       domain: process.env.INBOUND_EMAIL_DOMAIN,
@@ -361,7 +457,7 @@ describe("Milestone 11", () => {
       process.env.INBOUND_EMAIL_SECRET = "";
       resetEnvForTests();
       expect((await send({})).status).toBe(404);
-      expect(await mc.projects.inboundAddress({ projectId })).toEqual({
+      expect(await mc.projects.inboundAddress({ projectId })).toMatchObject({
         address: null,
       });
     });
@@ -374,7 +470,11 @@ describe("Milestone 11", () => {
       expect(address).toMatch(/^347-myrtle-[a-z2-9]{4}@in\.example\.test$/);
       expect(await oc.projects.inboundAddress({ projectId })).toEqual({
         address,
+        canChange: true,
       });
+      expect((await mc.projects.inboundAddress({ projectId })).canChange).toBe(
+        false,
+      );
       await expect(
         xc.projects.inboundAddress({ projectId }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -389,6 +489,7 @@ describe("Milestone 11", () => {
           to: [`Project <${address}>`],
           subject: "Survey from Ron",
           text: "See attached.",
+          headers: AUTH,
           attachments: [
             {
               filename: "survey.pdf",
@@ -443,6 +544,7 @@ describe("Milestone 11", () => {
           to: [address],
           subject: "Twice",
           text: "x",
+          headers: AUTH,
         },
       };
       expect(await (await send(payload)).json()).toMatchObject({
@@ -452,7 +554,11 @@ describe("Milestone 11", () => {
         status: "duplicate",
       });
 
-      const reject = async (from: string, to = address!) =>
+      const reject = async (
+        from: string,
+        to = address!,
+        auth: object | null = AUTH,
+      ) =>
         (await (
           await send({
             type: "email.received",
@@ -462,6 +568,7 @@ describe("Milestone 11", () => {
               to: [to],
               subject: "Hi",
               text: "x",
+              ...(auth ? { headers: auth } : {}),
             },
           })
         ).json()) as { status: string; reason?: string };
@@ -483,14 +590,97 @@ describe("Milestone 11", () => {
         status: "rejected",
         reason: "No project has this address.",
       });
+      // Anyone can type a teammate's address into From: without the receiving server's pass, it's refused.
+      expect(await reject(member.email, address!, null)).toMatchObject({
+        status: "rejected",
+        reason:
+          "The sender's address couldn't be verified (no DMARC or DKIM pass).",
+      });
+      expect(
+        await reject(member.email, address!, {
+          "Authentication-Results":
+            "mx; dkim=pass header.d=evil.test; dmarc=fail header.from=example.com",
+        }),
+      ).toMatchObject({ status: "rejected" });
       // The owner sees every project, so their mail is accepted too.
       expect(await reject(owner.email)).toMatchObject({ status: "accepted" });
-      // Rejected mail still counts toward the budget: the provider received it.
+      // Refused mail is recorded, but only accepted mail holds back outgoing email.
       const rows = await db()
         .select()
         .from(schema.inboundEmail)
         .where(eq(schema.inboundEmail.projectId, projectId));
-      expect(rows.filter((r) => r.status === "rejected").length).toBe(3);
+      expect(rows.filter((r) => r.status === "rejected").length).toBe(5);
+      expect(await emailsCountedToday()).toBe(before + 3);
+    });
+
+    it("fetches the body and attachments when the webhook carries only metadata", async () => {
+      process.env.INBOUND_EMAIL_DOMAIN = DOMAIN;
+      process.env.INBOUND_EMAIL_SECRET = SECRET;
+      resetEnvForTests();
+      const { address } = await mc.projects.inboundAddress({ projectId });
+      setInboundFetcherForTests(async (m) => ({
+        ...m,
+        hasBody: true,
+        text: "Fetched body",
+        authResults: AUTH["Authentication-Results"],
+        attachments: m.attachments.map((a) => ({
+          ...a,
+          content: new TextEncoder().encode("PDF"),
+        })),
+      }));
+      try {
+        const r = await send({
+          type: "email.received",
+          data: {
+            email_id: `meta-${Date.now()}`,
+            from: member.email,
+            to: [address],
+            subject: "Metadata only",
+            attachments: [
+              {
+                id: "att1",
+                filename: "plan.pdf",
+                content_type: "application/pdf",
+              },
+            ],
+          },
+        });
+        expect(await r.json()).toMatchObject({ status: "accepted", files: 2 });
+      } finally {
+        setInboundFetcherForTests(null);
+      }
+    });
+
+    it("a new address retires the old one", async () => {
+      process.env.INBOUND_EMAIL_DOMAIN = DOMAIN;
+      process.env.INBOUND_EMAIL_SECRET = SECRET;
+      resetEnvForTests();
+      const { address: old } = await mc.projects.inboundAddress({ projectId });
+      await expect(
+        mc.projects.newInboundAddress({ projectId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const { address: fresh } = await oc.projects.newInboundAddress({
+        projectId,
+      });
+      expect(fresh).not.toBe(old);
+      expect((await mc.projects.inboundAddress({ projectId })).address).toBe(
+        fresh,
+      );
+      const r = await send({
+        type: "email.received",
+        data: {
+          email_id: `old-${Date.now()}`,
+          from: member.email,
+          to: [old],
+          subject: "Old",
+          text: "x",
+          headers: AUTH,
+        },
+      });
+      expect(await r.json()).toMatchObject({
+        status: "rejected",
+        reason: "No project has this address.",
+      });
     });
 
     it("refuses unsigned, stale and wrongly signed webhooks", async () => {

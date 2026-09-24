@@ -1,5 +1,5 @@
 {
-  "id": "b692d623-191f-473b-b747-e0a7d8f17f64",
+  "id": "0fd44218-4a64-46cf-bf3d-54ee7c58bd7d",
   "prevId": "982da3e5-7df8-486c-abb5-39e69e335511",
   "version": "7",
   "dialect": "postgresql",
@@ -1110,6 +1110,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "calendar_feed_live_idx": {
+          "name": "calendar_feed_live_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"calendar_feed\".\"revoked_at\" is null",
           "concurrently": false,
           "method": "btree",
           "with": {}

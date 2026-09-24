@@ -1,5 +1,68 @@
 # Progress
 
+## Milestone 11 — Calendar feed, email into a project, analytics, import (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (Settings → Calendar feed; Analytics and Import in the sidebar for the owner and admins; each project's Activity tab)
+
+### What shipped
+
+- **Calendar feed (Module H).**
+  - **The link:** each person makes a private link in Settings. It works with iPhone and Mac Calendar (one tap, via webcal), Google Calendar and Outlook. It's shown once, only its hash is stored, and making a new one or turning it off kills the old link at once.
+  - **What's in it:** your own open tasks everywhere. The internal team also gets inspections, key dates, closings, meetings and expiries on their projects. Outside collaborators get only their own RFIs, submittals and punch items.
+  - **No money:** loan and 1031 dates and financial expiries appear only for people with financial access, and there are never amounts. Investors have no feed.
+  - **Updates:** events are all-day dates with stable IDs, so a moved date updates in place. Settings shows when a calendar last read the feed.
+- **Email into a project (Module I): built and tested, but not switched on.**
+  - **How it works:** every project gets an address like `347-myrtle-k3f9@<inbound domain>`, shown on its Activity tab with a copy button. Owners and admins can replace it, and the old one stops working.
+  - **Where mail lands:** a forwarded email is saved as a text file, and its attachments go into the project's "Inbox" folder to be filed. Activity says who sent what.
+  - **Who can send:** only an active, registered member of the project's internal team, and only when the receiving mail server verified the From address (DMARC pass, or DKIM pass for the sender's domain). Everything else is recorded as refused and nothing is saved.
+  - **Security:** webhooks must carry a valid, fresh Svix signature (Resend's scheme), and a redelivered message is saved once.
+  - **Email budget:** accepted mail counts toward the 100-a-day quota. Refused mail shows in the budget on the System page, but it doesn't hold back outgoing mail, so a stranger can't use up the day.
+  - **Why it's off:** email is on hold (Change Order 01), so there's no inbound provider or domain yet. It's off unless both `INBOUND_EMAIL_DOMAIN` and `INBOUND_EMAIL_SECRET` are set; until then the route answers 404 and the Activity tab says it isn't set up. *Closest safe choice:* the handler is complete and tested, but Resend's inbound payload couldn't be checked from here. If the webhook carries only metadata, the handler fetches the body and attachments by message ID with `RESEND_API_KEY`. **Before switching it on,** send one real test email and confirm the fields (body, attachments, Authentication-Results) arrive as expected.
+- **Analytics (Module M), owner only.**
+  - **Phases and costs:** median actual days per phase by project type, and cost per gross and sellable sf (forecast and actual, hard and total), with the median by type as a benchmark.
+  - **Budgets and bottlenecks:** budget variance by category across the portfolio, and where tasks stall: overdue and waiting now, and how late finished work ran, by phase and by person.
+  - **Turnaround:** RFI answer times and invoice approval times.
+  - **Template durations from actuals:** where a template task has taken noticeably longer or shorter (at least 2 days and 20%) on 3 or more projects, it suggests the median. The chosen ones save as a new template version.
+- **Import from Excel (Module N), owner and admins.**
+  - **What it imports:** projects, budget lines, unit schedules, the vendor directory and checklist templates, from .xlsx or .csv.
+  - **Before anything is saved:** columns are matched from the headers and can be changed. The preview counts rows read, valid and turned away, with the reason for each and its row number in the sheet.
+  - **Saving:** rows go through the same procedures as the screens, so every permission, number and side effect applies. A template is all or nothing.
+  - **Limits:** 4 MB, 500 rows, 50 projects at a time, and a cap on the unpacked size of .xlsx files. Rows that are already there (same project name and address, same budget line, same unit, same company) are skipped and listed.
+
+### Review
+
+The independent review found 4 P1 and 11 P2 issues. All are fixed, with regression tests.
+
+The P1s were:
+
+- **Refused inbound mail counted against outgoing mail.** Enough junk mail could have held back invites and password resets for the day. Now only accepted mail counts.
+- **A forged From line was trusted.** The sender must now be verified by the receiving server, and the address can be replaced.
+- **The webhook might carry only metadata.** The body and attachments are now fetched by message ID when they're missing.
+- **Imports could repeat or time out.** Large project imports could time out halfway through, and a second click could import the same rows again. Projects are now capped at 50 per import, the file is cleared after importing, and existing rows are skipped.
+
+The P2s fixed:
+
+- **Email-in storage:** stored files are deleted if saving the email fails, and storage errors return a retry to the provider instead of silently dropping the mail.
+- **Import errors:** internal error text never reaches the import report.
+- **Templates:** a looping template is refused before anything is created, and a failed save doesn't leave a stray template.
+- **Row counts and numbers:** true row counts for big sheets, and row numbers that match the spreadsheet.
+- **Upload limits:** an unpacked-size check before opening an .xlsx, and a clear message for files over the platform's size limit.
+- **Activity entries:** import entries go only to projects the person is on.
+- **Calendar links:** only one link can be live per person, even with a double tap.
+- **ICS text:** bare carriage returns and control characters are escaped.
+- **Email-in notices:** a note that the whole project team sees emailed-in files, and a correct "not set up" message.
+
+### Test results
+
+- **Unit and integration:** 3,672 passing, including 19 new unit and 14 new integration tests. The permission matrix now has 3,126 checks, with rows for every new procedure.
+- **Browser (Playwright):** 43 passing, 5 of them new.
+- **Screens:** checked at desktop and iPhone widths (Analytics, Import, the Calendar feed and Activity).
+
+### Known limitations
+
+- **Email-in is off** until an inbound mail domain and a signing secret exist. Email is on hold and there is no inbound provider on a free tier yet.
+- **Analytics are only as good as the dates recorded.** Phase durations need a start and a finish, and the duration suggestions need three finished projects from the same template.
+
 ## Milestone 10 — Directory, BBL auto-fill, investors and units (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (the Directory in the sidebar; each condo project's Units tab and Financials → Capital; investors sign in to their own portal)

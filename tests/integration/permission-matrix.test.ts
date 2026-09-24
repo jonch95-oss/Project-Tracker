@@ -2296,6 +2296,16 @@ const MATRIX: Record<string, Row | "public"> = {
     call: (c, f) => c.projects.inboundAddress({ projectId: f.projectId }),
   },
 
+  "projects.newInboundAddress": {
+    allowed: ["owner", "admin+fin", "admin"],
+    // Email-in is off in tests: allowed callers get "not set up", not a refusal.
+    call: (c, f) =>
+      c.projects.newInboundAddress({ projectId: f.projectId }).catch((e: TRPCError) => {
+        if (e.code === "PRECONDITION_FAILED") return null;
+        throw e;
+      }),
+  },
+
   "calendar.status": {
     allowed: ACTIVE.filter((s) => !s.startsWith("investor")),
     call: (c) => c.calendar.status(),
@@ -2317,11 +2327,16 @@ const MATRIX: Record<string, Row | "public"> = {
   "analytics.applyDurations": {
     allowed: OWNER_ONLY,
     call: async (c) => {
-      const [t] = await db()
+      // A throwaway copy, so the standard templates keep their versions for other tests.
+      const [src] = await db()
         .select()
         .from(schema.template)
         .where(isNull(schema.template.archivedAt))
         .limit(1);
+      const [t] = await db()
+        .insert(schema.template)
+        .values({ name: `Matrix copy ${uid()}`, projectType: src!.projectType, definition: src!.definition })
+        .returning();
       const k = (
         t!.definition as {
           tasks: { key: string; due?: { from: unknown; days: number } }[];

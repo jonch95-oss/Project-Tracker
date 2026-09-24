@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { parseCsvRecords, sheetFromGrid, zipUnpackedSize } from "@/core/import";
+import { senderAuthenticated } from "@/core/inbound";
 import {
   businessDaysBetween,
   median,
@@ -375,5 +377,92 @@ describe("inbound email", () => {
       parseInboundPayload({ type: "email.sent", data: {} }, "d"),
     ).toBeNull();
     expect(htmlToText("<style>x</style>a<br>b")).toBe("a\nb");
+  });
+});
+
+describe("review fixes", () => {
+  it("ICS text never carries a bare carriage return or control character", () => {
+    expect(icsText("a\rURL:evil\u0007b")).toBe("a\\nURL:evilb");
+  });
+
+  it("keeps each row's sheet row number past title and blank rows", () => {
+    const grid = parseCsvRecords("Title line\n\nUnit,SF\n1A,800\n\n1B,900\n");
+    const sheet = sheetFromGrid("s", grid)!;
+    expect(sheet.headers).toEqual(["Title line"]);
+    const g2 = [
+      [],
+      ["Unit", "SF"],
+      ["1A", "800"],
+      [],
+      ["1B", "x"],
+      ["1C", "1"],
+      ["1D", "2"],
+    ];
+    const s2 = sheetFromGrid("s", g2, 60, 3)!;
+    expect(s2.rowNumbers).toEqual([3, 5, 6]);
+    expect(s2.total).toBe(4);
+    const { rejected } = validateRows(
+      "units",
+      s2.rows,
+      { unit: 0, sf: 1 },
+      s2.rowNumbers,
+    );
+    expect(rejected.map((r) => r.row)).toEqual([5]);
+  });
+
+  it("reads a zip's unpacked size from its directory", () => {
+    // A minimal zip: one stored entry "a.txt" holding "hello".
+    const name = Buffer.from("a.txt");
+    const data = Buffer.from("hello");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt32LE(5, 18);
+    local.writeUInt32LE(5, 22);
+    local.writeUInt16LE(name.length, 26);
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0);
+    cd.writeUInt32LE(5, 20);
+    cd.writeUInt32LE(5, 24);
+    cd.writeUInt16LE(name.length, 28);
+    const cdOffset = local.length + name.length + data.length;
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(1, 8);
+    eocd.writeUInt16LE(1, 10);
+    eocd.writeUInt32LE(cd.length + name.length, 12);
+    eocd.writeUInt32LE(cdOffset, 16);
+    const zip = Buffer.concat([local, name, data, cd, name, eocd]);
+    expect(zipUnpackedSize(zip)).toBe(5);
+    const big = Buffer.from(zip);
+    big.writeUInt32LE(0xffffffff, cdOffset + 24);
+    expect(zipUnpackedSize(big)).toBe(Infinity);
+    expect(
+      zipUnpackedSize(Buffer.from("not a zip at all, just some text here")),
+    ).toBeNull();
+  });
+
+  it("trusts a sender only with the receiving server's DMARC or matching DKIM pass", () => {
+    expect(senderAuthenticated(null, "dana@x.com")).toBe(false);
+    expect(
+      senderAuthenticated(
+        "mx; dmarc=pass (p=reject) header.from=x.com",
+        "dana@x.com",
+      ),
+    ).toBe(true);
+    expect(
+      senderAuthenticated("mx; dmarc=pass header.from=y.com", "dana@x.com"),
+    ).toBe(false);
+    expect(
+      senderAuthenticated("mx; dkim=pass header.d=x.com", "dana@mail.x.com"),
+    ).toBe(true);
+    expect(
+      senderAuthenticated(
+        "mx; dkim=pass header.d=attacker.com; dmarc=fail header.from=x.com",
+        "dana@x.com",
+      ),
+    ).toBe(false);
+    expect(
+      senderAuthenticated("mx; spf=pass smtp.mailfrom=x.com", "dana@x.com"),
+    ).toBe(false);
   });
 });

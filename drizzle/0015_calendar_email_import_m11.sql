@@ -28,6 +28,7 @@ ALTER TABLE "inbound_email" ADD CONSTRAINT "inbound_email_project_id_project_id_
 ALTER TABLE "inbound_email" ADD CONSTRAINT "inbound_email_sender_id_user_id_fk" FOREIGN KEY ("sender_id") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "calendar_feed_token_idx" ON "calendar_feed" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX "calendar_feed_user_idx" ON "calendar_feed" USING btree ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "calendar_feed_live_idx" ON "calendar_feed" USING btree ("user_id") WHERE "calendar_feed"."revoked_at" is null;--> statement-breakpoint
 CREATE UNIQUE INDEX "inbound_email_provider_idx" ON "inbound_email" USING btree ("provider_id");--> statement-breakpoint
 CREATE INDEX "inbound_email_day_idx" ON "inbound_email" USING btree ("quota_day");--> statement-breakpoint
 CREATE INDEX "inbound_email_project_idx" ON "inbound_email" USING btree ("project_id");--> statement-breakpoint

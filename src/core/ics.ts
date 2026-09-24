@@ -18,9 +18,18 @@ export interface CalendarEvent {
   location?: string | null;
 }
 
-/** Escape text for an ICS value (backslash, semicolon, comma, newline). */
+/** Escape text for an ICS value (backslash, semicolon, comma, any line break); other control characters are dropped. */
 export function icsText(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  return (
+    s
+      .replace(/\\/g, "\\\\")
+      .replace(/;/g, "\\;")
+      .replace(/,/g, "\\,")
+      .replace(/\r\n|\r|\n/g, "\\n")
+      // No other control characters: a stray one could break a line in some parsers.
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
+  );
 }
 
 /** Fold a content line at 75 octets (continuation lines start with a space), never splitting a UTF-8 character. */
@@ -54,8 +63,16 @@ function nextDay(d: string): string {
 }
 
 /** A whole VCALENDAR. `stamp` is the feed's generation time (UTC). */
-export function buildCalendar(input: { name: string; events: readonly CalendarEvent[]; stamp: Date; domain: string }): string {
-  const stamp = input.stamp.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+export function buildCalendar(input: {
+  name: string;
+  events: readonly CalendarEvent[];
+  stamp: Date;
+  domain: string;
+}): string {
+  const stamp = input.stamp
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",

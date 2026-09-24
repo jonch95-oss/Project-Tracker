@@ -1,11 +1,17 @@
 "use client";
 
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { ConfirmDialog, useToast } from "@/components/ui/overlay";
 import { useState } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { Avatar, Button, Skeleton } from "@/components/ui/primitives";
 import { formatDateTimeET } from "@/core/time";
-import { useTRPC } from "@/lib/trpc";
+import { errorMessage, useTRPC } from "@/lib/trpc";
 
 /** Everything that happened on the project, newest first (money entries only for people with financial access). */
 export function ActivityTab({ projectId }: { projectId: string }) {
@@ -71,8 +77,24 @@ export function ActivityTab({ projectId }: { projectId: string }) {
 /** Module I: forward mail here and it lands in Activity, with attachments in the Inbox folder. */
 function EmailIn({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
+  const qc = useQueryClient();
+  const toast = useToast();
   const q = useQuery(trpc.projects.inboundAddress.queryOptions({ projectId }));
   const [copied, setCopied] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const rotate = useMutation(
+    trpc.projects.newInboundAddress.mutationOptions({
+      onSuccess: () => {
+        setConfirm(false);
+        setCopied(false);
+        void qc.invalidateQueries({
+          queryKey: trpc.projects.inboundAddress.queryKey({ projectId }),
+        });
+        toast("success", "New address made. The old one no longer works.");
+      },
+      onError: (e) => toast("error", errorMessage(e)),
+    }),
+  );
   if (!q.data) return null;
   const address = q.data.address;
   return (
@@ -82,7 +104,9 @@ function EmailIn({ projectId }: { projectId: string }) {
         <>
           <p className="mt-1 text-muted">
             Forward an email from your own address. It is saved here, and its
-            attachments go to the Inbox folder.
+            attachments go to the Inbox folder. Everyone on the project team can
+            read what&apos;s emailed in, so upload money documents to the
+            financial folder instead.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <code className="break-all rounded-control bg-sunken px-2 py-1 text-[13px]">
@@ -91,20 +115,38 @@ function EmailIn({ projectId }: { projectId: string }) {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => {
+              onClick={() =>
                 void navigator.clipboard
                   ?.writeText(address)
-                  .then(() => setCopied(true));
-              }}
+                  .then(() => setCopied(true))
+              }
             >
               {copied ? "Copied" : "Copy"}
             </Button>
+            {q.data.canChange && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirm(true)}
+              >
+                New address
+              </Button>
+            )}
           </div>
+          <ConfirmDialog
+            open={confirm}
+            title="Make a new address?"
+            body="The current address stops working at once. Share the new one with the team."
+            confirmLabel="Make a new address"
+            busy={rotate.isPending}
+            onCancel={() => setConfirm(false)}
+            onConfirm={() => rotate.mutate({ projectId })}
+          />
         </>
       ) : (
         <p className="mt-1 text-muted">
-          Off for now. Email is on hold, so there is no inbound mail address
-          yet. Use Files to upload instead.
+          Not set up yet. It needs a mail domain for incoming mail, so for now
+          upload files in the Files tab.
         </p>
       )}
     </div>
