@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { IconArrowDown, IconArrowUp, IconClose, IconLock, IconPlus } from "@/components/ui/icons";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
+import { WhatsAppShare } from "@/components/whatsapp-share";
 import { Button, Field, Input, Select, StatusPill, Switch, Textarea } from "@/components/ui/primitives";
 import { toggleLabel } from "@/core/toggles";
 import { todayET } from "@/core/time";
@@ -162,6 +163,11 @@ export function TaskDialog({
               Added by {toggleLabel(k)}
             </StatusPill>
           ))}
+          <WhatsAppShare
+            className="ml-auto"
+            text={`“${t.title}” (${phaseName})${t.dueOn && !isDone ? `, due ${dueLabel(t.dueOn, today)}` : ""}`}
+            href={`/projects/${projectId}?tab=checklist&task=${t.id}`}
+          />
         </div>
 
         <TaskWork projectId={projectId} taskId={t.id} version={t.version} done={isDone} onChanged={onChanged} />

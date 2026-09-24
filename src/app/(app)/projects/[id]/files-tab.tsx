@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
-import { IconArrowLeft, IconChevronRight, IconLock, IconPaperclip, IconPlus, IconTeam } from "@/components/ui/icons";
+import { IconArrowLeft, IconBell, IconChevronRight, IconLock, IconPaperclip, IconPlus, IconTeam } from "@/components/ui/icons";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Badge, Button, Field, Input, Select, Skeleton, StatusPill } from "@/components/ui/primitives";
 import { fileExtension, formatFileSize, TRASH_DAYS } from "@/core/files";
@@ -31,13 +31,14 @@ export function useInvalidateFiles(projectId: string) {
 }
 
 /** Files (brief §14): folders, uploads with versions, previews, the gated Financial folder, sharing with outside parties. */
-export function FilesTab({ projectId, onOpenPhotos }: { projectId: string; onOpenPhotos: () => void }) {
+export function FilesTab({ projectId, onOpenPhotos, focusFolder, focusFile }: { projectId: string; onOpenPhotos: () => void; focusFolder?: string | null; focusFile?: string | null }) {
   const trpc = useTRPC();
   const q = useQuery(trpc.files.folders.queryOptions({ projectId }));
   const canShare = q.data?.access.canShare ?? false;
   const m = useQuery({ ...trpc.members.list.queryOptions({ projectId }), enabled: canShare });
   const members = (m.data ?? []).map((x) => ({ id: x.userId, name: x.name, external: x.globalRole === "external" }));
-  const [open, setOpen] = useState<string | null>(null);
+  // A link from a notification opens its folder (and file) directly.
+  const [open, setOpen] = useState<string | null>(focusFolder ?? null);
   const [dialog, setDialog] = useState<null | "newFolder" | "trash">(null);
 
   if (q.isPending) return <Skeleton className="h-80 rounded-card" />;
@@ -93,7 +94,7 @@ export function FilesTab({ projectId, onOpenPhotos }: { projectId: string; onOpe
         </nav>
         <div className={cn(!current && "hidden lg:block")}>
           {current ? (
-            <FolderView key={current.id} projectId={projectId} folder={current} folders={folders} access={access} members={members} onBack={() => setOpen(null)} onOpenPhotos={onOpenPhotos} />
+            <FolderView key={current.id} projectId={projectId} folder={current} initialFile={current.id === focusFolder ? (focusFile ?? null) : null} folders={folders} access={access} members={members} onBack={() => setOpen(null)} onOpenPhotos={onOpenPhotos} />
           ) : (
             <div className="flex h-full min-h-48 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">Pick a folder.</div>
           )}
@@ -127,8 +128,10 @@ function FolderView({
   members,
   onBack,
   onOpenPhotos,
+  initialFile,
 }: {
   projectId: string;
+  initialFile: string | null;
   folder: Folder;
   folders: Folder[];
   access: Folders["access"];
@@ -141,7 +144,16 @@ function FolderView({
   const q = useQuery(trpc.files.list.queryOptions({ projectId, folderId: f.id }));
   const invalidate = useInvalidateFiles(projectId);
   const up = useFileUpload(projectId);
-  const [openFile, setOpenFile] = useState<string | null>(null);
+  const [openFile, setOpenFile] = useState<string | null>(initialFile);
+  const watch = useMutation(
+    trpc.files.watchFolder.mutationOptions({
+      onSuccess: (r) => {
+        toast("success", r.watching ? `You'll hear when files are added to ${f.name}` : `Stopped watching ${f.name}`);
+        return invalidate();
+      },
+      onError: (e) => toast("error", errorMessage(e)),
+    }),
+  );
   const [confirmLarge, setConfirmLarge] = useState<File[] | null>(null);
   const [dialog, setDialog] = useState<null | "rename" | "share" | "delete">(null);
   const input = useRef<HTMLInputElement>(null);
@@ -171,6 +183,11 @@ function FolderView({
           {f.gated && <StatusPill tone="attention">Financial — restricted</StatusPill>}
         </h3>
         <div className="flex flex-wrap gap-2">
+          {!f.isPhotos && (
+            <Button variant="ghost" size="sm" aria-pressed={f.watching} loading={watch.isPending} onClick={() => watch.mutate({ projectId, folderId: f.id, on: !f.watching })}>
+              <IconBell size={16} /> {f.watching ? "Watching" : "Watch"}
+            </Button>
+          )}
           {access.canShare && members.some((m) => m.external) && (
             <Button variant="ghost" size="sm" onClick={() => setDialog("share")}>
               <IconTeam size={16} /> Share

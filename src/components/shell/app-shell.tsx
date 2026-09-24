@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTRPC } from "@/lib/trpc";
-import { authClient } from "@/lib/auth-client";
+import { useSignOut } from "@/lib/push";
 import { cn } from "@/lib/cn";
 import type { GlobalRole } from "@/core/permissions";
 import { Avatar } from "../ui/primitives";
+import { PushPrompt } from "./push-prompt";
 import {
   IconBell,
   IconLedger,
@@ -63,7 +64,6 @@ function isActive(pathname: string, href: string) {
 
 export function AppShell({ viewer, children }: { viewer: ShellViewer; children: ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [moreOpen, setMoreOpen] = useState(false);
   const trpc = useTRPC();
   const unread = useQuery({ ...trpc.notifications.unreadCount.queryOptions(), refetchInterval: 60_000, refetchOnWindowFocus: true }).data?.count ?? 0;
@@ -80,11 +80,7 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
   const mobileItems = ordered.filter((n) => n.mobile);
   const overflow = ordered.filter((n) => !n.mobile);
 
-  async function signOut() {
-    await authClient.signOut();
-    router.replace("/login");
-    router.refresh();
-  }
+  const signOut = useSignOut();
 
   return (
     <div className="min-h-dvh lg:grid lg:grid-cols-[256px_1fr]">
@@ -139,7 +135,10 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
       </aside>
 
       <main id="main" className="min-w-0 px-4 pb-[calc(96px+env(safe-area-inset-bottom))] pt-[calc(24px+env(safe-area-inset-top))] sm:px-8 lg:px-12 lg:pb-16 lg:pt-12">
-        <div className="mx-auto max-w-[1200px]">{children}</div>
+        <div className="mx-auto max-w-[1200px]">
+          <PushPrompt />
+          {children}
+        </div>
       </main>
 
       {/* iPhone bottom tab bar */}

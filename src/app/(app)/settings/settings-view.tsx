@@ -14,6 +14,8 @@ import { PASSWORD_HINT, passwordProblem } from "@/core/password";
 import { authClient } from "@/lib/auth-client";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import { hasPasskeySupport, useClientFlag } from "@/lib/use-client-flag";
+import { useSignOut } from "@/lib/push";
+import { NotificationSettings } from "./notification-settings";
 
 interface ViewerProps {
   name: string;
@@ -24,10 +26,10 @@ interface ViewerProps {
 }
 
 export function SettingsView({ viewer, welcome }: { viewer: ViewerProps; welcome: boolean }) {
-  const router = useRouter();
+  const signOut = useSignOut();
   return (
     <>
-      <PageHeader eyebrow={ROLE_LABEL[viewer.role]} title="Settings" description="Your profile, sign-in and security." />
+      <PageHeader eyebrow={ROLE_LABEL[viewer.role]} title="Settings" description="Your profile, sign-in, security and notifications." />
       {welcome && (
         <div className="mb-8 flex flex-col gap-4 rounded-card border border-accent/30 bg-accent-tint px-6 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div>
@@ -45,15 +47,12 @@ export function SettingsView({ viewer, welcome }: { viewer: ViewerProps; welcome
         <TwoFactorPanel enabled={viewer.twoFactorEnabled} />
         <PasskeyPanel />
       </div>
+      <NotificationSettings />
       <div className="mt-12 flex justify-center lg:hidden">
         <Button
           variant="secondary"
           size="lg"
-          onClick={async () => {
-            await authClient.signOut();
-            router.replace("/login");
-            router.refresh();
-          }}
+          onClick={signOut}
         >
           <IconSignOut size={18} /> Sign out
         </Button>

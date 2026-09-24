@@ -190,7 +190,7 @@ describe("hourly tick", () => {
     const before7 = new Date("2030-01-15T11:30:00Z"); // 6:30 ET
     const after7 = new Date("2030-01-15T12:30:00Z"); // 7:30 ET
     const early = await tickJob(before7);
-    expect(early.ran).toEqual(["usage-check", "email-outbox", "upload-cleanup", "trash-purge"]);
+    expect(early.ran).toEqual(["usage-check", "email-outbox", "upload-cleanup", "trash-purge", "push"]);
     const first = await tickJob(after7);
     expect(first.ran).toContain("error-summary");
     const second = await tickJob(after7);

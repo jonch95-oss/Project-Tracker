@@ -1,4 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
+import webpush from "web-push";
+
+// Throwaway push keys for this run only (never a real secret).
+const vapid = webpush.generateVAPIDKeys();
 
 const PORT = Number(process.env.E2E_PORT ?? 3100);
 const DATABASE_URL = process.env.E2E_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/pc_e2e_test";
@@ -34,6 +38,8 @@ export default defineConfig({
       CRON_SECRET: "e2e-job-secret-0123456789abcdef",
       E2E_DISABLE_RATE_LIMIT: "1",
       GEOCODER: "off",
+      VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? vapid.publicKey,
+      VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY ?? vapid.privateKey,
       NODE_ENV: process.env.CI ? "production" : "development",
     },
   },

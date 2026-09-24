@@ -56,14 +56,16 @@ export interface NotifyInput {
 
 /**
  * In-app notification rows. The actor never notifies themselves, and one
- * person gets one row per event even if they qualify twice (assignee and
- * watcher, say). Deactivated people are skipped.
+ * person gets one row per event and task even if they qualify twice
+ * (assignee and watcher, say). Deactivated people are skipped. Push and
+ * email follow from these rows (services/push.ts dispatchPending).
  */
 export async function notify(tx: DbOrTx, actorId: string | null, rows: NotifyInput[]): Promise<number> {
   const seen = new Set<string>();
-  const out = rows.filter((r) => r.userId && r.userId !== actorId && !seen.has(r.userId) && seen.add(r.userId));
+  const key = (r: NotifyInput) => `${r.userId}:${r.taskId ?? ""}`;
+  const out = rows.filter((r) => r.userId && r.userId !== actorId && !seen.has(key(r)) && seen.add(key(r)));
   if (out.length === 0) return 0;
-  const users = await tx.select({ id: schema.user.id, role: schema.user.role }).from(schema.user).where(and(inArray(schema.user.id, out.map((r) => r.userId)), eq(schema.user.status, "active")));
+  const users = await tx.select({ id: schema.user.id, role: schema.user.role }).from(schema.user).where(and(inArray(schema.user.id, [...new Set(out.map((r) => r.userId))]), eq(schema.user.status, "active")));
   const active = new Map(users.map((u) => [u.id, u.role]));
   // Project news only reaches people still on the project (or the owner): removal cuts it off at once.
   const projectIds = [...new Set(out.map((r) => r.projectId).filter((x): x is string => !!x))];
@@ -96,7 +98,7 @@ async function projectName(tx: DbOrTx, projectId: string): Promise<string> {
 /* Approvals                                                           */
 /* ------------------------------------------------------------------ */
 
-async function activeOwners(tx: DbOrTx): Promise<string[]> {
+export async function activeOwners(tx: DbOrTx): Promise<string[]> {
   const rows = await tx.select({ id: schema.user.id }).from(schema.user).where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active"))).orderBy(schema.user.createdAt);
   return rows.map((r) => r.id);
 }

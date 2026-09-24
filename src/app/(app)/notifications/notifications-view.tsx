@@ -7,8 +7,9 @@ import { Button, Skeleton } from "@/components/ui/primitives";
 import { formatDateTimeET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { useTRPC } from "@/lib/trpc";
+import { WhatsAppShare } from "@/components/whatsapp-share";
 
-/** The in-app notification list. Push, the digest and preferences come in Milestone 7. */
+/** The in-app notification list: everything lands here, whatever reaches the phone (Settings → Notifications). */
 export function NotificationsView() {
   const trpc = useTRPC();
   const qc = useQueryClient();
@@ -53,7 +54,7 @@ export function NotificationsView() {
           const cls = "flex w-full items-start gap-3 px-4 py-4 text-left hover:bg-sunken/60 sm:px-5";
           const read = () => !n.readAt && markRead.mutate({ ids: [n.id] });
           return (
-            <li key={n.id}>
+            <li key={n.id} className="flex items-start">
               {n.href ? (
                 <Link href={n.href} onClick={read} className={cls}>
                   {body}
@@ -63,6 +64,7 @@ export function NotificationsView() {
                   {body}
                 </button>
               )}
+              {n.kind !== "digest" && n.kind !== "system" && <WhatsAppShare compact text={n.body ? `${n.title} · ${n.body}` : n.title} href={n.href} className="mr-2 mt-3 shrink-0 sm:mr-3" />}
             </li>
           );
         })}

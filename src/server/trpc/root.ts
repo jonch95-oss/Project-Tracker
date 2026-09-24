@@ -6,6 +6,7 @@ import { photosRouter } from "./routers/photos";
 import { companiesRouter, membersRouter, projectsRouter } from "./routers/projects";
 import { auditRouter, systemRouter } from "./routers/system";
 import { keyDatesRouter, notificationsRouter, tasksRouter } from "./routers/tasks";
+import { notifySettingsRouter, pushRouter } from "./routers/notify-settings";
 import { templatesRouter } from "./routers/templates";
 import { invitesRouter, meRouter, usersRouter } from "./routers/users";
 
@@ -24,6 +25,8 @@ export const appRouter = router({
   tasks: tasksRouter,
   keyDates: keyDatesRouter,
   notifications: notificationsRouter,
+  notifySettings: notifySettingsRouter,
+  push: pushRouter,
   audit: auditRouter,
   system: systemRouter,
 });

@@ -35,6 +35,10 @@ const schema = z.object({
    */
   VIRUS_SCAN_URL: z.url().optional(),
   VIRUS_SCAN_TOKEN: z.string().optional(),
+  /** Web push (brief §9). The public key is shown to browsers; the private key signs each push. Without them push is off. */
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().default("mailto:projects@liandev.com"),
   /** NYC Open Data (Socrata) app token for the public-records watch. */
   SOCRATA_APP_TOKEN: z.string().optional(),
 });

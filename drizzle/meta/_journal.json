@@ -78,6 +78,13 @@
       "when": 1790220754799,
       "tag": "0010_financials_m6_review",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790221692885,
+      "tag": "0011_notifications_m7",
+      "breakpoints": true
     }
   ]
 }

@@ -238,3 +238,10 @@ export const IconUser = (p: IconProps) => (
     <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
   </Icon>
 );
+/** A speech bubble with a handset: "share by WhatsApp" (a neutral drawing, not the brand mark). */
+export const IconShare = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 3.75a8.25 8.25 0 0 0-7.1 12.45L3.75 20.25l4.2-1.1A8.25 8.25 0 1 0 12 3.75z" />
+    <path d="M9.25 8.75c0 3.2 2.8 6 6 6l1-1.5-1.75-1-1 .75a4 4 0 0 1-1.75-1.75l.75-1-1-1.75z" />
+  </Icon>
+);

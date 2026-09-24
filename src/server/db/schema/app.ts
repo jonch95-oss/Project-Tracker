@@ -422,6 +422,10 @@ export const task = pgTable(
     seriesId: uuid("series_id"),
     /** The occurrence this task's completion created (so reopening removes exactly that one). */
     nextOccurrenceId: uuid("next_occurrence_id"),
+    /** Overdue nudges (brief §9): how many for the current due date, and when the last went out. */
+    nudgeCount: integer("nudge_count").notNull().default(0),
+    nudgedForDue: text("nudged_for_due"),
+    lastNudgedOn: text("last_nudged_on"),
     requiredAttachment: text("required_attachment"),
     subItems: jsonb("sub_items").$type<{ id: string; text: string; done: boolean }[]>().notNull().default([]),
     recurrence: jsonb("recurrence"),
@@ -543,6 +547,7 @@ export const NOTIFICATION_KINDS = [
   "follow_up",
   "record_change",
   "file_added",
+  "digest",
   "system",
 ] as const;
 
@@ -566,9 +571,64 @@ export const notification = pgTable(
     /** In-app link, e.g. /projects/…?task=… */
     href: text("href"),
     readAt: timestamp("read_at", { withTimezone: true }),
+    /** Web push: pending = not yet decided; set when pushed, skipped (preference / no device) or held for quiet hours. */
+    pushState: text("push_state", { enum: ["pending", "sent", "skipped", "held"] }).notNull().default("pending"),
+    pushedAt: timestamp("pushed_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [index("notification_user_idx").on(t.userId, t.readAt, t.createdAt)],
+  (t) => [index("notification_user_idx").on(t.userId, t.readAt, t.createdAt), index("notification_push_idx").on(t.pushState, t.createdAt)],
+);
+
+/** One browser or iPhone home-screen app that accepts web push for a person. */
+export const pushSubscription = pgTable(
+  "push_subscription",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    /** "iPhone", "Mac · Chrome"… for the device list. */
+    label: text("label"),
+    failures: integer("failures").notNull().default(0),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("push_subscription_endpoint_idx").on(t.endpoint), index("push_subscription_user_idx").on(t.userId)],
+);
+
+/**
+ * Notification preferences (brief §9): per event and channel, quiet hours
+ * and the daily digest. A missing row means the defaults.
+ */
+export const notificationSettings = pgTable("notification_settings", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  /** { [kind]: { push?: boolean, email?: boolean } } — only channels changed from the default are stored. */
+  prefs: jsonb("prefs").$type<Record<string, { push?: boolean; email?: boolean }>>().notNull().default({}),
+  /** "HH:MM" New York time, or null for no quiet hours. */
+  quietStart: text("quiet_start"),
+  quietEnd: text("quiet_end"),
+  digest: boolean("digest").notNull().default(true),
+  updatedAt: updatedAt(),
+});
+
+/** Watch a folder: hear when files are added (brief §9). */
+export const folderWatch = pgTable(
+  "folder_watch",
+  {
+    folderId: uuid("folder_id")
+      .notNull()
+      .references(() => folder.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.folderId, t.userId] })],
 );
 
 /**

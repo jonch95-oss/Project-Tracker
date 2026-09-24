@@ -7,6 +7,7 @@ import { schema, type DbOrTx } from "../../db";
 import { storage } from "../../storage";
 import { recordAudit } from "../../services/audit";
 import { attachedVisibleFileIds, defaultFolderForPhase, folderCounts, folderScope, purgeFiles, type FileRow, type FolderRow } from "../../services/files";
+import { notifyFileAdded } from "../../services/notifications";
 import { scanner } from "../../services/scan";
 import { sharedTaskIds } from "../../services/tasks";
 import { assertUploadBudget, claimUpload, createPendingUpload, filePath, meterStored, openUpload, verifyUploadedObjects } from "../../services/uploads";
@@ -113,6 +114,9 @@ export const filesRouter = router({
     const counts = await folderCounts(ctx.db, [...scope.ids]);
     const canShare = ctx.project.can("project.manageMembers");
     const shares = canShare && scope.ids.size ? await ctx.db.select().from(schema.folderShare).where(inArray(schema.folderShare.folderId, [...scope.ids])) : [];
+    const watching = scope.ids.size
+      ? new Set((await ctx.db.select({ id: schema.folderWatch.folderId }).from(schema.folderWatch).where(and(eq(schema.folderWatch.userId, c.viewer.id), inArray(schema.folderWatch.folderId, [...scope.ids])))).map((r) => r.id))
+      : new Set<string>();
     const photoCount = scope.folders.some((f) => f.isPhotos)
       ? ((await ctx.db.select({ n: sql<number>`count(*)::int` }).from(schema.projectPhoto).where(eq(schema.projectPhoto.projectId, ctx.project.projectId)))[0]?.n ?? 0)
       : 0;
@@ -126,6 +130,7 @@ export const filesRouter = router({
         bytes: counts.get(f.id)?.bytes ?? 0,
         photos: f.isPhotos ? photoCount : 0,
         sharedWith: canShare ? shares.filter((s) => s.folderId === f.id).map((s) => s.userId) : [],
+        watching: watching.has(f.id),
       })),
       access: {
         canUpload: scope.folders.length > 0,
@@ -323,6 +328,7 @@ export const filesRouter = router({
             await tx.insert(schema.taskAttachment).values({ taskId: meta.taskId, fileId, addedById: ctx.viewer.id }).onConflictDoNothing();
           }
           await audit(tx, c, folder, number === 1 ? `${ctx.viewer.name} added ${meta.name} to ${folder.name}` : `${ctx.viewer.name} uploaded version ${number} of ${meta.name}`, fileId, "create", { bytes: main.size, taskId: meta.taskId });
+          await notifyFileAdded(tx, ctx.viewer.id, { projectId: input.projectId, folderId: folder.id, fileId, name: meta.name, isNewVersion: number > 1 });
           return { fileId, number };
         });
       } catch (e) {
@@ -530,6 +536,17 @@ export const filesRouter = router({
     }),
 
   /** Share a folder with an outside collaborator on the project (or stop sharing). The gated folder needs their financial access. */
+  /** Watch a folder: a notification whenever a file or new version lands in it (brief §9). */
+  watchFolder: projectProcedure()
+    .input(z.object({ folderId: z.uuid(), on: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const scope = await folderScope(ctx.db, ctx.project, ctx.viewer.id);
+      if (!scope.ids.has(input.folderId)) throw new TRPCError({ code: "NOT_FOUND", message: "Folder not found" });
+      if (input.on) await ctx.db.insert(schema.folderWatch).values({ folderId: input.folderId, userId: ctx.viewer.id }).onConflictDoNothing();
+      else await ctx.db.delete(schema.folderWatch).where(and(eq(schema.folderWatch.folderId, input.folderId), eq(schema.folderWatch.userId, ctx.viewer.id)));
+      return { watching: input.on };
+    }),
+
   shareFolder: projectProcedure("project.manageMembers")
     .input(z.object({ folderId: z.uuid(), userId: z.string().min(1).max(64), on: z.boolean() }))
     .mutation(async ({ ctx, input }) => {

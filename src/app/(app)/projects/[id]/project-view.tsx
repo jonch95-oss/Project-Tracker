@@ -133,7 +133,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
             onFocusTask={(id) => setTab("checklist", params.get("phase") ?? undefined, id ?? undefined)}
           />
         ) : tab === "files" ? (
-          <FilesTab projectId={projectId} onOpenPhotos={() => setTab("overview")} />
+          <FilesTab projectId={projectId} onOpenPhotos={() => setTab("overview")} focusFolder={params.get("folder")} focusFile={params.get("file")} />
         ) : tab === "dates" ? (
           <KeyDatesTab projectId={projectId} />
         ) : tab === "team" ? (

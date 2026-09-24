@@ -1,7 +1,10 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { after } from "next/server";
 import { allowedOrigins } from "@/server/env";
 import { createContext } from "@/server/trpc/init";
 import { appRouter } from "@/server/trpc/root";
+import { dispatchPending } from "@/server/services/push";
+import { logError } from "@/server/services/errors";
 
 /**
  * CSRF: every mutation must come from our own origin. Browsers always send
@@ -20,6 +23,8 @@ function handler(req: Request) {
       headers: { "content-type": "application/json" },
     });
   }
+  // Push whatever this request notified, once the response is on its way (the hourly tick is the safety net).
+  if (req.method === "POST") after(() => dispatchPending().catch((err) => logError("request", err, { path: "push-dispatch" })));
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req,

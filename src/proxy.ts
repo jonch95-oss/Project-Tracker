@@ -37,5 +37,5 @@ function isPublic(pathname: string): boolean {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next|manifest.webmanifest|icon|apple-icon|.*\\.(?:png|svg|ico|webp|jpg|woff2)$).*)"],
+  matcher: ["/((?!api|_next|sw\\.js|manifest.webmanifest|icon|apple-icon|.*\\.(?:png|svg|ico|webp|jpg|woff2)$).*)"],
 };

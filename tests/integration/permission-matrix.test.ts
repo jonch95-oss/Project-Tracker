@@ -368,6 +368,14 @@ const MATRIX: Record<string, Row | "public"> = {
   "notifications.unreadCount": { allowed: ACTIVE, call: (c) => c.notifications.unreadCount() },
   "notifications.markRead": { allowed: ACTIVE, call: (c) => c.notifications.markRead({ ids: ["00000000-0000-4000-8000-000000000000"] }) },
   "notifications.markAllRead": { allowed: ACTIVE, call: (c) => c.notifications.markAllRead() },
+  "notifySettings.get": { allowed: ACTIVE, call: (c) => c.notifySettings.get() },
+  "notifySettings.save": { allowed: ACTIVE, call: (c) => c.notifySettings.save({ prefs: {}, quietStart: null, quietEnd: null, digest: true }) },
+  "push.config": { allowed: ACTIVE, call: (c) => c.push.config() },
+  "push.devices": { allowed: ACTIVE, call: (c) => c.push.devices() },
+  "push.subscribe": { allowed: ACTIVE, call: (c) => c.push.subscribe({ endpoint: `https://fcm.googleapis.com/fcm/send/${uid()}`, keys: { p256dh: "BNcRdreALRFXTkOOUHK1EtK2", auth: "tBHItJI5svbpez7KI4CCXg" } }) },
+  "push.unsubscribe": { allowed: ACTIVE, call: (c) => c.push.unsubscribe({ endpoint: "https://fcm.googleapis.com/fcm/send/none" }) },
+  "push.test": { allowed: ACTIVE, call: (c) => c.push.test().catch((e: { code?: string }) => { if (e.code !== "PRECONDITION_FAILED") throw e; }) },
+  "push.removeDevice": { allowed: ACTIVE, call: (c) => c.push.removeDevice({ id: "00000000-0000-4000-8000-000000000000" }) },
 
   "files.folders": { allowed: ASSIGNED, call: (c, f) => c.files.folders({ projectId: f.projectId }) },
   "files.list": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.list({ projectId: f.projectId, folderId: await folderId(f.projectId) }) },
@@ -409,6 +417,7 @@ const MATRIX: Record<string, Row | "public"> = {
       return c.files.deleteFolder({ projectId: f.projectId, folderId: x!.id });
     },
   },
+  "files.watchFolder": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.watchFolder({ projectId: f.projectId, folderId: await folderId(f.projectId), on: true }) },
   "files.shareFolder": { allowed: EDITORS, call: async (c, f) => c.files.shareFolder({ projectId: f.projectId, folderId: await folderId(f.projectId), userId: f.externalId, on: true }) },
 
   "financials.overview": { allowed: FIN_VIEW, call: (c, f) => c.financials.overview({ projectId: f.projectId }) },
