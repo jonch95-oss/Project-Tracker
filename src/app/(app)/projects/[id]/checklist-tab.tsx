@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useState, type DragEvent, type FormEvent } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconAlert, IconCheck, IconChevronDown, IconFlag, IconGrip, IconLock, IconPaperclip, IconPlus, IconRepeat } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
@@ -51,7 +51,8 @@ export function ChecklistTab({
   const setOpenTask = onFocusTask;
   const [selecting, setSelecting] = useState(false);
   const [attachFor, setAttachFor] = useState<string | null>(null);
-  const inFlight = useRef(new Set<string>());
+  // Tasks with a tick on its way to the server (a stable Set, mutated in callbacks only).
+  const [inFlight] = useState(() => new Set<string>());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [hideDone, setHideDone] = useState(false);
@@ -62,7 +63,7 @@ export function ChecklistTab({
   const setDone = useMutation(
     trpc.checklist.setDone.mutationOptions({
       onMutate: async (v) => {
-        inFlight.current.add(v.taskId);
+        inFlight.add(v.taskId);
         // Optimistic tick so one tap feels instant.
         const key = trpc.checklist.get.queryKey({ projectId });
         await qc.cancelQueries({ queryKey: key });
@@ -71,7 +72,7 @@ export function ChecklistTab({
         return { prev };
       },
       onSuccess: (r, v, ctx) => {
-        inFlight.current.delete(v.taskId);
+        inFlight.delete(v.taskId);
         // Nothing changed on the server: undo the optimistic tick before routing to the attach step.
         if (r.status === "needs_attachment" && ctx?.prev) qc.setQueryData(trpc.checklist.get.queryKey({ projectId }), ctx.prev);
         // Take the server's new version at once, so a quick second tap isn't refused as stale.
@@ -87,7 +88,7 @@ export function ChecklistTab({
         }
       },
       onError: (e, v, ctx) => {
-        inFlight.current.delete(v.taskId);
+        inFlight.delete(v.taskId);
         if (ctx?.prev) qc.setQueryData(trpc.checklist.get.queryKey({ projectId }), ctx.prev);
         toast("error", errorMessage(e));
       },
@@ -111,7 +112,7 @@ export function ChecklistTab({
 
   const toggle = (t: ChecklistTask) => {
     // One change per task at a time: a second tap while the first is on its way is ignored.
-    if (inFlight.current.has(t.id)) return;
+    if (inFlight.has(t.id)) return;
     if (t.status !== "done" && t.waitingOn.length) {
       toast("error", `Waiting on: ${t.waitingOn.map((w) => w.title).join("; ")}`);
       return;
