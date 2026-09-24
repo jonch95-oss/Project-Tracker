@@ -68,7 +68,8 @@ export const recordsRouter = router({
     if (run?.lastRunAt && Date.now() - run.lastRunAt.getTime() < SYNC_COOLDOWN_MS) {
       throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Checked in the last 10 minutes. Try again shortly." });
     }
-    const r = await syncProjectRecords(input.projectId);
+    const r = await syncProjectRecords(input.projectId, { deadline: Date.now() + 50_000 });
+    if (r.skipped === "busy") throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "A check is already running for this project." });
     return { ok: r.ok.length, failed: r.failed.map((f) => f.source), alerts: r.alerts };
   }),
 

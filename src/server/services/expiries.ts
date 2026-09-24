@@ -59,13 +59,20 @@ export async function expiryReminderJob(now = new Date()): Promise<{ reminded: n
   });
 }
 
-/** Vendors with an expired, open COI anywhere (normalized names). */
+/**
+ * Vendors whose COI has lapsed: an expired, open COI on a live project and no
+ * current one anywhere (a renewal filed on another project clears the flag).
+ */
 export async function vendorsWithExpiredCoi(conn: DbOrTx, today = todayET()): Promise<Map<string, string>> {
   const rows = await conn
-    .select({ key: schema.expiryItem.vendorKey, name: schema.expiryItem.vendorName, category: schema.expiryItem.category })
+    .select({ key: schema.expiryItem.vendorKey, name: schema.expiryItem.vendorName, category: schema.expiryItem.category, expiresOn: schema.expiryItem.expiresOn })
     .from(schema.expiryItem)
-    .where(and(isNull(schema.expiryItem.closedAt), isNotNull(schema.expiryItem.vendorKey), sql`${schema.expiryItem.expiresOn} < ${today}`));
-  return new Map(rows.filter((r) => isVendorCoi(r.category) && r.key).map((r) => [r.key!, r.name ?? r.key!]));
+    .innerJoin(schema.project, eq(schema.project.id, schema.expiryItem.projectId))
+    .where(and(isNull(schema.expiryItem.closedAt), isNotNull(schema.expiryItem.vendorKey), isNull(schema.project.archivedAt), sql`${schema.project.status} <> 'closed'`));
+  const cois = rows.filter((r) => isVendorCoi(r.category) && r.key);
+  // Covered per kind of certificate: a current GL doesn't excuse a lapsed workers' comp.
+  const current = new Set(cois.filter((r) => r.expiresOn >= today).map((r) => `${r.key}|${r.category}`));
+  return new Map(cois.filter((r) => r.expiresOn < today && !current.has(`${r.key}|${r.category}`)).map((r) => [r.key!, r.name ?? r.key!]));
 }
 
 /**

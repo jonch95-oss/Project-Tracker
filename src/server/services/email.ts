@@ -170,6 +170,7 @@ export async function sendEmail(msg: OutgoingEmail): Promise<EmailStatus> {
       text: "",
       category: msg.category,
       urgent: msg.urgent,
+      critical: msg.critical ?? false,
       status: "skipped",
       error: "Email is on hold (no sender configured)",
     });
@@ -177,7 +178,7 @@ export async function sendEmail(msg: OutgoingEmail): Promise<EmailStatus> {
   }
   const [row] = await db()
     .insert(schema.emailOutbox)
-    .values({ toAddress: msg.to, subject: msg.subject, html: msg.html, text: msg.text, category: msg.category, urgent: msg.urgent, status: "queued" })
+    .values({ toAddress: msg.to, subject: msg.subject, html: msg.html, text: msg.text, category: msg.category, urgent: msg.urgent, critical: msg.critical ?? false, status: "queued" })
     .returning({ id: schema.emailOutbox.id });
   return deliver(row!.id, msg);
 }
@@ -198,11 +199,11 @@ export async function drainOutbox(limit = 25): Promise<{ attempted: number; sent
         or (${schema.emailOutbox.status} = 'failed' and ${schema.emailOutbox.attempts} < 5)
         or (${schema.emailOutbox.status} = 'held' and ${schema.emailOutbox.urgent} = true)`,
     )
-    .orderBy(sql`${schema.emailOutbox.urgent} desc`, asc(schema.emailOutbox.createdAt))
+    .orderBy(sql`${schema.emailOutbox.critical} desc`, sql`${schema.emailOutbox.urgent} desc`, asc(schema.emailOutbox.createdAt))
     .limit(limit);
   let sent = 0;
   for (const r of rows) {
-    const status = await deliver(r.id, { to: r.toAddress, subject: r.subject, html: r.html, text: r.text, category: r.category, urgent: r.urgent });
+    const status = await deliver(r.id, { to: r.toAddress, subject: r.subject, html: r.html, text: r.text, category: r.category, urgent: r.urgent, critical: r.critical });
     if (status === "sent") sent++;
     if (status === "held") break; // budget reached; try again next hour
   }

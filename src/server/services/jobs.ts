@@ -209,10 +209,17 @@ export async function tickJob(now = new Date()): Promise<JobResult> {
     for (const d of DAILY) {
       if (hourET(now) >= d.hourET && !(await ranToday(d.job, now))) await attempt(d.job, d.fn);
     }
-    // Public records: nightly per project (1–6am New York), failed sources retried with backoff.
-    await attempt("records-sync", () => recordsSyncJob(now, 150_000));
-    // Last, so today's reminders, digest and record alerts go out on this tick.
+    // Push before the records sync, so a slow NYC Open Data can never hold up held notifications.
     await attempt("push", () => pushJob(now));
+    // Public records: nightly per project (1–6am New York), failed sources retried with backoff, inside a time budget.
+    await attempt("records-sync", async () => {
+      try {
+        return await recordsSyncJob(now, 150_000);
+      } finally {
+        // Record alerts (critical orders above all) go out on this tick even if a source failed.
+        await dispatchPending(200, now);
+      }
+    });
     if (failed.length) throw new Error(`Jobs failed: ${failed.join(", ")}`);
     return { ran, staleRunsClosed: stale };
   });

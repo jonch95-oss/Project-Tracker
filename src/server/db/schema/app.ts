@@ -185,6 +185,8 @@ export const emailOutbox = pgTable(
     text: text("text").notNull(),
     category: text("category", { enum: EMAIL_CATEGORIES }).notNull(),
     urgent: boolean("urgent").notNull().default(false),
+    /** Stop-work / vacate orders: sent whatever the budget, retries included (brief §10). */
+    critical: boolean("critical").notNull().default(false),
     status: text("status", { enum: ["queued", "sent", "held", "failed", "skipped"] })
       .notNull()
       .default("queued"),
@@ -961,6 +963,10 @@ export const recordSync = pgTable(
     rows: integer("rows").notNull().default(0),
     failures: integer("failures").notNull().default(0),
     error: text("error"),
+    /** "_run" row only: a lease so the nightly job and "Check now" never sync one project at once. */
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    /** "_run" row only: the New York date of the last nightly pass (a daytime check doesn't skip the night). */
+    nightlyOn: text("nightly_on"),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.source] })],
 );

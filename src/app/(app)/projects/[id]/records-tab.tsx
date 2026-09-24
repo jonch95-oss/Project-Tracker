@@ -116,7 +116,7 @@ export function RecordsTab({ projectId, onOpenTask }: { projectId: string; onOpe
                 {t.date ? d(t.date) : ""}
               </span>
             </span>
-            <a href={t.url} target="_blank" rel="noopener noreferrer" className="text-[13px] underline underline-offset-4">
+            <a href={t.url} target="_blank" rel="noopener noreferrer" className="text-[13px] underline underline-offset-4" aria-label={`Source record for ${t.title}`}>
               Source
             </a>
           </li>
@@ -178,7 +178,7 @@ function RecordList({ title, items, empty, note, extra }: { title: string; items
         </span>
         {i.detail.description ? <span className="mt-1 block line-clamp-2 text-[13px] text-muted">{String(i.detail.description)}</span> : null}
       </span>
-      <a href={i.url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[13px] underline underline-offset-4">
+      <a href={i.url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[13px] underline underline-offset-4" aria-label={`Source record for ${i.title}`}>
         Source
       </a>
     </li>
@@ -216,7 +216,7 @@ function AlertRow({ projectId, alert: a, canEdit, onOpenTask, onChanged }: { pro
         </span>
         <span className="num block text-[13px] text-muted">
           {formatDateTimeET(a.createdAt, { month: "short", day: "numeric" })} ·{" "}
-          <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+          <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4" aria-label={`Source record for ${a.title}`}>
             source
           </a>
         </span>
@@ -266,7 +266,7 @@ function ViolationRow({ v, canEdit, onEdit }: { v: Violation; canEdit: boolean; 
       </span>
       <span className="flex shrink-0 flex-wrap items-center gap-3">
         <StatusPill tone={v.closed ? "done" : v.stage === "issued" ? "attention" : "neutral"}>{stage.label}</StatusPill>
-        <a href={v.url} target="_blank" rel="noopener noreferrer" className="text-[13px] underline underline-offset-4">
+        <a href={v.url} target="_blank" rel="noopener noreferrer" className="text-[13px] underline underline-offset-4" aria-label={`Source record for ${v.title}`}>
           Source
         </a>
         {canEdit && (

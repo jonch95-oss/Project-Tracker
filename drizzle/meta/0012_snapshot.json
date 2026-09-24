@@ -1,5 +1,5 @@
 {
-  "id": "003e841a-d088-4dbd-a4ca-fe8664b6c0a5",
+  "id": "b6b98ba9-eb36-450c-b0fb-253896a401d7",
   "prevId": "05275dfa-bce7-4b3d-b476-3955ef4668d7",
   "version": "7",
   "dialect": "postgresql",
@@ -1682,6 +1682,13 @@
         },
         "urgent": {
           "name": "urgent",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "critical": {
+          "name": "critical",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -5180,6 +5187,18 @@
         },
         "error": {
           "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "nightly_on": {
+          "name": "nightly_on",
           "type": "text",
           "primaryKey": false,
           "notNull": false

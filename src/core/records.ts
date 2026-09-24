@@ -9,6 +9,8 @@
  * required columns on every run and fails loudly if a dataset changes.
  */
 
+import { daysBetween } from "./time";
+
 export const BORO_NAME = { "1": "MANHATTAN", "2": "BRONX", "3": "BROOKLYN", "4": "QUEENS", "5": "STATEN ISLAND" } as const;
 export type BoroCode = keyof typeof BORO_NAME;
 
@@ -76,6 +78,8 @@ export interface SourceQuery {
   $order?: string;
   $limit: number;
   $select?: string;
+  /** Stop after this many rows (default: everything, up to the client's cap). */
+  maxRows?: number;
 }
 
 export interface SourceDef {
@@ -116,7 +120,7 @@ export function toCents(v: unknown): number {
 const row = (dataset: string, field: string, value: string) => `https://data.cityofnewyork.us/resource/${dataset}.json?${field}=${encodeURIComponent(value)}`;
 const bisProfile = (l: Lot) => `https://a810-bisweb.nyc.gov/bisweb/PropertyProfileOverviewServlet?boro=${l.boro}&block=${pad(l.block, 5)}&lot=${pad(l.lot, 5)}`;
 
-/** DOB complaint dispositions that mean a stop-work or vacate order is in force (from dataset 6v9u-ndjg). */
+/** DOB complaint dispositions that put a stop-work or vacate order in force (from dataset 6v9u-ndjg). */
 export const ORDER_IN_FORCE_CODES = new Set(["A3", "L1", "H5", "K4", "Y1", "Y3", "ME", "MF", "MH", "MI"]);
 export const ORDER_LABEL: Record<string, string> = {
   A3: "Full stop-work order",
@@ -183,7 +187,8 @@ export const SOURCES: SourceDef[] = [
     dataset: "ic3t-wcy2",
     columns: ["job__", "doc__", "borough", "house__", "street_name", "job_type", "job_status_descrp", "latest_action_date", "job_description", "bin__"],
     // By address (brief §10): zero-padded block/lot returns nulls here, and the dataset's bbl column is unreliable.
-    query: (c) => (c.address ? { $where: `house__=${q(c.address.house)} AND upper(street_name)=${q(c.address.street)} AND borough=${q(BORO_NAME[c.lot.boro])}`, $order: "latest_action_date DESC", $limit: 200 } : null),
+    // Its dates are MM/DD/YYYY text, so rows page in dataset order.
+    query: (c) => (c.address ? { $where: `house__=${q(c.address.house)} AND upper(street_name)=${q(c.address.street)} AND borough=${q(BORO_NAME[c.lot.boro])}`, $order: ":id", $limit: 500 } : null),
     map: (r) => {
       const job = s(r.job__);
       if (!job) return null;
@@ -206,7 +211,7 @@ export const SOURCES: SourceDef[] = [
     label: "DOB permits (BIS)",
     dataset: "ipu4-2q9a",
     columns: ["permit_si_no", "job__", "borough", "block", "lot", "permit_status", "permit_type", "work_type", "issuance_date", "expiration_date", "bin__"],
-    query: (c) => ({ $where: `borough=${q(BORO_NAME[c.lot.boro])} AND block=${q(pad(c.lot.block, 5))} AND lot=${q(pad(c.lot.lot, 5))}`, $limit: 300 }),
+    query: (c) => ({ $where: `borough=${q(BORO_NAME[c.lot.boro])} AND block=${q(pad(c.lot.block, 5))} AND lot=${q(pad(c.lot.lot, 5))}`, $order: ":id", $limit: 500 }),
     map: (r) => {
       const id = s(r.permit_si_no);
       if (!id) return null;
@@ -346,7 +351,7 @@ export const SOURCES: SourceDef[] = [
     label: "HPD vacate orders",
     dataset: "tb8q-a3ar",
     columns: ["vacate_order_number", "primary_vacate_reason", "vacate_type", "vacate_effective_date", "actual_rescind_date", "bin", "bbl"],
-    query: (c) => ({ $where: `bbl=${q(c.lot.bbl)}`, $limit: 50 }),
+    query: (c) => ({ $where: `bbl=${q(c.lot.bbl)}`, $order: ":id", $limit: 50 }),
     map: (r) => {
       const id = s(r.vacate_order_number);
       if (!id) return null;
@@ -369,7 +374,7 @@ export const SOURCES: SourceDef[] = [
     label: "FDNY vacate list",
     dataset: "n5xc-7jfa",
     columns: ["description", "vac_date", "status_change_date", "bin", "bbl"],
-    query: (c) => ({ $where: `bbl=${q(c.lot.bbl)}`, $limit: 50 }),
+    query: (c) => ({ $where: `bbl=${q(c.lot.bbl)}`, $order: ":id", $limit: 50 }),
     map: (r) => {
       const vac = isoDate(r.vac_date);
       const bin = s(r.bin);
@@ -398,7 +403,7 @@ export const SOURCES: SourceDef[] = [
       const parts = [];
       if (c.bins.length) parts.push(`bin in (${c.bins.slice(0, 20).map(q).join(",")})`);
       if (c.address) parts.push(`(house_number=${q(c.address.house)} AND upper(house_street)=${q(c.address.street)})`);
-      return parts.length ? { $where: parts.join(" OR "), $limit: 300 } : null;
+      return parts.length ? { $where: parts.join(" OR "), $order: ":id", $limit: 500 } : null;
     },
     map: (r) => {
       const id = s(r.complaint_number);
@@ -412,9 +417,10 @@ export const SOURCES: SourceDef[] = [
         status: [s(r.status), code].filter(Boolean).join(" · ") || null,
         date: isoDate(r.date_entered),
         open: s(r.status) !== "CLOSED",
+        // A candidate only: resolveComplaintOrders decides whether it's still in force.
         critical: !!code && ORDER_IN_FORCE_CODES.has(code),
         url: `https://a810-bisweb.nyc.gov/bisweb/OverviewForComplaintServlet?complaintno=${id}`,
-        detail: { category: s(r.complaint_category), disposition: order ?? code, dispositionDate: isoDate(r.disposition_date), bin: s(r.bin) },
+        detail: { category: s(r.complaint_category), disposition: order ?? code, dispositionCode: code, dispositionDate: isoDate(r.disposition_date), bin: s(r.bin) },
       };
     },
   },
@@ -507,7 +513,8 @@ export const SOURCES: SourceDef[] = [
     dataset: "8h5j-fqxa",
     columns: ["document_id", "borough", "block", "lot", "good_through_date"],
     // Step 1 of 2 (brief §10): legals by lot (unpadded, borough as a string) → document ids.
-    query: (c) => ({ $where: `borough=${q(c.lot.boro)} AND block=${q(String(c.lot.block))} AND lot=${q(String(c.lot.lot))}`, $order: "good_through_date DESC", $limit: 60 }),
+    // Document ids start with the recording date, so newest first is stable night to night.
+    query: (c) => ({ $where: `borough=${q(c.lot.boro)} AND block=${q(String(c.lot.block))} AND lot=${q(String(c.lot.lot))}`, $order: "document_id DESC", $limit: 60, maxRows: 60 }),
     map: () => null,
   },
   {
@@ -516,7 +523,7 @@ export const SOURCES: SourceDef[] = [
     dataset: "bnx9-e6tj",
     columns: ["document_id", "doc_type", "document_date", "recorded_datetime", "good_through_date"],
     // Step 2 of 2: master records for the documents found in step 1.
-    query: (c) => (c.documentIds?.length ? { $where: `document_id in (${c.documentIds.slice(0, 60).map(q).join(",")})`, $limit: 60 } : null),
+    query: (c) => (c.documentIds?.length ? { $where: `document_id in (${c.documentIds.slice(0, 60).map(q).join(",")})`, $order: "document_id DESC", $limit: 60 } : null),
     map: (r) => {
       const id = s(r.document_id);
       if (!id) return null;
@@ -537,6 +544,32 @@ export const SOURCES: SourceDef[] = [
 ];
 
 export const SOURCE_BY_KEY = new Map(SOURCES.map((d) => [d.key, d]));
+
+/** How long an order is presumed in force without a later rescission (older ones are history). */
+export const ORDER_MAX_AGE_DAYS = 730;
+
+/**
+ * DOB complaints carry the order history of a building: only the latest
+ * order event per building counts, it must not have been rescinded since,
+ * and it must be recent. Everything else is history, not an order in force.
+ */
+export function resolveComplaintOrders(items: RecordItem[], today: string): RecordItem[] {
+  const latest = new Map<string, { item: RecordItem; when: string }>();
+  for (const i of items) {
+    const code = String(i.detail.dispositionCode ?? "");
+    if (!ORDER_LABEL[code]) continue;
+    const bin = String(i.detail.bin ?? "lot");
+    const when = String(i.detail.dispositionDate ?? i.date ?? "");
+    const cur = latest.get(bin);
+    if (!cur || when > cur.when) latest.set(bin, { item: i, when });
+  }
+  const inForce = new Set(
+    [...latest.values()]
+      .filter(({ item, when }) => ORDER_IN_FORCE_CODES.has(String(item.detail.dispositionCode)) && !!when && daysBetween(when, today) <= ORDER_MAX_AGE_DAYS)
+      .map(({ item }) => item),
+  );
+  return items.map((i) => ({ ...i, critical: inForce.has(i), open: inForce.has(i) ? true : i.open }));
+}
 
 let clock: () => Date = () => new Date();
 /** Tests pin "now" for the 311 window. */
@@ -586,7 +619,7 @@ export interface KnownRecord {
 }
 
 /** What counts as news, per kind (brief §10). */
-function newsworthyNew(i: RecordItem): string | null {
+function newsworthyNew(i: RecordItem, today?: string): string | null {
   switch (i.kind) {
     case "job":
       return `New DOB filing: ${i.title}`;
@@ -599,6 +632,8 @@ function newsworthyNew(i: RecordItem): string | null {
     case "sr311":
       return `New ${i.title}`;
     case "recording":
+      // Old documents surfacing late (the extract is re-cut) aren't news.
+      if (today && i.date && daysBetween(i.date, today) > 365) return null;
       return NOTABLE_DOC_TYPES[i.status ?? ""] ? `New ACRIS recording: ${i.title}` : null;
     case "lien":
       return "The lot is on the tax lien sale list";
@@ -616,18 +651,18 @@ function newsworthyNew(i: RecordItem): string | null {
  * source (`baseline`) only orders in force raise alerts: the rest is
  * history, not news.
  */
-export function diffRecords(known: Map<string, KnownRecord>, items: RecordItem[], sourceKey: string, baseline: boolean): RecordAlert[] {
+export function diffRecords(known: Map<string, KnownRecord>, items: RecordItem[], sourceKey: string, baseline: boolean, today?: string): RecordAlert[] {
   const out: RecordAlert[] = [];
   for (const i of items) {
     const prev = known.get(i.key);
     const dk = (suffix: string) => `${sourceKey}:${i.key}:${suffix}`;
     if (i.critical && (!prev || !prev.critical)) {
-      out.push({ kind: "critical", item: i, critical: true, title: `CRITICAL: ${i.title}`, dedupeKey: dk(`critical:${i.status ?? ""}`) });
+      out.push({ kind: "critical", item: i, critical: true, title: `CRITICAL: ${i.title}`, dedupeKey: dk(`critical:${i.status ?? ""}:${i.detail.dispositionDate ?? i.date ?? ""}`) });
       continue;
     }
     if (baseline) continue;
     if (!prev) {
-      const title = newsworthyNew(i);
+      const title = newsworthyNew(i, today);
       if (title) out.push({ kind: "new", item: i, critical: false, title, dedupeKey: dk("new") });
       continue;
     }

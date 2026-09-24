@@ -14,6 +14,7 @@ import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { expiredCoiFlags, expiredCounts } from "../../services/expiries";
+import { resetProjectRecords } from "../../services/records";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
 import { cardHeadlines } from "../../services/financials";
@@ -550,6 +551,8 @@ export const projectsRouter = router({
       };
       return ctx.db.transaction(async (tx) => {
         const version = await bumpVersion(tx, input.projectId, input.version, changes);
+        // A different lot (or street address, which drives the DOB BIS and complaint lookups): start the records watch fresh.
+        if (before.bbl !== bbl || before.address.trim().toUpperCase() !== input.address.trim().toUpperCase()) await resetProjectRecords(tx, input.projectId);
         const changed = Object.fromEntries(
           Object.entries(changes).filter(([k, v]) => (before as Record<string, unknown>)[k] !== v),
         );

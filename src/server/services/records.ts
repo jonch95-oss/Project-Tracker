@@ -1,10 +1,11 @@
 import "server-only";
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import {
   CLOSED_STAGES,
   diffRecords,
   parseAddress,
   parseBbl,
+  resolveComplaintOrders,
   SOURCE_BY_KEY,
   sourceStage,
   stageRank,
@@ -32,9 +33,13 @@ export interface DatasetMeta {
 }
 
 export interface RecordsClient {
-  meta(dataset: string): Promise<DatasetMeta>;
-  rows(dataset: string, query: SourceQuery): Promise<Record<string, unknown>[]>;
+  meta(dataset: string, deadline?: number): Promise<DatasetMeta>;
+  /** Pages through the result (`$limit` is the page size) up to MAX_ROWS. */
+  rows(dataset: string, query: SourceQuery, deadline?: number): Promise<Record<string, unknown>[]>;
 }
+
+/** Enough history for any one lot; more is truncated (and says so in the sync health). */
+export const MAX_ROWS = 2000;
 
 export class RecordsError extends Error {}
 
@@ -43,16 +48,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Socrata over HTTPS with the app token: sequential, retried with backoff on
- * 429 / 5xx / network errors (honouring Retry-After), 20s per request.
+ * 429 / 5xx / network errors (honouring Retry-After), and never past the
+ * caller's deadline, so a slow or down service can't overrun the job.
  */
 function socrataClient(): RecordsClient {
   const token = env().SOCRATA_APP_TOKEN;
-  async function get(url: string): Promise<unknown> {
+  async function get(url: string, deadline: number): Promise<unknown> {
     let wait = 1000;
     for (let attempt = 1; ; attempt++) {
+      const left = deadline - Date.now();
+      if (left < 1000) throw new RecordsError("Out of time for this run; retried next run");
       let res: Response | null = null;
       try {
-        res = await fetch(url, { headers: { Accept: "application/json", ...(token ? { "X-App-Token": token } : {}) }, signal: AbortSignal.timeout(20_000) });
+        res = await fetch(url, { headers: { Accept: "application/json", ...(token ? { "X-App-Token": token } : {}) }, signal: AbortSignal.timeout(Math.min(20_000, left)) });
       } catch (err) {
         if (attempt >= 4) throw new RecordsError(`Network error after ${attempt} tries: ${String(err).slice(0, 200)}`);
       }
@@ -60,20 +68,30 @@ function socrataClient(): RecordsClient {
       if (res && res.status !== 429 && res.status < 500) throw new RecordsError(`NYC Open Data answered ${res.status}: ${(await res.text()).slice(0, 200)}`);
       if (attempt >= 4) throw new RecordsError(`NYC Open Data unavailable (${res?.status ?? "network"}) after ${attempt} tries`);
       const retryAfter = Number(res?.headers.get("retry-after"));
-      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 20_000) : wait);
+      const pause = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 20_000) : wait;
+      if (Date.now() + pause > deadline) throw new RecordsError("NYC Open Data is rate-limiting or slow; retried next run");
+      await sleep(pause);
       wait *= 3;
     }
   }
   return {
-    async meta(dataset) {
-      const m = (await get(`${BASE}/api/views/${dataset}.json`)) as { columns?: { fieldName: string }[]; rowsUpdatedAt?: number };
+    async meta(dataset, deadline = Date.now() + 60_000) {
+      const m = (await get(`${BASE}/api/views/${dataset}.json`, deadline)) as { columns?: { fieldName: string }[]; rowsUpdatedAt?: number };
       return { columns: new Set((m.columns ?? []).map((c) => c.fieldName)), rowsUpdatedAt: m.rowsUpdatedAt ? new Date(m.rowsUpdatedAt * 1000) : null };
     },
-    async rows(dataset, query) {
-      const params = new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)]));
-      const out = await get(`${BASE}/resource/${dataset}.json?${params}`);
-      if (!Array.isArray(out)) throw new RecordsError("Unexpected response from NYC Open Data");
-      return out as Record<string, unknown>[];
+    async rows(dataset, query, deadline = Date.now() + 60_000) {
+      const out: Record<string, unknown>[] = [];
+      // A stable order makes paging safe: ties broken by the row id.
+      const order = query.$order ? (query.$order.includes(":id") ? query.$order : `${query.$order}, :id`) : ":id";
+      const { maxRows = MAX_ROWS, ...soql } = query;
+      for (let offset = 0; offset < Math.min(maxRows, MAX_ROWS); offset += query.$limit) {
+        const params = new URLSearchParams({ ...Object.fromEntries(Object.entries(soql).map(([k, v]) => [k, String(v)])), $order: order, $offset: String(offset) });
+        const page = await get(`${BASE}/resource/${dataset}.json?${params}`, deadline);
+        if (!Array.isArray(page)) throw new RecordsError("Unexpected response from NYC Open Data");
+        out.push(...(page as Record<string, unknown>[]));
+        if (page.length < query.$limit) break;
+      }
+      return out;
     },
   };
 }
@@ -121,70 +139,119 @@ export interface SyncResult {
   skipped?: string;
 }
 
+/** How long one sync may hold a project before another may take over (a crashed run). */
+const LEASE_MS = 15 * 60_000;
+
+/** Take this project's sync lease; false if another sync (nightly or "Check now") holds it. */
+async function takeLease(projectId: string): Promise<boolean> {
+  const conn = db();
+  await conn.insert(schema.recordSync).values({ projectId, source: "_run" }).onConflictDoNothing();
+  const got = await conn
+    .update(schema.recordSync)
+    .set({ lockedUntil: new Date(Date.now() + LEASE_MS) })
+    .where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run"), or(isNull(schema.recordSync.lockedUntil), lt(schema.recordSync.lockedUntil, new Date()))))
+    .returning({ projectId: schema.recordSync.projectId });
+  return got.length > 0;
+}
+
 /**
  * Pull every source for one project's lot, store the records, diff them and
  * raise alerts. Idempotent: records upsert, alerts dedupe on a stable key.
- * One failing source never stops the others; each failure is recorded.
+ * One failing source never stops the others; each failure is recorded. One
+ * sync per project at a time (a lease), and never past `deadline`.
  */
-export async function syncProjectRecords(projectId: string, opts: { now?: Date; meta?: Map<string, DatasetMeta> } = {}): Promise<SyncResult> {
+export async function syncProjectRecords(
+  projectId: string,
+  opts: { now?: Date; meta?: Map<string, DatasetMeta>; deadline?: number; nightly?: boolean } = {},
+): Promise<SyncResult> {
   const now = opts.now ?? new Date();
+  const deadline = opts.deadline ?? Date.now() + 120_000;
   const conn = db();
   const [p] = await conn.select().from(schema.project).where(eq(schema.project.id, projectId));
   const result: SyncResult = { projectId, ok: [], failed: [], alerts: 0 };
   const lot = parseBbl(p?.bbl);
   if (!p || !lot) return { ...result, skipped: "no BBL" };
+  if (!(await takeLease(projectId))) return { ...result, skipped: "busy" };
 
-  const ctx: SourceContext = { lot, address: parseAddress(p.address), bins: [] };
-  const raised: (typeof schema.recordAlert.$inferSelect)[] = [];
-  const metaCache = opts.meta ?? new Map<string, DatasetMeta>();
-  const c = client();
+  try {
+    const ctx: SourceContext = { lot, address: parseAddress(p.address), bins: [] };
+    const raised: (typeof schema.recordAlert.$inferSelect)[] = [];
+    const metaCache = opts.meta ?? new Map<string, DatasetMeta>();
+    const c = client();
+    const today = todayET(now);
 
-  for (const key of ORDER) {
-    const def = SOURCE_BY_KEY.get(key)!;
-    try {
-      let meta = metaCache.get(def.dataset);
-      if (!meta) {
-        meta = await c.meta(def.dataset);
-        metaCache.set(def.dataset, meta);
+    for (const key of ORDER) {
+      const def = SOURCE_BY_KEY.get(key)!;
+      try {
+        if (Date.now() > deadline - 1000) throw new RecordsError("Out of time for this run; retried next run");
+        let meta = metaCache.get(def.dataset);
+        if (!meta) {
+          meta = await c.meta(def.dataset, deadline);
+          metaCache.set(def.dataset, meta);
+        }
+        const missing = def.columns.filter((col) => !meta!.columns.has(col));
+        if (missing.length) throw new RecordsError(`Dataset ${def.dataset} changed: missing ${missing.join(", ")}`);
+        const query = def.query(ctx);
+        const rows = query ? await c.rows(def.dataset, query, deadline) : [];
+        let items: RecordItem[];
+        if (key === "dof_charges") items = [summarizeCharges(rows, today, lot)];
+        else if (key === "acris_legals") {
+          ctx.documentIds = [...new Set(rows.map((r) => String(r.document_id ?? "")).filter(Boolean))];
+          items = [];
+        } else items = dedupeItems(rows.map((r) => def.map(r, ctx)).filter((x): x is RecordItem => !!x));
+        if (key === "dob_complaints") items = resolveComplaintOrders(items, today);
+        for (const i of items) {
+          const bin = i.detail.bin;
+          if (bin && !ctx.bins.includes(String(bin))) ctx.bins.push(String(bin));
+        }
+        if (!HIDDEN_SOURCES.has(key)) raised.push(...(await applySource(projectId, def, items, meta.rowsUpdatedAt, now, rows.length < MAX_ROWS)));
+        else await markSourceOk(conn, projectId, key, meta.rowsUpdatedAt, rows.length, now);
+        result.ok.push(key);
+      } catch (err) {
+        const message = err instanceof RecordsError ? err.message : String(err).slice(0, 500);
+        result.failed.push({ source: key, error: message });
+        await conn
+          .insert(schema.recordSync)
+          .values({ projectId, source: key, lastRunAt: now, failures: 1, error: message })
+          .onConflictDoUpdate({ target: [schema.recordSync.projectId, schema.recordSync.source], set: { lastRunAt: now, failures: sql`${schema.recordSync.failures} + 1`, error: message } });
+        if (!(err instanceof RecordsError)) await logError("job", err, { path: `records:${key}`, context: { projectId } });
       }
-      const missing = def.columns.filter((col) => !meta!.columns.has(col));
-      if (missing.length) throw new RecordsError(`Dataset ${def.dataset} changed: missing ${missing.join(", ")}`);
-      const query = def.query(ctx);
-      const rows = query ? await c.rows(def.dataset, query) : [];
-      let items: RecordItem[];
-      if (key === "dof_charges") items = [summarizeCharges(rows, todayET(now), lot)];
-      else if (key === "acris_legals") {
-        ctx.documentIds = [...new Set(rows.map((r) => String(r.document_id ?? "")).filter(Boolean))];
-        items = [];
-      } else items = dedupeItems(rows.map((r) => def.map(r, ctx)).filter((x): x is RecordItem => !!x));
-      for (const i of items) {
-        const bin = i.detail.bin;
-        if (bin && !ctx.bins.includes(String(bin))) ctx.bins.push(String(bin));
-      }
-      if (!HIDDEN_SOURCES.has(key)) raised.push(...(await applySource(projectId, def, items, meta.rowsUpdatedAt, now)));
-      else await markSourceOk(conn, projectId, key, meta.rowsUpdatedAt, rows.length, now);
-      result.ok.push(key);
-    } catch (err) {
-      const message = err instanceof RecordsError ? err.message : String(err).slice(0, 500);
-      result.failed.push({ source: key, error: message });
-      await conn
-        .insert(schema.recordSync)
-        .values({ projectId, source: key, lastRunAt: now, failures: 1, error: message })
-        .onConflictDoUpdate({ target: [schema.recordSync.projectId, schema.recordSync.source], set: { lastRunAt: now, failures: sql`${schema.recordSync.failures} + 1`, error: message } });
-      if (!(err instanceof RecordsError)) await logError("job", err, { path: `records:${key}`, context: { projectId } });
     }
+    // One notice per project per run, however many sources moved.
+    result.alerts = raised.length;
+    if (raised.length) await conn.transaction((tx) => notifyAlerts(tx, projectId, raised));
+    const failed = result.failed.length > 0;
+    await conn
+      .update(schema.recordSync)
+      .set({
+        lastRunAt: now,
+        // Consecutive failed runs drive the retry backoff.
+        failures: failed ? sql`${schema.recordSync.failures} + 1` : 0,
+        error: failed ? `${result.failed.length} source(s) failed` : null,
+        ...(failed ? {} : { lastSuccessAt: now }),
+        ...(opts.nightly ? { nightlyOn: today } : {}),
+      })
+      .where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run")));
+    return result;
+  } finally {
+    await conn.update(schema.recordSync).set({ lockedUntil: null }).where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run")));
   }
-  // One notice per project per run, however many sources moved.
-  result.alerts = raised.length;
-  if (raised.length) await conn.transaction((tx) => notifyAlerts(tx, projectId, raised));
-  await conn
-    .insert(schema.recordSync)
-    .values({ projectId, source: "_run", lastRunAt: now, lastSuccessAt: result.failed.length ? null : now, failures: result.failed.length, error: result.failed.length ? `${result.failed.length} source(s) failed` : null })
-    .onConflictDoUpdate({
-      target: [schema.recordSync.projectId, schema.recordSync.source],
-      set: { lastRunAt: now, failures: result.failed.length, error: result.failed.length ? `${result.failed.length} source(s) failed` : null, ...(result.failed.length ? {} : { lastSuccessAt: now }) },
-    });
-  return result;
+}
+
+/**
+ * The lot changed (BBL or address edited): forget the old lot's records,
+ * alerts, violation cases (and their hearing dates) and record-fed expiries,
+ * so the next run starts fresh instead of calling the new lot's history news.
+ */
+export async function resetProjectRecords(tx: DbOrTx, projectId: string): Promise<void> {
+  const cases = await tx.select({ keyDateId: schema.violationCase.keyDateId }).from(schema.violationCase).where(eq(schema.violationCase.projectId, projectId));
+  const kd = cases.map((c) => c.keyDateId).filter((x): x is string => !!x);
+  await tx.delete(schema.violationCase).where(eq(schema.violationCase.projectId, projectId));
+  if (kd.length) await tx.delete(schema.keyDate).where(inArray(schema.keyDate.id, kd));
+  await tx.delete(schema.recordAlert).where(eq(schema.recordAlert.projectId, projectId));
+  await tx.delete(schema.recordItem).where(eq(schema.recordItem.projectId, projectId));
+  await tx.delete(schema.expiryItem).where(and(eq(schema.expiryItem.projectId, projectId), isNotNull(schema.expiryItem.recordRef)));
+  await tx.delete(schema.recordSync).where(eq(schema.recordSync.projectId, projectId));
 }
 
 /** A dataset can list the same record twice (amended rows): keep the last. */
@@ -200,13 +267,17 @@ async function markSourceOk(conn: DbOrTx, projectId: string, source: string, dat
 }
 
 /** Store one source's records, raise alerts, track violations and permit expiries. Returns the alerts raised (notified by the caller). */
-async function applySource(projectId: string, def: SourceDef, items: RecordItem[], dataAsOf: Date | null, now: Date): Promise<(typeof schema.recordAlert.$inferSelect)[]> {
+/** Rows gone from a complete pull for this long are closed (the city removed or merged them). */
+const GONE_AFTER_MS = 7 * 86_400_000;
+
+async function applySource(projectId: string, def: SourceDef, items: RecordItem[], dataAsOf: Date | null, now: Date, complete: boolean): Promise<(typeof schema.recordAlert.$inferSelect)[]> {
   return db().transaction(async (tx) => {
     const [sync] = await tx.select().from(schema.recordSync).where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, def.key)));
     const baseline = !sync?.lastSuccessAt;
     const knownRows = await tx.select({ key: schema.recordItem.key, status: schema.recordItem.status, critical: schema.recordItem.critical, open: schema.recordItem.open }).from(schema.recordItem).where(and(eq(schema.recordItem.projectId, projectId), eq(schema.recordItem.source, def.key)));
     const known = new Map<string, KnownRecord>(knownRows.map((k) => [k.key, k]));
-    const alerts = diffRecords(known, items, def.key, baseline);
+    const today = todayET(now);
+    const alerts = diffRecords(known, items, def.key, baseline, today);
 
     for (const i of items) {
       const values = { title: i.title.slice(0, 300), kind: i.kind, status: i.status, date: i.date, open: i.open, critical: i.critical, url: i.url, hearingOn: i.hearingOn ?? null, expiresOn: i.expiresOn ?? null, detail: i.detail, lastSeenAt: now };
@@ -214,8 +285,23 @@ async function applySource(projectId: string, def: SourceDef, items: RecordItem[
         .insert(schema.recordItem)
         .values({ projectId, source: def.key, key: i.key, ...values })
         .onConflictDoUpdate({ target: [schema.recordItem.projectId, schema.recordItem.source, schema.recordItem.key], set: values });
-      if (i.kind === "violation" || i.kind === "hearing") await trackViolation(tx, projectId, def.key, i, !known.has(i.key) && !baseline);
-      if (i.kind === "permit") await trackPermitExpiry(tx, projectId, def.key, i);
+      if (i.kind === "violation" || (i.kind === "hearing" && !isDobTicket(i))) await trackViolation(tx, projectId, def.key, i, !known.has(i.key) && !baseline, known.get(i.key)?.open ?? null);
+      if (i.kind === "permit") await trackPermitExpiry(tx, projectId, def.key, i, today, items);
+    }
+
+    // Open records missing from complete pulls for a week are no longer listed: close them and their cases.
+    if (complete) {
+      const gone = await tx
+        .update(schema.recordItem)
+        .set({ open: false, critical: false, status: sql`coalesce(${schema.recordItem.status}, '') || ' (no longer listed)'` })
+        .where(and(eq(schema.recordItem.projectId, projectId), eq(schema.recordItem.source, def.key), eq(schema.recordItem.open, true), lt(schema.recordItem.lastSeenAt, new Date(now.getTime() - GONE_AFTER_MS))))
+        .returning({ key: schema.recordItem.key });
+      if (gone.length) {
+        await tx
+          .update(schema.violationCase)
+          .set({ stage: "resolved", closedOn: today, version: sql`${schema.violationCase.version} + 1`, updatedAt: new Date() })
+          .where(and(eq(schema.violationCase.projectId, projectId), eq(schema.violationCase.source, def.key), inArray(schema.violationCase.itemKey, gone.map((g) => g.key)), notInArray(schema.violationCase.stage, CLOSED_STAGES)));
+      }
     }
 
     const inserted = alerts.length
@@ -257,15 +343,21 @@ async function notifyAlerts(tx: DbOrTx, projectId: string, alerts: (typeof schem
 }
 
 /** Keep a violation case in step with its record: create it, move it forward, set the hearing as a key date. */
-async function trackViolation(tx: DbOrTx, projectId: string, source: string, i: RecordItem, isNews: boolean) {
-  const [existing] = await tx.select().from(schema.violationCase).where(and(eq(schema.violationCase.projectId, projectId), eq(schema.violationCase.source, source), eq(schema.violationCase.itemKey, i.key)));
+/** DOB summonses at OATH are the ECB violations already tracked from the ECB dataset: no second case for them. */
+function isDobTicket(i: RecordItem): boolean {
+  return /BUILDINGS|\bDOB\b/i.test(i.title);
+}
+
+async function trackViolation(tx: DbOrTx, projectId: string, source: string, i: RecordItem, isNews: boolean, wasOpen: boolean | null) {
+  // Locked: a person updating the case at the same moment is never overwritten.
+  const [existing] = await tx.select().from(schema.violationCase).where(and(eq(schema.violationCase.projectId, projectId), eq(schema.violationCase.source, source), eq(schema.violationCase.itemKey, i.key))).for("update");
   // Closed violations from years ago aren't worth a case; open ones (and anything new) are.
   if (!existing && !i.open && !isNews) return;
   const fromSource = sourceStage(i);
   let stage: ViolationStage = existing?.stage ?? "issued";
   if (fromSource && (CLOSED_STAGES.includes(fromSource) || stageRank(fromSource) > stageRank(stage))) stage = fromSource;
-  // Reopened at the source: back to issued.
-  if (existing && i.open && CLOSED_STAGES.includes(existing.stage) && !(fromSource && CLOSED_STAGES.includes(fromSource))) stage = "issued";
+  // Reopened at the source (it was closed there, now it's open again): back to issued. A case closed by hand stays closed.
+  if (existing && wasOpen === false && i.open && CLOSED_STAGES.includes(existing.stage)) stage = "issued";
   const closedOn = CLOSED_STAGES.includes(stage) ? (existing?.closedOn ?? todayET()) : null;
   const hearingOn = i.hearingOn && (!existing?.hearingOn || i.hearingOn !== existing.hearingOn) ? i.hearingOn : (existing?.hearingOn ?? i.hearingOn ?? null);
 
@@ -291,17 +383,22 @@ async function trackViolation(tx: DbOrTx, projectId: string, source: string, i: 
 }
 
 /** Issued permits with an expiry date feed the expiry tracker (Module B); the sync keeps the date current. */
-async function trackPermitExpiry(tx: DbOrTx, projectId: string, source: string, i: RecordItem) {
+async function trackPermitExpiry(tx: DbOrTx, projectId: string, source: string, i: RecordItem, today: string, all: RecordItem[]) {
   const recordRef = `${source}:${i.key}`;
   const [existing] = await tx.select().from(schema.expiryItem).where(and(eq(schema.expiryItem.projectId, projectId), eq(schema.expiryItem.recordRef, recordRef)));
-  if (!i.open || !i.expiresOn) {
-    if (existing && !existing.closedAt) await tx.update(schema.expiryItem).set({ closedAt: new Date(), updatedAt: new Date() }).where(eq(schema.expiryItem.id, existing.id));
+  // A renewal (DOB NOW: same permit, higher sequence) supersedes this one.
+  const [permit, seq] = i.key.split("#");
+  const superseded = seq !== undefined && all.some((o) => o.key.startsWith(`${permit}#`) && Number(o.key.split("#")[1]) > Number(seq));
+  // Only live permits are tracked: expired history (BIS keeps old permits "ISSUED") never floods the tracker.
+  if (!i.open || !i.expiresOn || superseded || (!existing && i.expiresOn < today)) {
+    if (existing && !existing.closedAt) await tx.update(schema.expiryItem).set({ closedAt: new Date(), version: sql`${schema.expiryItem.version} + 1`, updatedAt: new Date() }).where(eq(schema.expiryItem.id, existing.id));
     return;
   }
   const category = /shed/i.test(`${i.title} ${i.detail.workType ?? ""}`) ? "shed_permit" : /crane/i.test(i.title) ? "crane_permit" : "dob_permit";
   if (!existing) {
     await tx.insert(schema.expiryItem).values({ projectId, category, label: i.title.slice(0, 120), expiresOn: i.expiresOn, recordRef, notes: i.url }).onConflictDoNothing();
-  } else if (existing.expiresOn !== i.expiresOn || existing.closedAt) {
+  } else if (existing.expiresOn !== i.expiresOn) {
+    // A new date from the city (a renewal) reopens it; a person's "closed" otherwise stands.
     await tx.update(schema.expiryItem).set({ expiresOn: i.expiresOn, closedAt: null, version: sql`${schema.expiryItem.version} + 1`, updatedAt: new Date() }).where(eq(schema.expiryItem.id, existing.id));
   }
 }
@@ -312,7 +409,6 @@ async function trackPermitExpiry(tx: DbOrTx, projectId: string, source: string, 
 
 /** Hours (New York) the nightly pass runs in; failed sources retry any hour after their backoff. */
 const NIGHT = { from: 1, to: 6 };
-const STALE_MS = 20 * 3600_000;
 
 /**
  * Hourly from the tick: sync projects that are due (nightly window, or a
@@ -320,29 +416,33 @@ const STALE_MS = 20 * 3600_000;
  * stays inside its limit. Throws after the batch if anything failed, so the
  * run shows red on System and admins are alerted: it never fails silently.
  */
-export async function recordsSyncJob(now = new Date(), budgetMs = 180_000): Promise<Record<string, unknown>> {
-  const started = Date.now();
+export async function recordsSyncJob(now = new Date(), budgetMs = 150_000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + budgetMs;
   const conn = db();
+  const today = todayET(now);
   const nightly = hourET(now) >= NIGHT.from && hourET(now) < NIGHT.to;
-  const staleBefore = new Date(now.getTime() - STALE_MS);
   const candidates = await conn
-    .select({ id: schema.project.id, lastRunAt: schema.recordSync.lastRunAt, failures: schema.recordSync.failures })
+    .select({ id: schema.project.id, lastRunAt: schema.recordSync.lastRunAt, failures: schema.recordSync.failures, nightlyOn: schema.recordSync.nightlyOn })
     .from(schema.project)
     .leftJoin(schema.recordSync, and(eq(schema.recordSync.projectId, schema.project.id), eq(schema.recordSync.source, "_run")))
     .where(and(isNull(schema.project.archivedAt), ne(schema.project.status, "closed"), sql`${schema.project.bbl} is not null`))
     .orderBy(sql`${schema.recordSync.lastRunAt} asc nulls first`);
   const due = candidates.filter((c) => {
     if (!c.lastRunAt) return true;
-    if (nightly && c.lastRunAt < staleBefore) return true;
-    // Backoff for failures: 1h, 2h, 4h … capped at 12h.
-    return (c.failures ?? 0) > 0 && now.getTime() - c.lastRunAt.getTime() >= Math.min(2 ** ((c.failures ?? 1) - 1), 12) * 3600_000;
+    // Once each night, whatever ran during the day ("Check now", a retry).
+    if (nightly && c.nightlyOn !== today) return true;
+    // Consecutive failed runs back off: 1h, 2h, 4h … capped at 12h.
+    const failures = c.failures ?? 0;
+    return failures > 0 && now.getTime() - c.lastRunAt.getTime() >= Math.min(2 ** (failures - 1), 12) * 3600_000;
   });
 
   const meta = new Map<string, DatasetMeta>();
   const results: SyncResult[] = [];
   for (const c of due) {
-    if (Date.now() - started > budgetMs) break;
-    results.push(await syncProjectRecords(c.id, { now, meta }));
+    // Leave room to record the outcome: the tick must never be killed mid-write.
+    if (Date.now() > deadline - 15_000) break;
+    const r = await syncProjectRecords(c.id, { now, meta, deadline: deadline - 10_000, nightly });
+    if (r.skipped !== "busy") results.push(r);
   }
   const failed = results.filter((r) => r.failed.length);
   if (failed.length) await alertSyncFailure(failed, now);

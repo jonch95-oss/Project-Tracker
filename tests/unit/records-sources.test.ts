@@ -78,3 +78,51 @@ describe("every source maps live-shaped rows", () => {
     expect(isVendorCoi("gl_policy")).toBe(false);
   });
 });
+
+describe("sparse rows", () => {
+  const KEYS: Record<string, Record<string, unknown>> = {
+    dobnow_jobs: { job_filing_number: "J" },
+    bis_jobs: { job__: "1" },
+    bis_permits: { permit_si_no: "P" },
+    dobnow_permits: { work_permit: "W" },
+    dob_violations: { isn_dob_bis_viol: "V" },
+    ecb_violations: { ecb_violation_number: "E" },
+    dob_safety: { violation_number: "S" },
+    hpd_violations: { violationid: "H" },
+    hpd_vacate: { vacate_order_number: "O" },
+    fdny_vacate: { vac_date: "2020-01-01T00:00:00.000" },
+    dob_complaints: { complaint_number: "C" },
+    oath: { ticket_number: "T" },
+    sr311: { unique_key: "U" },
+    tax_lien: { month: "2020-01-01T00:00:00.000" },
+    acris_master: { document_id: "D" },
+  };
+  for (const [key, row] of Object.entries(KEYS)) {
+    it(`${key} copes with only its key`, () => {
+      const i = SOURCE_BY_KEY.get(key)!.map(row, ctx)!;
+      expect(i.key).toBeTruthy();
+      expect(i.title.length).toBeGreaterThan(0);
+    });
+  }
+
+  it("orders without a building or a date, and an address-less, BIN-less lot", async () => {
+    const { resolveComplaintOrders } = await import("@/core/records");
+    const m = (row: Record<string, unknown>) => SOURCE_BY_KEY.get("dob_complaints")!.map(row, ctx)!;
+    const undated = m({ complaint_number: "9", disposition_code: "A3" });
+    const plain = m({ complaint_number: "8", status: "ACTIVE" });
+    expect(resolveComplaintOrders([undated, plain], "2026-09-24").map((i) => i.critical)).toEqual([false, false]);
+    const newer = m({ complaint_number: "7", disposition_code: "Y3", disposition_date: "09/01/2026" });
+    const older = m({ complaint_number: "6", disposition_code: "A3", disposition_date: "08/01/2026" });
+    expect(resolveComplaintOrders([older, newer], "2026-09-24").map((i) => i.critical)).toEqual([false, true]);
+  });
+
+  it("status changes that aren't news, and resolved kinds", () => {
+    const base: RecordItem = { key: "k", kind: "hearing", title: "T", status: "A", date: null, open: true, critical: false, url: "https://x", detail: {} };
+    const known = (status: string | null, open = true) => new Map([["k", { key: "k", status, critical: false, open }]]);
+    expect(diffRecords(known("A"), [{ ...base, status: "B", open: false }], "s", false)[0]!.kind).toBe("resolved");
+    expect(diffRecords(known(null), [{ ...base, status: null }], "s", false)).toEqual([]);
+    expect(diffRecords(known("current", false), [{ ...base, kind: "tax", status: "arrears" }], "s", false)[0]!.title).toBe("Property tax or charges are past due");
+    expect(diffRecords(known(null), [{ ...base, kind: "permit", status: "Issued" }], "s", false)[0]!.title).toBe("T: — → Issued");
+    expect(diffRecords(known("X"), [{ ...base, kind: "recording", status: "Y" }], "s", false)).toEqual([]);
+  });
+});

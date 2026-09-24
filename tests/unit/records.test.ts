@@ -123,3 +123,28 @@ describe("expiries", () => {
     expect(vendorKey(null)).toBe("");
   });
 });
+
+describe("review regressions", () => {
+  it("only the latest, unrescinded, recent order per building is in force", async () => {
+    const { resolveComplaintOrders, SOURCE_BY_KEY: S } = await import("@/core/records");
+    const m = (row: Record<string, unknown>) => S.get("dob_complaints")!.map(row, ctx)!;
+    const old = m({ complaint_number: "1", status: "CLOSED", disposition_code: "A3", disposition_date: "03/01/2015", bin: "B1" });
+    const lifted = m({ complaint_number: "2", status: "CLOSED", disposition_code: "L2", disposition_date: "03/10/2015", bin: "B1" });
+    const recent = m({ complaint_number: "3", status: "CLOSED", disposition_code: "L1", disposition_date: "09/01/2026", bin: "B2" });
+    const stale = m({ complaint_number: "4", status: "CLOSED", disposition_code: "Y1", disposition_date: "01/01/2020", bin: "B3" });
+    const out = resolveComplaintOrders([old, lifted, recent, stale], "2026-09-24");
+    expect(out.map((i) => i.critical)).toEqual([false, false, true, false]);
+    expect(out[2]!.open).toBe(true);
+    // A re-imposed order on the same complaint is new news.
+    const again = diffRecords(new Map([["3", { key: "3", status: "CLOSED · L1", critical: false, open: false }]]), [out[2]!], "c", false);
+    expect(again[0]!.dedupeKey).toBe("c:3:critical:CLOSED · L1:2026-09-01");
+  });
+
+  it("old recordings surfacing late aren't news; ACRIS legals come newest first", () => {
+    const rec = item({ key: "d", kind: "recording", status: "MTGE", title: "Mortgage recorded", date: "1998-02-01" });
+    expect(diffRecords(new Map(), [rec], "a", false, "2026-09-24")).toEqual([]);
+    expect(diffRecords(new Map(), [{ ...rec, date: "2026-09-01" }], "a", false, "2026-09-24")).toHaveLength(1);
+    expect(SOURCE_BY_KEY.get("acris_legals")!.query(ctx)).toMatchObject({ $order: "document_id DESC", maxRows: 60 });
+    for (const k of ["bis_jobs", "bis_permits", "dob_complaints"]) expect(SOURCE_BY_KEY.get(k)!.query(ctx)!.$order).toBe(":id");
+  });
+});

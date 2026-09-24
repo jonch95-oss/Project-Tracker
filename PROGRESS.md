@@ -1,5 +1,111 @@
 # Progress
 
+## Milestone 8 — Public records watch, expiries and violations (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (each project's Public Records tab; Dates & Expiries tab; red flags on cards and the Needs-you rail)
+
+### What shipped
+
+- **17 NYC Open Data sources per BBL**, each dataset id and field checked against live Socrata metadata. The details are in `docs/RECORDS.md`. The check ran through the `Records probe` GitHub workflow, because this build environment can't reach data.cityofnewyork.us.
+  - DOB NOW and DOB BIS jobs
+  - BIS and DOB NOW permits
+  - DOB, ECB, DOB safety and HPD violations
+  - HPD and FDNY vacate orders
+  - DOB complaints (stop-work codes from the disposition table)
+  - OATH summonses
+  - 311
+  - tax lien sale list
+  - DOF property charges (one "past due" record)
+  - ACRIS, two steps: legals → master
+- **Nightly sync, 1–6am New York**, from the hourly tick.
+  - **Fetching:** sequential requests with the app token. Every query has a stable sort order and is paged. Retries back off on 429/5xx and honour Retry-After.
+  - **Time limits:** each run has a hard deadline, so a slow city service can't overrun the job.
+  - **One at a time:** a lease stops the nightly run and "Check now" from syncing the same project at once.
+  - **Failure handling:** a failed source is recorded and retried with growing backoff (1h, 2h … 12h). Admins get one alert a day, and the run shows red on System, so a failure is never silent.
+  - **Schema checks:** every run re-checks each dataset's columns. If the city changes a dataset, the sync fails loudly instead of misreading it.
+- **Diff and alerts.**
+  - **First run:** it only records what is there; the lot's history is not news.
+  - **After that:** it alerts on new filings, job status changes, issued permits, new violations, complaints and 311 reports, notable ACRIS recordings (deeds, mortgages, lis pendens, liens), tax arrears or a lien-sale listing, and anything resolved.
+  - **Who hears:** the owner and the project's PM get one notice per project per run.
+  - **Clean-up:** records that drop out of a complete pull for a week are closed.
+- **Stop-work and vacate orders are critical.**
+  - **What counts:** only the latest order per building that hasn't been rescinded and is recent.
+  - **Delivery:** push and email to the owner and PM straight away, through quiet hours and push preferences.
+  - **Email budget:** these emails are marked critical, so the budget never holds them, retries included.
+  - **Visibility:** a red banner on the tab and a red line on the project card.
+- **Violations are tracked to closure:** issued → hearing → fixed → certificate of correction → dismissed or paid.
+  - **Source-driven:** the stage follows the source forward and never moves backwards. A case someone closed by hand stays closed.
+  - **Hearings:** a hearing date becomes an "OATH hearing" key date with reminders, and it is marked done when the case closes.
+  - **No duplicates:** DOB summonses at OATH don't open a second case.
+- **"Create task from this"** on every alert: a task in the current phase, high priority and due tomorrow for an order, linked back to the record. Alerts can also be dismissed or shared on WhatsApp.
+- **The Public Records tab** shows:
+  - orders in force and alerts
+  - violations
+  - DOB jobs and permits, complaints and 311, OATH summonses
+  - ACRIS, with "data as of" because the open data lags live ACRIS by one to two months
+  - tax: the past-due amount is shown only to people with financial access
+  - sync health per source
+- **Every record has a source link.** Admins can "Check now" once every 10 minutes.
+- **Changing a project's BBL or address** clears the old lot's records, cases and permit expiries, so the next run starts fresh.
+- **Expiry tracker (Module B)** on the Dates & Expiries tab:
+  - **What it covers:** permits, sheds, DOT, cranes, TCO, builder's risk, GL, umbrella, vendor COIs (GL, workers' comp, disability), loan maturity and extension options, rate caps, LPC permits, 1031 deadlines.
+  - **Reminders:** at 30, 14 and 7 days, then daily once expired, to the owner and PM. Loan and deal deadlines only reach people with financial access.
+  - **From public records:** live DOB permits feed in automatically, a renewal supersedes the old sequence, and expired history is never imported.
+  - **Red flags:** expired items show red on the card and in the Needs-you rail.
+  - **Vendor COIs:** an expired vendor COI flags that vendor on every live project they're on, through contracts or expiry items. A current COI of the same kind anywhere clears the flag.
+
+### Review
+
+The independent review found 13 issues: 5 P1, 6 P2 and 2 P3. All are fixed, with regression tests. The P1s were:
+
+- old permits flooding the expiry tracker
+- an unstable ACRIS document set
+- historical stop-work complaints read as orders in force
+- no time limit inside a project's sync
+- stale records after a BBL change
+
+The P2s were:
+
+- rows lost to page limits
+- hand-closed cases reopening
+- race conditions between syncs
+- flat backoff
+- a daytime check skipping the night
+- COI flags from finished projects
+
+The P3s were:
+
+- critical emails losing their flag on retry, and a re-imposed order not re-alerting
+- unlabeled source links
+
+### Test results
+
+- **Unit:** 263 tests, 100% line coverage of `core/records.ts`. They include:
+  - every source mapping, against rows shaped like the live data
+  - the query formats per dataset
+  - the order resolution
+  - the diff rules
+  - the expiry reminder marks
+- **Integration:** 1,810 tests, all 14 records tests and 4 expiry tests among them. They run against a scripted NYC Open Data and cover:
+  - first run vs later runs, alerts and who hears them, re-runs never repeating
+  - critical delivery through quiet hours with email
+  - violations to closure with hearing dates, and hand-closed cases staying closed
+  - create task, the lease and deadline, growing backoff, and superseded or expired permits
+  - a BBL change, schema-change failures with an admin alert
+  - expiry reminders, COI flags across projects (archived and renewed), and financial gating
+  - the permission matrix for every new procedure
+- **E2E:** 30 of 30. New:
+  - records tab, violation update, task from an alert, expiries and the red flags
+  - outsiders see neither tab
+- **Visual checks:** desktop and iPhone size, with no horizontal page scroll, on the Portfolio (red flags and rail), Public Records, and Dates & Expiries.
+
+### Known limitations
+
+- **Vendor matching is by normalized name** until the vendor directory arrives (Module C, Milestone 10). "Acme Builders LLC" and "ACME Builders, L.L.C." match; two different companies with the same base name would too.
+- **2,000 rows per source per lot.** Older rows beyond that aren't read, and the sync health shows the count.
+- **DOF charges show a total, not each bill.** They are summarized as one "past due" record. The amount appears only on the tab, and only for people with financial access.
+- **No stop-work-order dataset exists.** Orders come from DOB complaint dispositions and the HPD and FDNY vacate lists.
+
 ## Milestone 7 — Notifications (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (Settings → Notifications; Inbox; the Watch button on each folder; WhatsApp on every task and alert)

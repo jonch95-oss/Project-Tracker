@@ -207,6 +207,43 @@ describe("public records watch", () => {
     expect((await inbox(owner.id)).filter((n) => n.kind === "system" && n.title === "Public records sync is failing")).toHaveLength(1);
   });
 
+  it("a case closed by hand stays closed while the source still shows it open", async () => {
+    const [vc] = await db().select().from(schema.violationCase).where(and(eq(schema.violationCase.projectId, projectId), eq(schema.violationCase.itemKey, "V2")));
+    await oc.records.updateViolation({ projectId, id: vc!.id, version: vc!.version, stage: "paid" });
+    await db().update(schema.recordSync).set({ lockedUntil: null }).where(eq(schema.recordSync.projectId, projectId));
+    await syncProjectRecords(projectId);
+    const [after] = await db().select().from(schema.violationCase).where(eq(schema.violationCase.id, vc!.id));
+    expect(after!.stage).toBe("paid");
+  });
+
+  it("one sync per project at a time; a sync never runs past its deadline", async () => {
+    const [a, b] = await Promise.all([syncProjectRecords(projectId), syncProjectRecords(projectId)]);
+    expect([a.skipped, b.skipped].filter((x) => x === "busy")).toHaveLength(1);
+    const late = await syncProjectRecords(projectId, { deadline: Date.now() - 1 });
+    expect(late.ok).toEqual([]);
+    expect(late.failed[0]!.error).toContain("Out of time");
+    // Consecutive failed runs grow the backoff.
+    const [run] = await db().select().from(schema.recordSync).where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run")));
+    expect(run!.failures).toBeGreaterThanOrEqual(1);
+    const before = run!.failures;
+    await syncProjectRecords(projectId, { deadline: Date.now() - 1 });
+    const [run2] = await db().select().from(schema.recordSync).where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run")));
+    expect(run2!.failures).toBe(before + 1);
+    await syncProjectRecords(projectId);
+    const [run3] = await db().select().from(schema.recordSync).where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run")));
+    expect(run3!.failures).toBe(0);
+  });
+
+  it("expired and superseded permits never flood the expiry tracker", async () => {
+    feed["ipu4-2q9a"] = [{ permit_si_no: "OLD1", job__: "300000001", permit_status: "ISSUED", permit_type: "NB", issuance_date: "01/01/2001", expiration_date: "01/01/2002" }];
+    feed["rbx6-tga4"]!.push({ work_permit: "B001-I1-GC", sequence_number: "2", work_type: "General Construction", permit_status: "Permit Issued", issued_date: `${today}T00:00:00.000`, expired_date: `${addDays(today, 365)}T05:00:00.000` });
+    await syncProjectRecords(projectId);
+    const exp = await db().select().from(schema.expiryItem).where(eq(schema.expiryItem.projectId, projectId));
+    expect(exp.some((e) => e.recordRef === "bis_permits:OLD1")).toBe(false);
+    expect(exp.find((e) => e.recordRef === "dobnow_permits:B001-I1-GC#1")!.closedAt).not.toBeNull();
+    expect(exp.find((e) => e.recordRef === "dobnow_permits:B001-I1-GC#2")).toMatchObject({ closedAt: null, expiresOn: addDays(today, 365) });
+  });
+
   it("check now: admins only, once every 10 minutes; no BBL, no check", async () => {
     await expect((await callerFor(member.id)).records.syncNow({ projectId })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await db().update(schema.recordSync).set({ lastRunAt: new Date() }).where(and(eq(schema.recordSync.projectId, projectId), eq(schema.recordSync.source, "_run")));
@@ -214,6 +251,24 @@ describe("public records watch", () => {
     const bare = (await oc.projects.create({ name: `No lot ${Date.now()}`, address: "1 Nowhere Ln", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [] })).id;
     await expect(oc.records.syncNow({ projectId: bare })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect((await oc.records.overview({ projectId: bare })).lot).toBeNull();
+  });
+});
+
+describe("changing the lot", () => {
+  it("a new BBL or address starts the watch fresh (no history flood, no stale orders)", async () => {
+    setRecordsClientForTests(fake);
+    const owner = await createUser("owner");
+    const oc = await callerFor(owner.id);
+    const { id } = await oc.projects.create({ name: `Relot ${Date.now()}`, address: "1 First St", type: "gut_renovation", companyId: await companyId(), bbl: "3011370045", toggles: [] });
+    await syncProjectRecords(id);
+    expect((await db().select().from(schema.recordItem).where(eq(schema.recordItem.projectId, id))).length).toBeGreaterThan(0);
+    const p = await oc.projects.get({ projectId: id });
+    await oc.projects.update({ projectId: id, version: p.version, name: p.name, address: p.address, borough: "Brooklyn", bbl: "3011370046", companyId: p.companyId, status: "active", facts: {} } as never);
+    expect(await db().select().from(schema.recordItem).where(eq(schema.recordItem.projectId, id))).toHaveLength(0);
+    expect(await db().select().from(schema.recordSync).where(eq(schema.recordSync.projectId, id))).toHaveLength(0);
+    const r = await syncProjectRecords(id);
+    expect(r.alerts).toBe(1); // only the stop-work order in force (the scripted feed ignores the lot)
+    setRecordsClientForTests(defaultClient);
   });
 });
 
@@ -267,6 +322,16 @@ describe("expiries (Module B)", () => {
     expect(cards.find((p) => p.id === a)!.facts).toMatchObject({ expired: 1, coiFlags: ["Acme Concrete LLC"] });
     // Project B never mentioned the COI: the vendor's contract there is enough.
     expect(cards.find((p) => p.id === b)!.facts).toMatchObject({ expired: 0, coiFlags: ["Acme Concrete LLC"] });
+    // A finished project's lapsed COI doesn't flag anyone; a renewal on file clears the flag.
+    const done = (await oc.projects.create({ name: `Done ${Date.now()}`, address: "3 C St", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [] })).id;
+    await oc.expiries.save({ projectId: done, category: "vendor_coi_gl", vendorName: "Brick & Beam", expiresOn: addDays(today, -40) });
+    await db().update(schema.project).set({ archivedAt: new Date() }).where(eq(schema.project.id, done));
+    await db().insert(schema.commitment).values({ projectId: b, vendorName: "Brick & Beam", description: "Masonry", amountCents: 1_000_00 });
+    expect((await oc.projects.list({})).projects.find((p) => p.id === b)!.facts.coiFlags).toEqual(["Acme Concrete LLC"]);
+    await oc.expiries.save({ projectId: b, category: "vendor_coi_gl", vendorName: "Acme Concrete", expiresOn: addDays(today, 200) });
+    expect((await oc.projects.list({})).projects.find((p) => p.id === b)!.facts.coiFlags).toEqual([]);
+    await db().delete(schema.expiryItem).where(and(eq(schema.expiryItem.projectId, b), eq(schema.expiryItem.vendorName, "Acme Concrete")));
+
     const rail = await oc.tasks.needsYou();
     expect(rail.expired.some((e) => e.projectId === a && e.label === "Vendor COI: general liability: Acme Concrete LLC")).toBe(true);
   });
