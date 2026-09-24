@@ -133,14 +133,14 @@ export async function clearSnapshots(): Promise<void> {
 }
 
 /** Tell the service worker who is signed in (a different person clears its saved pages), or null to clear. */
-export function tellWorker(viewerId: string | null): void {
+export function tellWorker(viewerId: string | null, home?: string): void {
   try {
     if (typeof navigator === "undefined" || !("serviceWorker" in navigator))
       return;
     const msg =
       viewerId === null
         ? { type: "clear-offline" }
-        : { type: "viewer", id: viewerId };
+        : { type: "viewer", id: viewerId, home };
     navigator.serviceWorker.controller?.postMessage(msg);
     void navigator.serviceWorker.ready
       .then((r) => r.active?.postMessage(msg))

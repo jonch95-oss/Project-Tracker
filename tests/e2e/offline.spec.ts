@@ -251,3 +251,43 @@ test("iPhone offline: signing out leaves nothing of that person on the phone", a
   await expect(page).toHaveURL(/\/login/);
   await expect.poll(leftovers).toEqual({ pages: 0, data: 0, queue: null });
 });
+
+test("iPhone offline: opening the app from its icon with no signal shows the person's start page", async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name === "iphone-webkit", "Playwright's WebKit can't load pages while emulating offline");
+  await signIn(page, "elias@demo.test");
+  expect(await swReady(page)).toBe(true);
+  // The icon opens "/", which sends an admin on to Portfolio; that page is saved as it's used.
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/portfolio$/);
+  await expect(page.getByRole("heading", { name: "Macon Street Auction" })).toBeVisible();
+  await expect.poll(async () => page.evaluate(async () => !!(await (await caches.open("pc-pages-v2")).match(location.origin + "/portfolio"))), { timeout: 20_000 }).toBe(true);
+  await expect.poll(async () => page.evaluate(async () => (await (await caches.open("pc-meta")).match("/__home"))?.text() ?? null), { timeout: 20_000 }).toBe("/portfolio");
+
+  // …and the portfolio's data is saved on the phone a few seconds after it loads.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () =>
+            new Promise<boolean>((resolve) => {
+              const r = indexedDB.open("pc-offline", 1);
+              r.onupgradeneeded = () => r.result.createObjectStore("queries");
+              r.onsuccess = () => {
+                const g = r.result.transaction("queries").objectStore("queries").getAll();
+                g.onsuccess = () => resolve(JSON.stringify(g.result.map((x: { state: { queries: { queryKey: unknown }[] } }) => x.state.queries.map((q) => q.queryKey))).includes('"projects","list"'));
+                g.onerror = () => resolve(false);
+              };
+              r.onerror = () => resolve(false);
+            }),
+        ),
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+
+  await context.setOffline(true);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/portfolio$/);
+  await expect(page.getByRole("heading", { name: "Macon Street Auction" })).toBeVisible();
+  await expect(page.getByText("You're offline", { exact: false }).first()).toBeVisible();
+  await context.setOffline(false);
+});

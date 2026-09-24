@@ -255,7 +255,7 @@ export function AppShell({
         className="min-w-0 px-4 pb-[calc(96px+env(safe-area-inset-bottom))] pt-[calc(24px+env(safe-area-inset-top))] sm:px-8 lg:px-12 lg:pb-16 lg:pt-12"
       >
         <div className="mx-auto max-w-[1200px]">
-          <OfflineBar viewerId={viewer.id} />
+          <OfflineBar viewerId={viewer.id} home={viewer.role === "owner" || viewer.role === "admin" ? "/portfolio" : viewer.role === "investor" ? "/portal" : "/tasks"} />
           <PushPrompt />
           {children}
         </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createTRPCClient, httpBatchLink, loggerLink, type TRPCLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
 import { createTRPCContext } from "@trpc/tanstack-react-query";
@@ -8,6 +8,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import { useEffect, useState, type ReactNode } from "react";
 import superjson from "superjson";
 import type { AppRouter } from "@/server/trpc/root";
+import { initConnection, isOnline, markOffline } from "./connection";
 import { enqueue, isNetworkError, isQueueable, keyParts, newClientId, overlayQueued, queuedResult, setTaskTitleLookup, subscribeQueue } from "./offline-queue";
 
 export const { TRPCProvider, useTRPC, useTRPCClient } = createTRPCContext<AppRouter>();
@@ -32,13 +33,17 @@ function offlineLink(): TRPCLink<AppRouter> {
             observer.next({ result: { type: "data", data: queuedResult(path, input) } } as never);
             observer.complete();
           };
-          if (typeof navigator !== "undefined" && navigator.onLine === false) {
+          if (!isOnline()) {
             queue();
             return;
           }
           const sub = next({ ...op, input }).subscribe({
             next: (v) => observer.next(v),
-            error: (err) => (isNetworkError(err) ? queue() : observer.error(err)),
+            error: (err) => {
+              if (!isNetworkError(err)) return observer.error(err);
+              markOffline();
+              queue();
+            },
             complete: () => observer.complete(),
           });
           return () => sub.unsubscribe();
@@ -48,7 +53,11 @@ function offlineLink(): TRPCLink<AppRouter> {
             if (op.type === "query" && v.result.type === "data") observer.next({ ...v, result: { ...v.result, data: overlayQueued(op.path, op.input, v.result.data) } } as never);
             else observer.next(v);
           },
-          error: (err) => observer.error(err),
+          error: (err) => {
+            // No connection: switch to offline (reads pause and keep what's on screen).
+            if (op.type === "query" && isNetworkError(err)) markOffline();
+            observer.error(err);
+          },
           complete: () => observer.complete(),
         });
         return () => sub.unsubscribe();
@@ -93,7 +102,8 @@ function makeQueryClient() {
         // Offline, reads wait (the copy saved on the phone stays on screen) and run when the connection is back.
         staleTime: 30_000,
         // Neon's free plan can take a few seconds to wake; retry once.
-        retry: (count, err) => count < 1 && !/UNAUTHORIZED|FORBIDDEN|NOT_FOUND/.test(String((err as { data?: { code?: string } })?.data?.code)),
+        // With no connection, keep trying: the retry waits (paused) until the connection is back.
+        retry: (count, err) => isNetworkError(err) || (count < 1 && !/UNAUTHORIZED|FORBIDDEN|NOT_FOUND/.test(String((err as { data?: { code?: string } })?.data?.code))),
         refetchOnWindowFocus: true,
       },
     },
@@ -103,7 +113,7 @@ function makeQueryClient() {
 export function TRPCReactProvider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => {
     // Start from the phone's real connection state (React Query otherwise assumes online until an event).
-    if (typeof navigator !== "undefined") onlineManager.setOnline(navigator.onLine);
+    initConnection();
     const qc = makeQueryClient();
     setTaskTitleLookup((id) => findTaskTitle(qc, id));
     return qc;

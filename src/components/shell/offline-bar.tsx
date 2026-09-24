@@ -6,19 +6,11 @@ import { IconOffline } from "@/components/ui/icons";
 import { Dialog, useToast } from "@/components/ui/overlay";
 import { Button } from "@/components/ui/primitives";
 import { formatDateTimeET } from "@/core/time";
+import { isOnline, subscribeOnline } from "@/lib/connection";
 import { restoreSnapshot, saveSnapshot, tellWorker } from "@/lib/offline-cache";
 import { discardOthers, flushQueue, queueSnapshot, readQueue, removeOp, resolveConflict, retryOp, setQueueViewer, subscribeQueue, type QueueClient } from "@/lib/offline-queue";
 import { registerServiceWorker } from "@/lib/push";
 import { errorMessage, useTRPCClient } from "@/lib/trpc";
-
-const subscribeOnline = (fn: () => void) => {
-  window.addEventListener("online", fn);
-  window.addEventListener("offline", fn);
-  return () => {
-    window.removeEventListener("online", fn);
-    window.removeEventListener("offline", fn);
-  };
-};
 
 /** How long after the last change the screens on show are saved to the phone. */
 const SAVE_DELAY_MS = 3000;
@@ -31,15 +23,11 @@ const SAVE_DELAY_MS = 3000;
  * sends the queue whenever the connection comes back, the app returns to the
  * foreground, or every 30 seconds while anything is waiting.
  */
-export function OfflineBar({ viewerId }: { viewerId: string }) {
+export function OfflineBar({ viewerId, home }: { viewerId: string; home: string }) {
   const client = useTRPCClient();
   const qc = useQueryClient();
   const toast = useToast();
-  const online = useSyncExternalStore(
-    subscribeOnline,
-    () => navigator.onLine,
-    () => true,
-  );
+  const online = useSyncExternalStore(subscribeOnline, isOnline, () => true);
   const [open, setOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   // The queue as stored (a string, so React can compare snapshots); read after hydration.
@@ -52,9 +40,9 @@ export function OfflineBar({ viewerId }: { viewerId: string }) {
   useEffect(() => {
     setQueueViewer(viewerId);
     discardOthers(viewerId);
-    void registerServiceWorker().then(() => tellWorker(viewerId));
+    void registerServiceWorker().then(() => tellWorker(viewerId, home));
     void restoreSnapshot(qc, viewerId);
-  }, [viewerId, qc]);
+  }, [viewerId, home, qc]);
 
   // Keep what's on screen on the phone, a few seconds after it last changed.
   useEffect(() => {
@@ -64,9 +52,17 @@ export function OfflineBar({ viewerId }: { viewerId: string }) {
       clearTimeout(timer);
       timer = setTimeout(() => void saveSnapshot(qc, viewerId), SAVE_DELAY_MS);
     });
+    // Leaving the app (switching to the camera, locking the phone): save right away.
+    const onHide = () => {
+      if (document.visibilityState !== "hidden") return;
+      clearTimeout(timer);
+      void saveSnapshot(qc, viewerId);
+    };
+    document.addEventListener("visibilitychange", onHide);
     return () => {
       unsub();
       clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onHide);
     };
   }, [qc, viewerId]);
 
@@ -88,7 +84,7 @@ export function OfflineBar({ viewerId }: { viewerId: string }) {
   );
 
   const sync = useCallback(async () => {
-    if (!navigator.onLine || !readQueue().some((o) => o.state === "pending" && o.userId === viewerId)) return;
+    if (!isOnline() || !readQueue().some((o) => o.state === "pending" && o.userId === viewerId)) return;
     setSyncing(true);
     try {
       const r = await flushQueue(api, errorMessage);
@@ -100,6 +96,11 @@ export function OfflineBar({ viewerId }: { viewerId: string }) {
       setSyncing(false);
     }
   }, [api, qc, toast, viewerId]);
+
+  // Back online (confirmed by a real request): send what's waiting.
+  useEffect(() => {
+    if (online) void Promise.resolve().then(sync);
+  }, [online, sync]);
 
   useEffect(() => {
     const first = setTimeout(() => void sync(), 0);

@@ -51,19 +51,25 @@ async function clearPrivate() {
  * everything saved for the previous one goes. `null` (the sign-in page, a
  * sign-out) clears too.
  */
-async function setViewer(id) {
+async function setViewer(id, home) {
   const meta = await caches.open(META);
   const prev = await meta.match("/__viewer");
   const prevId = prev ? await prev.text() : null;
   if (id === null || prevId !== id) await clearPrivate();
-  if (id === null) await meta.delete("/__viewer");
-  else await meta.put("/__viewer", new Response(id));
+  if (id === null) {
+    await meta.delete("/__viewer");
+    await meta.delete("/__home");
+  } else {
+    await meta.put("/__viewer", new Response(id));
+    // Their start page (Portfolio, My Tasks…): where the Home Screen icon's "/" leads.
+    if (typeof home === "string" && /^\/[a-z]+$/.test(home)) await meta.put("/__home", new Response(home));
+  }
 }
 
 self.addEventListener("message", (event) => {
   const d = event.data || {};
   if (d.type === "clear-offline") event.waitUntil(setViewer(null));
-  if (d.type === "viewer" && typeof d.id === "string") event.waitUntil(setViewer(d.id));
+  if (d.type === "viewer" && typeof d.id === "string") event.waitUntil(setViewer(d.id, d.home));
 });
 
 /** Keep a cache to its newest `max` entries (keys come back oldest first). */
@@ -123,8 +129,15 @@ async function page(event, url) {
     else if (keepable(res)) event.waitUntil(storePage(pageKey(url), res.clone()).catch(() => undefined));
     return res;
   } catch {
-    const saved = await caches.open(PAGES).then((c) => c.match(pageKey(url)));
+    const pages = await caches.open(PAGES);
+    const saved = await pages.match(pageKey(url));
     if (saved) return saved;
+    // The Home Screen icon opens "/", which the server turns into the person's start page: do the same offline.
+    if (url.pathname === "/") {
+      const home = await caches.open(META).then((c) => c.match("/__home"));
+      const path = home ? await home.text() : null;
+      if (path && (await pages.match(self.location.origin + path))) return Response.redirect(self.location.origin + path, 302);
+    }
     const offline = await caches.match(OFFLINE_PAGE);
     return offline || Response.error();
   }

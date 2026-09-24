@@ -71,9 +71,18 @@ Also fixed along the way: CI had been failing since Milestone 10 because the new
 - **One step skipped on WebKit:** reopening a page offline. Playwright's WebKit can't load any page while it emulates offline, even from the service worker. Chromium covers that step, and the real iPhone check covers it on the phone.
 - **Screens:** checked at 390px and desktop (install guide, the offline bar, Photos, task attachments).
 
-### Needs a real iPhone (can't be done from here)
+### Real iPhone check (Jon, 24 Sep)
 
-Home-screen push, the camera, Face ID and offline start need a real device. The steps are in the message to Jon; results go here.
+Home-screen install, notifications and tapping a notification to open the task, Face ID sign-in, camera photos, the offline tick and its sync all worked on Jon's iPhone.
+
+One thing failed: opening the app from its icon in Airplane Mode showed "You're offline — this page hasn't been saved yet". Fixed:
+
+- **The cause:** the icon opens "/", which the server redirects to each person's start page, and that address was never saved.
+- **Opening from the icon:** the app now tells the service worker each person's start page (Portfolio, My Tasks or the portal), and "/" opens its saved copy when there's no connection.
+- **Detecting offline:** the app no longer trusts the phone's online flag, which can stay "online" in Airplane Mode. A request that fails for lack of connection switches the app to offline, so reads pause and the saved copy stays on screen instead of "This didn't load". A small check every 10 seconds notices when the connection is back.
+- **Saving:** what's on screen is also saved the moment the app goes to the background.
+
+A new browser test covers opening from the icon with no signal.
 
 ### Known limitations
 
