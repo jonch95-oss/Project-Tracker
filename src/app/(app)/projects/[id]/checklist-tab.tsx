@@ -11,6 +11,7 @@ import { formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { AddPhaseDialog, RenamePhaseDialog, SaveAsTemplateDialog, TemplateUpdateDialog } from "./checklist-extras";
+import { BulkBar, ShiftPhaseDialog } from "./bulk";
 import { TaskDialog } from "./task-dialog";
 import { TogglesDialog } from "./toggles-dialog";
 
@@ -24,21 +25,40 @@ export function dueLabel(dueOn: string | null, today: string): string {
   return formatIsoDate(dueOn, { year: dueOn.slice(0, 4) === today.slice(0, 4) ? undefined : "numeric" });
 }
 
-export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { projectId: string; canSaveTemplate: boolean; focusPhase?: string | null }) {
+export function ChecklistTab({
+  projectId,
+  canSaveTemplate,
+  focusPhase,
+  focusTask,
+  onFocusTask,
+}: {
+  projectId: string;
+  canSaveTemplate: boolean;
+  focusPhase?: string | null;
+  /** The open task lives in the URL (?task=) so notifications and My Tasks can link straight to it. */
+  focusTask?: string | null;
+  onFocusTask: (taskId: string | null) => void;
+}) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const toast = useToast();
   const q = useQuery(trpc.checklist.get.queryOptions({ projectId }));
-  const [openTask, setOpenTask] = useState<string | null>(null);
+  const openTask = focusTask ?? null;
+  const setOpenTask = onFocusTask;
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [hideDone, setHideDone] = useState(false);
-  const [dialog, setDialog] = useState<null | "toggles" | "update" | "save" | "addPhase" | { rename: string }>(null);
+  const [dialog, setDialog] = useState<null | "toggles" | "update" | "save" | "addPhase" | { rename: string } | { shift: string }>(null);
 
   const refresh = () =>
     Promise.all([
       qc.invalidateQueries({ queryKey: trpc.checklist.get.queryKey({ projectId }) }),
       qc.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ projectId }) }),
       qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() }),
+      qc.invalidateQueries({ queryKey: trpc.tasks.detail.queryKey() }),
+      qc.invalidateQueries({ queryKey: trpc.tasks.mine.queryKey() }),
+      qc.invalidateQueries({ queryKey: trpc.tasks.needsYou.queryKey() }),
     ]);
 
   const setDone = useMutation(
@@ -48,7 +68,7 @@ export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { proje
         const key = trpc.checklist.get.queryKey({ projectId });
         await qc.cancelQueries({ queryKey: key });
         const prev = qc.getQueryData<Checklist>(key);
-        if (prev) qc.setQueryData<Checklist>(key, { ...prev, tasks: prev.tasks.map((t) => (t.id === v.taskId ? { ...t, status: v.done ? "done" : "not_started" } : t)) });
+        if (prev) qc.setQueryData<Checklist>(key, { ...prev, tasks: prev.tasks.map((t) => (t.id === v.taskId ? { ...t, status: v.done ? (t.requiresApproval && !prev.access.canApprove ? "awaiting_approval" : "done") : "not_started" } : t)) });
         return { prev };
       },
       onSuccess: (r) => {
@@ -71,7 +91,8 @@ export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { proje
   const total = cl.tasks.length;
   const done = cl.tasks.filter((t) => t.status === "done").length;
   const active = cl.phases.find((p) => p.status === "active")?.key;
-  const isOpen = (key: string) => expanded[key] ?? (focusPhase ? key === focusPhase : key === active);
+  const focusedPhase = focusPhase ?? cl.tasks.find((t) => t.id === openTask)?.phaseKey;
+  const isOpen = (key: string) => expanded[key] ?? (focusedPhase ? key === focusedPhase : key === active);
   const behind = cl.template && cl.template.projectVersion !== null && cl.template.projectVersion < cl.template.latestVersion;
   const current = cl.tasks.find((t) => t.id === openTask) ?? null;
 
@@ -96,6 +117,19 @@ export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { proje
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canEdit && (
+            <Button
+              variant={selecting ? "secondary" : "ghost"}
+              size="sm"
+              aria-pressed={selecting}
+              onClick={() => {
+                setSelecting((x) => !x);
+                setSelected(new Set());
+              }}
+            >
+              {selecting ? "Done selecting" : "Select"}
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={() => setHideDone((h) => !h)} aria-pressed={hideDone}>
             {hideDone ? "Show done" : "Hide done"}
           </Button>
@@ -176,6 +210,17 @@ export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { proje
                     <Button
                       variant="ghost"
                       size="sm"
+                      onClick={() => setDialog({ shift: ph.key })}
+                      aria-label={`Move ${ph.name} dates`}
+                      className="lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover/phase:opacity-100"
+                    >
+                      Shift
+                    </Button>
+                  )}
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setDialog({ rename: ph.key })}
                       aria-label={`Rename ${ph.name}`}
                       className="lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover/phase:opacity-100"
@@ -191,7 +236,16 @@ export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { proje
                     <PhaseTasks
                       tasks={shown}
                       today={today}
-                      canEdit={canEdit && !hideDone}
+                      canEdit={canEdit && !hideDone && !selecting}
+                      selection={selecting ? selected : null}
+                      onSelect={(id, on) =>
+                        setSelected((cur) => {
+                          const next = new Set(cur);
+                          if (on) next.add(id);
+                          else next.delete(id);
+                          return next;
+                        })
+                      }
                       onToggle={toggle}
                       onOpen={setOpenTask}
                       onReorder={(ids) => reorder.mutate({ projectId, phaseKey: ph.key, taskIds: ids })}
@@ -210,7 +264,22 @@ export function ChecklistTab({ projectId, canSaveTemplate, focusPhase }: { proje
       {dialog === "update" && <TemplateUpdateDialog projectId={projectId} onClose={() => setDialog(null)} onChanged={refresh} />}
       {dialog === "save" && <SaveAsTemplateDialog projectId={projectId} onClose={() => setDialog(null)} />}
       {dialog === "addPhase" && <AddPhaseDialog projectId={projectId} phases={cl.phases} onClose={() => setDialog(null)} onChanged={refresh} />}
-      {dialog && typeof dialog === "object" && (
+      {selecting && (
+        <BulkBar
+          projectId={projectId}
+          selected={[...selected].filter((id) => cl.tasks.some((t) => t.id === id))}
+          people={cl.people}
+          onClear={() => setSelected(new Set())}
+          onDone={async () => {
+            setSelected(new Set());
+            await refresh();
+          }}
+        />
+      )}
+      {dialog && typeof dialog === "object" && "shift" in dialog && (
+        <ShiftPhaseDialog projectId={projectId} phase={cl.phases.find((p) => p.key === dialog.shift)!} onClose={() => setDialog(null)} onChanged={refresh} />
+      )}
+      {dialog && typeof dialog === "object" && "rename" in dialog && (
         <RenamePhaseDialog projectId={projectId} phase={cl.phases.find((p) => p.key === dialog.rename)!} onClose={() => setDialog(null)} onChanged={refresh} />
       )}
     </section>
@@ -221,6 +290,8 @@ function PhaseTasks({
   tasks,
   today,
   canEdit,
+  selection,
+  onSelect,
   onToggle,
   onOpen,
   onReorder,
@@ -228,6 +299,8 @@ function PhaseTasks({
   tasks: ChecklistTask[];
   today: string;
   canEdit: boolean;
+  selection: Set<string> | null;
+  onSelect: (id: string, on: boolean) => void;
   onToggle: (t: ChecklistTask) => void;
   onOpen: (id: string) => void;
   onReorder: (ids: string[]) => void;
@@ -272,6 +345,11 @@ function PhaseTasks({
                 <IconGrip size={16} />
               </span>
             )}
+            {selection ? (
+              <label className="flex size-11 shrink-0 cursor-pointer items-center justify-center">
+                <input type="checkbox" checked={selection.has(t.id)} onChange={(e) => onSelect(t.id, e.target.checked)} aria-label={`Select ${t.title}`} className="size-5 accent-[var(--accent)]" />
+              </label>
+            ) : (
             <button
               type="button"
               role="checkbox"
@@ -290,10 +368,16 @@ function PhaseTasks({
                 {isDone ? <IconCheck size={14} strokeWidth={2.25} /> : blocked ? <IconLock size={12} /> : null}
               </span>
             </button>
+            )}
             <button type="button" onClick={() => onOpen(t.id)} className="min-w-0 flex-1 py-2 pr-2 text-left">
               <span className={cn("block text-[15px] leading-snug", isDone && "text-muted line-through decoration-border-strong")}>{t.title}</span>
               <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
-                <span>{t.role}</span>
+                <span className={cn(t.assigneeName && "text-text")}>{t.assigneeName ?? t.role}</span>
+                {t.priority === "high" && !isDone && <span className="font-medium text-attention-text">High priority</span>}
+                {t.status === "in_progress" && <StatusPill tone="accent">In progress</StatusPill>}
+                {t.status === "waiting" && <StatusPill tone="neutral">Waiting on {t.waitingOnParty}</StatusPill>}
+                {t.status === "blocked" && <StatusPill tone="blocked">Blocked</StatusPill>}
+                {t.approvalDecision === "rejected" && !isDone && t.status !== "awaiting_approval" && <StatusPill tone="attention">Sent back</StatusPill>}
                 {t.dueOn ? (
                   <span className={cn("num inline-flex items-center gap-1", overdue && "font-medium text-blocked-text")}>
                     {overdue && <IconAlert size={12} />}
@@ -335,6 +419,7 @@ function PhaseTasks({
                   </span>
                 ))}
               </span>
+              {t.status === "blocked" && t.blockedReason && <span className="mt-1 block text-[12px] text-blocked-text">{t.blockedReason}</span>}
               {blocked && (
                 <span className="mt-1 flex items-start gap-1 text-[12px] text-muted">
                   <IconLock size={12} className="mt-0.5 shrink-0" /> Waiting on {t.waitingOn.map((w) => w.title).join(", ")}

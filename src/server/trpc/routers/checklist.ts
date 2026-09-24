@@ -12,6 +12,8 @@ import { isIsoDate, todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { recordAudit } from "../../services/audit";
 import { applyTemplateUpdate, applyToggles, assertValidTemplate, loadTemplate, describeDiff, effectiveToggles, lockProject, previewToggles, projectEdges, reschedule, templateUpdatePreview, unmetPrerequisites } from "../../services/checklist";
+import { afterCompleted, notify, resolveApprover, sharedTaskIds, taskHref, undoRecurrence } from "../../services/tasks";
+import { projectPeople } from "./tasks";
 import { projectProcedure, router, type AuthedContext, type ProjectAccess } from "../init";
 
 type Ctx = AuthedContext & { project: ProjectAccess };
@@ -24,9 +26,13 @@ async function loadTask(tx: DbOrTx, projectId: string, taskId: string) {
   return t;
 }
 
-/** Outside collaborators only see tasks assigned to them (brief §4). */
-function canSeeTask(ctx: Ctx, t: { assigneeId: string | null }): boolean {
-  return ctx.project.can("task.viewAll") || t.assigneeId === ctx.viewer.id;
+/** Outside collaborators only see tasks assigned to them or shared with them as a watcher (brief §4). */
+function canSeeTask(ctx: Ctx, t: { id: string; assigneeId: string | null }, shared: ReadonlySet<string>): boolean {
+  return ctx.project.can("task.viewAll") || t.assigneeId === ctx.viewer.id || shared.has(t.id);
+}
+
+async function sharedFor(ctx: Ctx, tx: DbOrTx): Promise<Set<string>> {
+  return ctx.project.can("task.viewAll") ? new Set() : sharedTaskIds(tx, ctx.project.projectId, ctx.viewer.id);
 }
 
 /** Working a task: the internal team on the project, or whoever it's assigned to. */
@@ -65,7 +71,15 @@ export const checklistRouter = router({
         description: schema.task.description,
         role: schema.task.role,
         assigneeId: schema.task.assigneeId,
+        assigneeName: schema.user.name,
         status: schema.task.status,
+        priority: schema.task.priority,
+        blockedReason: schema.task.blockedReason,
+        waitingOnParty: schema.task.waitingOn,
+        followUpOn: schema.task.followUpOn,
+        approvalDecision: schema.task.approvalDecision,
+        approvalNote: schema.task.approvalNote,
+        approverId: schema.task.approverId,
         dueOn: schema.task.dueOn,
         dueRule: schema.task.dueRule,
         dueManual: schema.task.dueManual,
@@ -82,9 +96,11 @@ export const checklistRouter = router({
         completedOn: schema.task.completedOn,
       })
       .from(schema.task)
+      .leftJoin(schema.user, eq(schema.user.id, schema.task.assigneeId))
       .where(eq(schema.task.projectId, input.projectId))
       .orderBy(asc(schema.task.sortOrder), asc(schema.task.createdAt));
-    const visible = all.filter((t) => canSeeTask(c, t));
+    const shared = await sharedFor(c, ctx.db);
+    const visible = all.filter((t) => canSeeTask(c, t, shared));
     const visibleIds = new Set(visible.map((t) => t.id));
     const edges = await projectEdges(ctx.db, input.projectId);
     const done = new Set(all.filter((t) => t.status === "done").map((t) => t.id));
@@ -107,6 +123,8 @@ export const checklistRouter = router({
           waitingOn: unmetDependencies(edges, t.id, (id) => done.has(id)).map((id) => (visibleIds.has(id) ? { id, title: titles.get(id)! } : { id: null, title: "A task you can't see" })),
         };
       }),
+      // For assigning and bulk reassigning; only checklist editors get the list.
+      people: ctx.project.can("checklist.edit") ? (await projectPeople(ctx.db, input.projectId)).map((p) => ({ id: p.id, name: p.name, projectRole: p.projectRole, external: p.external })) : [],
       access: {
         canEdit: ctx.project.can("checklist.edit"),
         canApprove: ctx.project.can("task.approve"),
@@ -125,35 +143,56 @@ export const checklistRouter = router({
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const t = await loadTask(tx, input.projectId, input.taskId);
-        if (!canSeeTask(c, t)) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
+        const shared = await sharedFor(c, tx);
+        if (!canSeeTask(c, t, shared)) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
         if (!canWorkTask(c, t)) throw new TRPCError({ code: "FORBIDDEN" });
         if (input.done) {
+          if (t.status === "done") return { status: "done" as const, version: t.version };
           const unmet = await unmetPrerequisites(tx, t.id);
           if (unmet.length) {
             // Only name prerequisites this person can see; count the rest.
             const seeAll = ctx.project.can("task.viewAll");
-            const vis = seeAll ? unmet : (await tx.select({ id: schema.task.id, assigneeId: schema.task.assigneeId }).from(schema.task).where(inArray(schema.task.id, unmet.map((u) => u.id)))).filter((r) => canSeeTask(c, r)).map((r) => r.id);
-            const named = seeAll ? unmet : unmet.filter((u) => (vis as string[]).includes(u.id));
+            const vis = seeAll ? unmet.map((u) => u.id) : (await tx.select({ id: schema.task.id, assigneeId: schema.task.assigneeId }).from(schema.task).where(inArray(schema.task.id, unmet.map((u) => u.id)))).filter((r) => canSeeTask(c, r, shared)).map((r) => r.id);
+            const named = unmet.filter((u) => vis.includes(u.id));
             const hidden = unmet.length - named.length;
             const parts = [...named.map((u) => u.title), ...(hidden ? [`${hidden} other task${hidden === 1 ? "" : "s"} on the project`] : [])];
             throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Waiting on: ${parts.join("; ")}. Finish ${unmet.length === 1 ? "it" : "those"} first.` });
           }
-          const approves = t.requiresApproval && !ctx.project.can("task.approve");
-          const status = approves ? ("awaiting_approval" as const) : ("done" as const);
+          const today = todayET();
+          if (t.requiresApproval && !ctx.project.can("task.approve")) {
+            if (t.status === "awaiting_approval") return { status: "awaiting_approval" as const, version: t.version };
+            const approverId = await resolveApprover(tx, t);
+            const version = await bumpTask(tx, t.id, input.version, { status: "awaiting_approval", approverId, approvalRequestedAt: new Date(), approvalDecision: null, approvalNote: null, waitingOn: null, waitingSince: null, followUpOn: null, blockedReason: null });
+            await audit(tx, c, `${ctx.viewer.name} sent "${t.title}" for approval`, t.id, { status: "awaiting_approval", approverId });
+            if (approverId) {
+              const [p] = await tx.select({ name: schema.project.name }).from(schema.project).where(eq(schema.project.id, input.projectId));
+              await notify(tx, ctx.viewer.id, [{ userId: approverId, kind: "approval_requested", title: `${ctx.viewer.name} needs your approval on “${t.title}”`, body: p?.name ?? null, projectId: input.projectId, taskId: t.id, href: taskHref(input.projectId, t.id) }]);
+            }
+            return { status: "awaiting_approval" as const, version };
+          }
+          // The person ticking it can approve: their tick is the approval.
           const version = await bumpTask(tx, t.id, input.version, {
-            status,
-            completedOn: status === "done" ? todayET() : null,
-            completedAt: status === "done" ? new Date() : null,
-            completedById: status === "done" ? ctx.viewer.id : null,
+            status: "done",
+            completedOn: today,
+            completedAt: new Date(),
+            completedById: ctx.viewer.id,
+            waitingOn: null,
+            waitingSince: null,
+            followUpOn: null,
+            blockedReason: null,
+            ...(t.requiresApproval ? { approvalDecision: "approved" as const, approvalDecidedAt: new Date(), approvalDecidedById: ctx.viewer.id, approvalNote: null } : {}),
           });
-          await audit(tx, c, status === "done" ? `${ctx.viewer.name} completed "${t.title}"${t.requiresApproval ? " (approved)" : ""}` : `${ctx.viewer.name} sent "${t.title}" for approval`, t.id, { status }, t.requiresApproval && status === "done" ? "approve" : "update");
-          if (status === "done") await reschedule(tx, input.projectId);
-          return { status, version };
+          await audit(tx, c, `${ctx.viewer.name} completed "${t.title}"${t.requiresApproval ? " (approved)" : ""}`, t.id, { status: "done" }, t.requiresApproval ? "approve" : "update");
+          const [fresh] = await tx.select().from(schema.task).where(eq(schema.task.id, t.id));
+          const { nextId } = await afterCompleted(tx, fresh!, ctx.viewer.id, today);
+          return { status: "done" as const, version, nextId };
         }
-        if (t.requiresApproval && t.status === "done" && !ctx.project.can("task.approve")) {
+        if (t.status !== "done") return { status: t.status, version: t.version };
+        if (t.requiresApproval && !ctx.project.can("task.approve")) {
           throw new TRPCError({ code: "FORBIDDEN", message: "This task was approved. Only someone who can approve can reopen it." });
         }
-        const version = await bumpTask(tx, t.id, input.version, { status: "not_started", completedOn: null, completedAt: null, completedById: null });
+        const version = await bumpTask(tx, t.id, input.version, { status: "not_started", completedOn: null, completedAt: null, completedById: null, approvalDecision: null, approvalDecidedAt: null, approvalDecidedById: null });
+        await undoRecurrence(tx, t);
         await audit(tx, c, `${ctx.viewer.name} reopened "${t.title}"`, t.id, { status: "not_started" });
         // Tasks dated relative to this one go back to its due date.
         await reschedule(tx, input.projectId);
@@ -345,7 +384,7 @@ export const checklistRouter = router({
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const [t] = await tx.select().from(schema.task).where(and(eq(schema.task.id, input.taskId), eq(schema.task.projectId, input.projectId))).for("update");
-        if (!t || !canSeeTask(c, t)) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
+        if (!t || !canSeeTask(c, t, await sharedFor(c, tx))) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
         if (!canWorkTask(c, t)) throw new TRPCError({ code: "FORBIDDEN" });
         if (!t.subItems.some((s) => s.id === input.itemId)) throw new TRPCError({ code: "NOT_FOUND", message: "That item was removed." });
         const items = t.subItems.map((s) => (s.id === input.itemId ? { ...s, done: input.done } : s));

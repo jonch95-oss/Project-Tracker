@@ -55,6 +55,12 @@ async function taskVersion(id: string): Promise<number> {
   return t!.version;
 }
 
+/** A plain task on the project, so each call starts from a known state. */
+async function freshTask(projectId: string, extra: Partial<typeof schema.task.$inferInsert> = {}): Promise<string> {
+  const [t] = await db().insert(schema.task).values({ projectId, phaseKey: "closed", title: `Matrix task ${uid()}`, ...extra }).returning({ id: schema.task.id });
+  return t!.id;
+}
+
 interface Fixture {
   projectId: string;
   otherUserId: string;
@@ -268,6 +274,66 @@ const MATRIX: Record<string, Row | "public"> = {
       return c.checklist.setSubItem({ projectId: f.projectId, taskId: t!.id, itemId: t!.subItems[0]!.id, done: false });
     },
   },
+
+  "tasks.detail": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.tasks.detail({ projectId: f.projectId, taskId: f.taskId }) },
+  "tasks.assign": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const id = await freshTask(f.projectId);
+      return c.tasks.assign({ projectId: f.projectId, taskId: id, version: 1, assigneeId: f.otherUserId });
+    },
+  },
+  "tasks.setStatus": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => c.tasks.setStatus({ projectId: f.projectId, taskId: await freshTask(f.projectId), version: 1, status: "in_progress" }),
+  },
+  "tasks.setPriority": {
+    allowed: EDITORS,
+    call: async (c, f) => c.tasks.setPriority({ projectId: f.projectId, taskId: await freshTask(f.projectId), version: 1, priority: "high" }),
+  },
+  "tasks.decide": {
+    allowed: EDITORS,
+    call: async (c, f) => c.tasks.decide({ projectId: f.projectId, taskId: await freshTask(f.projectId, { status: "awaiting_approval", requiresApproval: true }), version: 1, decision: "approved" }),
+  },
+  "tasks.addComment": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.tasks.addComment({ projectId: f.projectId, taskId: f.taskId, body: "Matrix comment" }) },
+  "tasks.editComment": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => {
+      const { id } = await c.tasks.addComment({ projectId: f.projectId, taskId: f.taskId, body: "To edit" });
+      return c.tasks.editComment({ projectId: f.projectId, taskId: f.taskId, commentId: id, body: "Edited" });
+    },
+  },
+  "tasks.deleteComment": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => {
+      const { id } = await c.tasks.addComment({ projectId: f.projectId, taskId: f.taskId, body: "To remove" });
+      return c.tasks.deleteComment({ projectId: f.projectId, taskId: f.taskId, commentId: id });
+    },
+  },
+  "tasks.watch": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.tasks.watch({ projectId: f.projectId, taskId: f.taskId, on: true }) },
+  "tasks.setWatcher": { allowed: EDITORS, call: (c, f) => c.tasks.setWatcher({ projectId: f.projectId, taskId: f.taskId, userId: f.otherUserId, on: true }) },
+  "tasks.bulk": {
+    allowed: EDITORS,
+    call: async (c, f) => c.tasks.bulk({ projectId: f.projectId, taskIds: [await freshTask(f.projectId)], action: { kind: "redate", dueOn: "2030-01-15" } }),
+  },
+  "tasks.shiftPhase": { allowed: EDITORS, call: (c, f) => c.tasks.shiftPhase({ projectId: f.projectId, phaseKey: "closed", days: 1, unit: "business" }) },
+  "tasks.mine": { allowed: ACTIVE, call: (c) => c.tasks.mine() },
+  "tasks.needsYou": { allowed: ACTIVE, call: (c) => c.tasks.needsYou() },
+
+  "keyDates.list": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.keyDates.list({ projectId: f.projectId }) },
+  "keyDates.save": { allowed: EDITORS, call: (c, f) => c.keyDates.save({ projectId: f.projectId, kind: "closing", date: "2030-02-01" }) },
+  "keyDates.remove": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [d] = await db().insert(schema.keyDate).values({ projectId: f.projectId, kind: "auction", date: "2030-03-01" }).returning();
+      return c.keyDates.remove({ projectId: f.projectId, id: d!.id });
+    },
+  },
+
+  "notifications.list": { allowed: ACTIVE, call: (c) => c.notifications.list() },
+  "notifications.unreadCount": { allowed: ACTIVE, call: (c) => c.notifications.unreadCount() },
+  "notifications.markRead": { allowed: ACTIVE, call: (c) => c.notifications.markRead({ ids: ["00000000-0000-4000-8000-000000000000"] }) },
+  "notifications.markAllRead": { allowed: ACTIVE, call: (c) => c.notifications.markAllRead() },
 
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],

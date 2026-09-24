@@ -210,3 +210,31 @@ export const IconTemplate = (p: IconProps) => (
     <path d="M3.5 9h17M9 9v11.5" />
   </Icon>
 );
+export const IconBell = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2.2 2.2 0 0 0 4 0" />
+  </Icon>
+);
+export const IconComment = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4.5 5.5h15v10h-8l-4.5 3.5v-3.5h-2.5z" />
+  </Icon>
+);
+export const IconEye = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+    <circle cx="12" cy="12" r="2.75" />
+  </Icon>
+);
+export const IconCalendar = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3.5" y="5" width="17" height="15.5" rx="1.5" />
+    <path d="M3.5 10h17M8 3v4M16 3v4" />
+  </Icon>
+);
+export const IconUser = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="8.5" r="3.75" />
+    <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
+  </Icon>
+);

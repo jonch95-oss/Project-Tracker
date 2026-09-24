@@ -10,6 +10,7 @@ import { todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import { dueLabel, type Checklist, type ChecklistTask } from "./checklist-tab";
+import { Comments, StatusChip, TaskWork, useTaskDetail, Watchers } from "./task-work";
 
 const ROLES = ["PM", "Acquisitions", "Legal", "Finance", "Construction", "Design", "Sales", "Owner", "Partner"];
 
@@ -47,6 +48,7 @@ export function TaskDialog({
   const [depFilter, setDepFilter] = useState("");
   const [requiresApproval, setRequiresApproval] = useState(t.requiresApproval);
   const [formKey, setFormKey] = useState(0);
+  const detail = useTaskDetail(projectId, t.id);
 
   const onError = (e: unknown) => toast("error", errorMessage(e));
   const update = useMutation(trpc.checklist.updateTask.mutationOptions({ onError, onSettled: () => onChanged() }));
@@ -137,15 +139,18 @@ export function TaskDialog({
               Delete
             </Button>
           )}
-          <Button variant={isDone ? "secondary" : "primary"} onClick={onToggle}>
-            {isDone ? "Reopen" : t.requiresApproval && !checklist.access.canApprove ? "Done — send for approval" : "Mark done"}
-          </Button>
+          {t.status !== "awaiting_approval" && (
+            <Button variant={isDone ? "secondary" : "primary"} onClick={onToggle}>
+              {isDone ? "Reopen" : t.requiresApproval && !checklist.access.canApprove ? "Done — send for approval" : "Mark done"}
+            </Button>
+          )}
         </>
       }
     >
       <div className="flex flex-col gap-6">
         <div className="flex flex-wrap gap-2">
-          {isDone ? <StatusPill tone="done">Done{t.completedOn ? ` ${dueLabel(t.completedOn, today)}` : ""}</StatusPill> : t.status === "awaiting_approval" ? <StatusPill tone="attention">Awaiting approval</StatusPill> : <StatusPill tone="neutral">Not started</StatusPill>}
+          {isDone ? <StatusPill tone="done">Done{t.completedOn ? ` ${dueLabel(t.completedOn, today)}` : ""}</StatusPill> : <StatusChip status={t.status} />}
+          {t.recurrence && <StatusPill tone="neutral" icon={false}>Repeats {t.recurrence.freq === "biweekly" ? "every 2 weeks" : t.recurrence.freq}</StatusPill>}
           {t.killScreen && <StatusPill tone="attention">Kill screen</StatusPill>}
           {t.toggleSource.map((k) => (
             <StatusPill key={k} tone="neutral" icon={false}>
@@ -153,6 +158,8 @@ export function TaskDialog({
             </StatusPill>
           ))}
         </div>
+
+        <TaskWork projectId={projectId} taskId={t.id} version={t.version} done={isDone} onChanged={onChanged} />
 
         {t.waitingOn.length > 0 && !isDone && (
           <p className="flex items-start gap-2 rounded-panel bg-sunken px-4 py-3 text-sm">
@@ -280,6 +287,9 @@ export function TaskDialog({
             </div>
           )}
         </section>
+
+        {detail.data && <Watchers projectId={projectId} taskId={t.id} detail={detail.data} onChanged={onChanged} />}
+        {detail.data && <Comments projectId={projectId} taskId={t.id} detail={detail.data} onChanged={onChanged} />}
       </div>
 
       <ConfirmDialog

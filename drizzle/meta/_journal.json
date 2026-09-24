@@ -43,6 +43,13 @@
       "when": 1790206315299,
       "tag": "0005_templates_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790209975812,
+      "tag": "0006_tasks_m4",
+      "breakpoints": true
     }
   ]
 }

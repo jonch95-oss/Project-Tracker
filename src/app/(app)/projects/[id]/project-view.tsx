@@ -14,9 +14,11 @@ import { formatMoney } from "@/core/money";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
 import { projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
+import { formatIsoDate, todayET } from "@/core/time";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { ActivityTab } from "./activity-tab";
 import { ChecklistTab } from "./checklist-tab";
+import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
 import { PhaseStepper } from "./phase-stepper";
 import { PhotoGallery } from "./photos";
@@ -65,15 +67,15 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
     { key: "overview", label: "Overview" },
     { key: "checklist", label: "Checklist" },
     { key: "team", label: "Team" },
-    { key: "dates", label: "Key Dates" },
+    ...(p.access.canSeeAllTasks ? [{ key: "dates" as const, label: "Key Dates" }] : []),
     ...(p.access.canViewFinancials ? [{ key: "financials" as const, label: "Financials" }] : []),
     { key: "files", label: "Files" },
     { key: "records", label: "Public Records" },
     ...(p.access.canViewActivity ? [{ key: "activity" as const, label: "Activity" }] : []),
   ];
   const tab: TabKey = tabs.some((t) => t.key === requested) ? (requested as TabKey) : "overview";
-  const setTab = (next: TabKey, phase?: string) =>
-    router.replace(next === "overview" ? pathname : `${pathname}?tab=${next}${phase ? `&phase=${encodeURIComponent(phase)}` : ""}`, { scroll: false });
+  const setTab = (next: TabKey, phase?: string, task?: string) =>
+    router.replace(next === "overview" ? pathname : `${pathname}?tab=${next}${phase ? `&phase=${encodeURIComponent(phase)}` : ""}${task ? `&task=${encodeURIComponent(task)}` : ""}`, { scroll: false });
   const openChecklist = (phase: string) => {
     setTab("checklist", phase);
     requestAnimationFrame(() => document.getElementById(`phase-${phase}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -119,9 +121,17 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
 
       <TabPanel idBase="project-tabs" tab={tab} className="mt-8 focus-visible:outline-offset-8">
         {tab === "overview" ? (
-          <Overview project={p} viewerId={viewerId} />
+          <Overview project={p} viewerId={viewerId} onOpenTask={(id) => setTab("checklist", undefined, id)} onOpenDates={() => setTab("dates")} />
         ) : tab === "checklist" ? (
-          <ChecklistTab projectId={projectId} canSaveTemplate={p.access.canSaveTemplate} focusPhase={params.get("phase")} />
+          <ChecklistTab
+            projectId={projectId}
+            canSaveTemplate={p.access.canSaveTemplate}
+            focusPhase={params.get("phase")}
+            focusTask={params.get("task")}
+            onFocusTask={(id) => setTab("checklist", params.get("phase") ?? undefined, id ?? undefined)}
+          />
+        ) : tab === "dates" ? (
+          <KeyDatesTab projectId={projectId} />
         ) : tab === "team" ? (
           <TeamTab projectId={projectId} canManage={p.access.canManageMembers} />
         ) : tab === "financials" && p.access.canViewFinancials ? (
@@ -150,7 +160,9 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
 const n = (v: number | null | undefined, suffix = "") => (v == null ? null : `${v.toLocaleString("en-US")}${suffix}`);
 const f2 = (v: number | null | undefined) => (v == null ? null : v.toFixed(2));
 
-function Overview({ project: p, viewerId }: { project: Project; viewerId: string }) {
+function Overview({ project: p, viewerId, onOpenTask, onOpenDates }: { project: Project; viewerId: string; onOpenTask: (id: string) => void; onOpenDates: () => void }) {
+  const f = p.facts;
+  const today = todayET();
   return (
     <div className="flex flex-col gap-12">
       <section aria-labelledby="facts-h" className="grid gap-8 lg:grid-cols-[2fr_1fr]">
@@ -176,6 +188,35 @@ function Overview({ project: p, viewerId }: { project: Project; viewerId: string
             <p className="serif num text-display leading-none">{pct(projectProgressBps(p.phases, p.taskCounts))}</p>
             <p className="mt-2 text-[13px] text-muted">Finished phases, plus the share of the current phase&apos;s checklist that&apos;s done.</p>
             {p.headline && <HeadlineFigures headline={p.headline} className="mt-6 border-t border-border pt-5" />}
+          </div>
+          <h2 className="serif mb-4 mt-8 text-heading">What&apos;s next</h2>
+          <div className="flex flex-col gap-4 rounded-card border border-border bg-surface p-6 text-sm">
+            {f.nextAction ? (
+              <button type="button" onClick={() => onOpenTask(f.nextAction!.id)} className="text-left">
+                <span className="block text-[12px] text-muted">Next action</span>
+                <span className="mt-0.5 block font-medium underline-offset-4 hover:underline">{f.nextAction.title}</span>
+                <span className="block text-[13px] text-muted">
+                  {f.nextAction.assigneeName ?? "Unassigned"}
+                  {f.nextAction.dueOn ? ` · due ${formatIsoDate(f.nextAction.dueOn, { month: "short", day: "numeric", year: undefined })}` : ""}
+                </span>
+              </button>
+            ) : (
+              <p className="text-muted">No open tasks.</p>
+            )}
+            {(f.blocked > 0 || f.overdue > 0) && (
+              <p className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-4">
+                {f.blocked > 0 && <span className="num font-medium text-blocked-text">{f.blocked} blocked</span>}
+                {f.overdue > 0 && <span className="num font-medium text-attention-text">{f.overdue} overdue</span>}
+              </p>
+            )}
+            {f.nextKeyDate && (
+              <button type="button" onClick={onOpenDates} className="border-t border-border pt-4 text-left">
+                <span className="block text-[12px] text-muted">Next key date</span>
+                <span className="mt-0.5 block font-medium">
+                  {f.nextKeyDate.label} · <span className="num">{formatIsoDate(f.nextKeyDate.date, { month: "short", day: "numeric", year: f.nextKeyDate.date.slice(0, 4) === today.slice(0, 4) ? undefined : "numeric" })}</span>
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -224,7 +265,6 @@ function FinancialsTab({ project: p, onEdit }: { project: Project; onEdit?: () =
 }
 
 const UPCOMING: Record<string, { title: string; body: string }> = {
-  dates: { title: "Key dates come with tasks", body: "DD expiry, closing, TOE, TCO expiry, loan maturity, 1031 deadlines and auction dates, each with reminders." },
   files: { title: "Files are next", body: "Folders for acquisition, legal, title, design, DOB, construction and more, with versions and previews. Photos are already on the Overview tab." },
   records: { title: "Public records are on the way", body: "Nightly DOB, HPD, ECB, ACRIS and tax checks for this BBL, with alerts when anything changes." },
 };

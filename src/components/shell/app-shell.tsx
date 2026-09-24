@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import { useTRPC } from "@/lib/trpc";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/cn";
 import type { GlobalRole } from "@/core/permissions";
 import { Avatar } from "../ui/primitives";
 import {
+  IconBell,
   IconLedger,
   IconMore,
   IconPortfolio,
@@ -39,6 +42,7 @@ const ALL: GlobalRole[] = ["owner", "admin", "member", "external"];
 const NAV: NavItem[] = [
   { href: "/portfolio", label: "Portfolio", icon: IconPortfolio, roles: ALL, mobile: true },
   { href: "/tasks", label: "My Tasks", icon: IconTasks, roles: ALL, mobile: true },
+  { href: "/notifications", label: "Notifications", icon: IconBell, roles: ALL, mobile: true },
   { href: "/templates", label: "Templates", icon: IconTemplate, roles: ["owner", "admin"], mobile: false },
   { href: "/team", label: "Team", icon: IconTeam, roles: ["owner"], mobile: false },
   { href: "/audit", label: "Audit log", icon: IconLedger, roles: ["owner"], mobile: false },
@@ -61,6 +65,9 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
   const pathname = usePathname();
   const router = useRouter();
   const [moreOpen, setMoreOpen] = useState(false);
+  const trpc = useTRPC();
+  const unread = useQuery({ ...trpc.notifications.unreadCount.queryOptions(), refetchInterval: 60_000, refetchOnWindowFocus: true }).data?.count ?? 0;
+  const badge = (href: string) => (href === "/notifications" && unread > 0 ? unread : 0);
   const items = NAV.filter((n) => n.roles.includes(viewer.role));
   // Owners and admins land on Portfolio; everyone else on My Tasks.
   const tasksFirst = viewer.role === "member" || viewer.role === "external";
@@ -102,6 +109,11 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
               >
                 <I size={18} />
                 {item.label}
+                {badge(item.href) > 0 && (
+                  <span className="num ml-auto rounded-full bg-accent px-1.5 text-[11px] font-medium leading-5 text-on-accent" aria-label={`${badge(item.href)} unread`}>
+                    {badge(item.href) > 99 ? "99+" : badge(item.href)}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -140,8 +152,15 @@ export function AppShell({ viewer, children }: { viewer: ShellViewer; children: 
                   aria-current={active ? "page" : undefined}
                   className={cn("flex h-16 flex-col items-center justify-center gap-1 text-[11px]", active ? "font-medium text-text" : "text-muted")}
                 >
-                  <I size={22} />
-                  {item.label}
+                  <span className="relative">
+                    <I size={22} />
+                    {badge(item.href) > 0 && (
+                      <span className="num absolute -right-2 -top-1 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] font-medium leading-4 text-on-accent" aria-label={`${badge(item.href)} unread`}>
+                        {badge(item.href) > 99 ? "99+" : badge(item.href)}
+                      </span>
+                    )}
+                  </span>
+                  {item.label === "Notifications" ? "Inbox" : item.label}
                 </Link>
               </li>
             );

@@ -402,6 +402,17 @@ export const task = pgTable(
     requiresApproval: boolean("requires_approval").notNull().default(false),
     approverRole: text("approver_role"),
     approverId: text("approver_id").references(() => user.id, { onDelete: "set null" }),
+    /** Last approval decision on this task. */
+    approvalDecision: text("approval_decision", { enum: ["approved", "rejected"] }),
+    approvalNote: text("approval_note"),
+    approvalRequestedAt: timestamp("approval_requested_at", { withTimezone: true }),
+    approvalDecidedAt: timestamp("approval_decided_at", { withTimezone: true }),
+    approvalDecidedById: text("approval_decided_by_id").references(() => user.id, { onDelete: "set null" }),
+    /** Waiting on a third party: when it started and the next automatic follow-up (NY dates). */
+    waitingSince: text("waiting_since"),
+    followUpOn: text("follow_up_on"),
+    /** Recurring tasks: the first task of the series. */
+    seriesId: uuid("series_id"),
     requiredAttachment: text("required_attachment"),
     subItems: jsonb("sub_items").$type<{ id: string; text: string; done: boolean }[]>().notNull().default([]),
     recurrence: jsonb("recurrence"),
@@ -435,4 +446,101 @@ export const taskDependency = pgTable(
       .references(() => task.id, { onDelete: "cascade" }),
   },
   (t) => [primaryKey({ columns: [t.taskId, t.dependsOnId] }), index("task_dependency_on_idx").on(t.dependsOnId)],
+);
+
+export const taskComment = pgTable(
+  "task_comment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => task.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    authorId: text("author_id").references(() => user.id, { onDelete: "set null" }),
+    /** Text with @[Name](userId) mention tokens. */
+    body: text("body").notNull(),
+    mentions: jsonb("mentions").$type<string[]>().notNull().default([]),
+    createdAt: createdAt(),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => [index("task_comment_task_idx").on(t.taskId, t.createdAt)],
+);
+
+/** Watchers get updates on a task. Watching also shares the task with an outside collaborator (brief §4). */
+export const taskWatcher = pgTable(
+  "task_watcher",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => task.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    addedAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.userId] }), index("task_watcher_user_idx").on(t.userId)],
+);
+
+export const keyDate = pgTable(
+  "key_date",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    label: text("label"),
+    /** New York calendar date. */
+    date: text("date").notNull(),
+    done: boolean("done").notNull().default(false),
+    notes: text("notes"),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("key_date_project_idx").on(t.projectId, t.date), index("key_date_date_idx").on(t.date)],
+);
+
+export const NOTIFICATION_KINDS = [
+  "assigned",
+  "mention",
+  "comment",
+  "approval_requested",
+  "approval_decided",
+  "unblocked",
+  "due_tomorrow",
+  "overdue",
+  "key_date",
+  "follow_up",
+  "record_change",
+  "file_added",
+  "system",
+] as const;
+
+/**
+ * In-app notifications. Text never contains dollar figures (brief §9).
+ * Milestone 7 adds push, the digest, preferences and quiet hours on top.
+ */
+export const notification = pgTable(
+  "notification",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: NOTIFICATION_KINDS }).notNull(),
+    projectId: uuid("project_id").references(() => project.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => task.id, { onDelete: "cascade" }),
+    actorId: text("actor_id").references(() => user.id, { onDelete: "set null" }),
+    title: text("title").notNull(),
+    body: text("body"),
+    /** In-app link, e.g. /projects/…?task=… */
+    href: text("href"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("notification_user_idx").on(t.userId, t.readAt, t.createdAt)],
 );

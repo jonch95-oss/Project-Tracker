@@ -97,7 +97,7 @@ test.describe("checklists and templates", () => {
   test("a member without checklist rights works tasks but can't edit the checklist", async ({ page }) => {
     await signIn(page, "ariel@demo.test");
     await page.goto("/portfolio");
-    await page.getByText("Macon Street Auction").click();
+    await page.getByRole("heading", { name: "Macon Street Auction" }).click();
     await page.getByRole("tab", { name: "Checklist" }).click();
     // Ariel has checklist rights on demo projects; the architect (external) sees none of it.
     await expect(page.getByRole("button", { name: /Site conditions/ })).toBeVisible();
@@ -106,7 +106,7 @@ test.describe("checklists and templates", () => {
   test("an outside collaborator sees only tasks assigned to them", async ({ page }) => {
     await signIn(page, "architect@demo.test");
     await page.goto("/portfolio");
-    await page.getByText("Bergen Street Condominium").click();
+    await page.getByRole("heading", { name: "Bergen Street Condominium" }).click();
     await page.getByRole("tab", { name: "Checklist" }).click();
     await expect(page.getByText("Nothing assigned to you here yet")).toBeVisible();
     await expect(page.getByRole("button", { name: /Site conditions/ })).toHaveCount(0);

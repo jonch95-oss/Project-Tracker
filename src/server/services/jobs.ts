@@ -8,6 +8,7 @@ import { drainOutbox, pruneOutbox, renderEmail, sendEmail } from "./email";
 import { logError } from "./errors";
 import { runUsageCheck } from "./usage";
 import { cleanupAbandonedUploads } from "./uploads";
+import { followUpJob, keyDateReminderJob } from "./tasks";
 
 export type JobResult = Record<string, unknown>;
 
@@ -154,6 +155,8 @@ export async function outboxJob(): Promise<JobResult> {
 const DAILY: { job: string; hourET: number; fn: () => Promise<JobResult> }[] = [
   { job: "error-summary", hourET: 7, fn: errorSummaryJob },
   { job: "backup-watch", hourET: 9, fn: () => backupWatchJob() },
+  { job: "task-follow-ups", hourET: 8, fn: () => followUpJob() },
+  { job: "key-date-reminders", hourET: 8, fn: () => keyDateReminderJob() },
 ];
 
 /** Arbitrary constant: only one tick runs at a time. */

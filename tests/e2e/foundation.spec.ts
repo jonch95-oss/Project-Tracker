@@ -19,7 +19,7 @@ test.describe("authentication", () => {
   test("owner lands on Portfolio; member lands on My Tasks", async ({ page, context }) => {
     await signIn(page, "jon@demo.test");
     await expect(page).toHaveURL(/\/portfolio/);
-    await expect(page.getByText("Sterling Place Townhouse")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sterling Place Townhouse" })).toBeVisible();
     await context.clearCookies();
     await signIn(page, "ariel@demo.test");
     await expect(page).toHaveURL(/\/tasks/);
@@ -39,7 +39,7 @@ test.describe("roles", () => {
   test("outside collaborator sees assigned projects but no emails or flags", async ({ page }) => {
     await signIn(page, "architect@demo.test");
     await page.goto("/portfolio");
-    await page.getByText("Bergen Street Condominium").click();
+    await page.getByRole("heading", { name: "Bergen Street Condominium" }).click();
     await page.getByRole("tab", { name: "Team" }).click();
     await expect(page.getByText("Elias Ariel")).toBeVisible();
     await expect(page.getByText("elias@demo.test")).toHaveCount(0);

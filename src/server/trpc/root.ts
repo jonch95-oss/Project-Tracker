@@ -3,6 +3,7 @@ import { checklistRouter } from "./routers/checklist";
 import { photosRouter } from "./routers/photos";
 import { companiesRouter, membersRouter, projectsRouter } from "./routers/projects";
 import { auditRouter, systemRouter } from "./routers/system";
+import { keyDatesRouter, notificationsRouter, tasksRouter } from "./routers/tasks";
 import { templatesRouter } from "./routers/templates";
 import { invitesRouter, meRouter, usersRouter } from "./routers/users";
 
@@ -16,6 +17,9 @@ export const appRouter = router({
   photos: photosRouter,
   checklist: checklistRouter,
   templates: templatesRouter,
+  tasks: tasksRouter,
+  keyDates: keyDatesRouter,
+  notifications: notificationsRouter,
   audit: auditRouter,
   system: systemRouter,
 });

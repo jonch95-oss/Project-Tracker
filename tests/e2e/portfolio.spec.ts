@@ -54,7 +54,7 @@ test.describe("portfolio", () => {
     await page.getByRole("button", { name: /^Filters/ }).click();
     await page.getByLabel("Status").selectOption("on_hold");
     await expect(page.getByText(/^1 of \d+ projects/)).toBeVisible();
-    await expect(page.getByText("Halsey Street Assignment")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Halsey Street Assignment" })).toBeVisible();
     await page.reload();
     await expect(page.getByText(/^1 of \d+ projects/)).toBeVisible();
     await page.getByRole("button", { name: "Clear" }).click();
@@ -62,7 +62,7 @@ test.describe("portfolio", () => {
     await page.getByLabel(/Search projects/).fill("300392");
     await page.getByLabel(/Search projects/).press("Enter");
     await expect(page.getByText(/^1 of \d+ projects/)).toBeVisible();
-    await expect(page.getByText("Bergen Street Condominium")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Bergen Street Condominium" })).toBeVisible();
   });
 
   test("create a project, move its phase, edit it with a stale-edit check, add a photo, archive and restore", async ({ page, browser }) => {
@@ -138,7 +138,7 @@ test.describe("portfolio", () => {
   test("editing from a cold page load keeps the project's company", async ({ page }) => {
     await signIn(page, "jon@demo.test");
     await page.goto("/portfolio");
-    await page.getByText("Bergen Street Condominium").click();
+    await page.getByRole("heading", { name: "Bergen Street Condominium" }).click();
     await expect(page).toHaveURL(/\/projects\//);
     await page.reload(); // nothing cached
     await page.getByRole("button", { name: "Edit project" }).click();
@@ -149,10 +149,10 @@ test.describe("portfolio", () => {
   test("a member without financial access never sees money", async ({ page }) => {
     await signIn(page, "ariel@demo.test");
     await page.goto("/portfolio");
-    await expect(page.getByText("Sterling Place Townhouse")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sterling Place Townhouse" })).toBeVisible();
     await expect(page.getByText("Price", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/\$\d/)).toHaveCount(0);
-    await page.getByText("Sterling Place Townhouse").click();
+    await page.getByRole("heading", { name: "Sterling Place Townhouse" }).click();
     await expect(page.getByRole("tab", { name: "Financials" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit project" })).toHaveCount(0);
     await page.getByRole("tab", { name: "Activity" }).click();

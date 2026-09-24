@@ -105,6 +105,23 @@ async function main() {
       { projectId: row!.id, userId: ids["ariel@demo.test"]!, projectRole: "Construction", canEditChecklist: true },
       { projectId: row!.id, userId: ids["architect@demo.test"]!, projectRole: "Architect" },
     ]);
+    // Work in the current phase: owners by role, a few statuses, one approval waiting, key dates.
+    const open = await db.select().from(schema.task).where(and(eq(schema.task.projectId, row!.id), ne(schema.task.status, "done")));
+    const byRole: Record<string, string> = { PM: ids["elias@demo.test"]!, Construction: ids["ariel@demo.test"]!, Design: ids["architect@demo.test"]!, Acquisitions: ids["jon@demo.test"]!, Owner: ids["jon@demo.test"]! };
+    // Only the current and next phase are handed out, as a PM would.
+    const idx = phases.findIndex((x) => x.status === "active");
+    const handed = new Set(phases.slice(Math.max(idx, 0), Math.max(idx, 0) + 2).map((x) => x.key));
+    for (const t of open.filter((x) => handed.has(x.phaseKey))) {
+      const assigneeId = byRole[t.role] ?? ids["ariel@demo.test"]!;
+      await db.update(schema.task).set({ assigneeId }).where(eq(schema.task.id, t.id));
+    }
+    const active = current ? open.filter((t) => t.phaseKey === current.key) : [];
+    if (active[0]) await db.update(schema.task).set({ status: "in_progress" }).where(eq(schema.task.id, active[0].id));
+    if (active[1]) await db.update(schema.task).set({ status: "waiting", waitingOn: "Expediter — DOB plan exam", waitingSince: addDays(today, -4), followUpOn: addDays(today, 1) }).where(eq(schema.task.id, active[1].id));
+    if (active[2]) await db.update(schema.task).set({ status: "blocked", blockedReason: "Neighbor hasn't signed the access agreement" }).where(eq(schema.task.id, active[2].id));
+    if (active[3]) await db.update(schema.task).set({ status: "awaiting_approval", requiresApproval: true, approverRole: "Owner", approverId: ids["jon@demo.test"]!, approvalRequestedAt: new Date() }).where(eq(schema.task.id, active[3].id));
+    const kd = p.type === "foreclosure_auction" ? [{ kind: "auction", date: addDays(today, 5) }] : p.type === "contract_flip" ? [{ kind: "closing", date: addDays(today, 12) }, { kind: "dd_expiry", date: addDays(today, 3) }] : [{ kind: "loan_maturity", date: addDays(today, 200) }, { kind: "tco_expiry", date: addDays(today, 45) }];
+    await db.insert(schema.keyDate).values(kd.map((k) => ({ projectId: row!.id, ...k })));
   }
   await pool.end();
   console.log("Demo seed complete. Users: jon@ / elias@ / ariel@ / architect@demo.test — password: demo password 1");

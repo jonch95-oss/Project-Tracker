@@ -14,7 +14,7 @@ export function PortfolioTable({ projects }: { projects: PortfolioProject[] }) {
   const showFin = projects.some((p) => p.headline);
   return (
     <div className="overflow-x-auto rounded-card border border-border bg-surface">
-      <table className="w-full min-w-[760px] text-sm">
+      <table className="w-full min-w-[1040px] text-sm">
         <caption className="sr-only">Projects</caption>
         <thead>
           <tr className="border-b border-border text-left text-[12px] text-muted">
@@ -29,6 +29,15 @@ export function PortfolioTable({ projects }: { projects: PortfolioProject[] }) {
             </th>
             <th scope="col" className="px-3 py-3 text-right font-medium">
               Complete
+            </th>
+            <th scope="col" className="px-3 py-3 font-medium">
+              Next action
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Blocked
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Overdue
             </th>
             <th scope="col" className="px-3 py-3 font-medium">
               Type
@@ -69,6 +78,18 @@ export function PortfolioTable({ projects }: { projects: PortfolioProject[] }) {
                 <td className="px-3 py-3">{currentPhase(p.phases)?.name ?? "Complete"}</td>
                 <td className="num px-3 py-3 text-right">{d ?? "—"}</td>
                 <td className="num px-3 py-3 text-right">{pct(projectProgressBps(p.phases, p.taskCounts))}</td>
+                <td className="max-w-[240px] px-3 py-3">
+                  {p.facts.nextAction ? (
+                    <>
+                      <span className="block truncate">{p.facts.nextAction.title}</span>
+                      <span className="block truncate text-[12px] text-muted">{p.facts.nextAction.assigneeName ?? "Unassigned"}</span>
+                    </>
+                  ) : (
+                    <span className="text-muted">—</span>
+                  )}
+                </td>
+                <td className={`num px-3 py-3 text-right ${p.facts.blocked ? "font-medium text-blocked-text" : ""}`}>{p.facts.blocked || "—"}</td>
+                <td className={`num px-3 py-3 text-right ${p.facts.overdue ? "font-medium text-attention-text" : ""}`}>{p.facts.overdue || "—"}</td>
                 <td className="px-3 py-3">{PROJECT_TYPE_SHORT[p.type as ProjectTypeKey]}</td>
                 <td className="px-3 py-3">{p.companyShort}</td>
                 <td className="num px-3 py-3 text-right">{p.units ?? "—"}</td>

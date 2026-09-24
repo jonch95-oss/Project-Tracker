@@ -14,6 +14,7 @@ import { activeFilterCount, filterProjects, filtersFromParams, PROJECT_STATUS_LA
 import { useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { PortfolioCards } from "./portfolio-cards";
 import { PortfolioTable } from "./portfolio-table";
+import { NeedsYouRail } from "./needs-you";
 import { NewProjectDialog } from "./new-project-dialog";
 import { PortfolioTimeline } from "./portfolio-timeline";
 
@@ -133,6 +134,7 @@ export function PortfolioView({ canCreate, isOwner }: { canCreate: boolean; isOw
         />
       ) : (
         <>
+          {!archived && <NeedsYouRail />}
           <Toolbar
             view={view}
             onView={(v) => setParam({ view: v === "cards" ? null : v })}

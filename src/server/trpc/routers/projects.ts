@@ -1,11 +1,14 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { isFinancialEntity } from "@/core/audit";
 import { canGlobal, canGrantFlags, canProject, canRemoveMember, defaultFlags, PROJECT_ROLES, type Membership } from "@/core/permissions";
 import { setCurrentPhase, setPhaseSkipped, type PhaseState } from "@/core/phases";
 import { isToggleKey } from "@/core/toggles";
 import { PROJECT_STATUSES } from "@/core/portfolio";
+import { keyDateLabel, nextKeyDate } from "@/core/key-dates";
+import { nextAction, type TaskStatus } from "@/core/tasks";
 import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
@@ -111,11 +114,68 @@ async function loadPhases(conn: DbOrTx, projectIds: string[]) {
 }
 
 /** Task totals per phase, for "% complete" (counts only; no task content). */
+const dependent = alias(schema.task, "dependent");
+
+/** Tasks an outside collaborator can see: assigned to them or shared with them as a watcher. */
+function visibleToOutsider(userId: string) {
+  return or(eq(schema.task.assigneeId, userId), sql`exists (select 1 from ${schema.taskWatcher} where ${schema.taskWatcher.taskId} = ${schema.task.id} and ${schema.taskWatcher.userId} = ${userId})`);
+}
+
+export interface CardFacts {
+  nextAction: { id: string; title: string; assigneeName: string | null; dueOn: string | null } | null;
+  blocked: number;
+  overdue: number;
+  nextKeyDate: { label: string; date: string } | null;
+}
+
+/**
+ * What a project card says about the work: the next action and its owner,
+ * blocked and overdue counts, and the next key date. `outsider` limits it to
+ * the tasks that person can see (and no key dates).
+ */
+async function loadCardFacts(conn: DbOrTx, projectIds: string[], outsider: string | null): Promise<Map<string, CardFacts>> {
+  const out = new Map<string, CardFacts>();
+  if (projectIds.length === 0) return out;
+  const today = todayET();
+  const scope = outsider ? and(inArray(schema.task.projectId, projectIds), visibleToOutsider(outsider)) : inArray(schema.task.projectId, projectIds);
+  const open = await conn
+    .select({ id: schema.task.id, projectId: schema.task.projectId, title: schema.task.title, status: schema.task.status, dueOn: schema.task.dueOn, sortOrder: schema.task.sortOrder, phaseKey: schema.task.phaseKey, assigneeName: schema.user.name })
+    .from(schema.task)
+    .leftJoin(schema.user, eq(schema.user.id, schema.task.assigneeId))
+    .where(and(scope, ne(schema.task.status, "done")));
+  const held = new Set(
+    (
+      await conn
+        .selectDistinct({ id: schema.taskDependency.taskId })
+        .from(schema.taskDependency)
+        .innerJoin(schema.task, eq(schema.task.id, schema.taskDependency.dependsOnId))
+        .innerJoin(dependent, eq(dependent.id, schema.taskDependency.taskId))
+        .where(and(inArray(dependent.projectId, projectIds), ne(dependent.status, "done"), ne(schema.task.status, "done")))
+    ).map((r) => r.id),
+  );
+  const phaseOrder = new Map(
+    (await conn.select({ projectId: schema.projectPhase.projectId, key: schema.projectPhase.key, sortOrder: schema.projectPhase.sortOrder }).from(schema.projectPhase).where(inArray(schema.projectPhase.projectId, projectIds))).map((p) => [`${p.projectId}:${p.key}`, p.sortOrder]),
+  );
+  const dates = outsider ? [] : await conn.select().from(schema.keyDate).where(and(inArray(schema.keyDate.projectId, projectIds), eq(schema.keyDate.done, false), sql`${schema.keyDate.date} >= ${today}`));
+  for (const id of projectIds) {
+    const mine = open.filter((t) => t.projectId === id);
+    const na = nextAction(mine.map((t) => ({ ...t, status: t.status as TaskStatus, phaseOrder: phaseOrder.get(`${id}:${t.phaseKey}`) ?? 0, blockedByDeps: held.has(t.id) })));
+    const kd = nextKeyDate(dates.filter((d) => d.projectId === id), today);
+    out.set(id, {
+      nextAction: na ? { id: na.id, title: na.title, assigneeName: na.assigneeName, dueOn: na.dueOn } : null,
+      blocked: mine.filter((t) => t.status === "blocked").length,
+      overdue: mine.filter((t) => t.dueOn && t.dueOn < today).length,
+      nextKeyDate: kd ? { label: keyDateLabel(kd.kind, kd.label), date: kd.date } : null,
+    });
+  }
+  return out;
+}
+
 async function loadTaskCounts(conn: DbOrTx, projectIds: string[], onlyAssignee: string | null = null) {
   const out = new Map<string, Record<string, { total: number; done: number }>>();
   if (projectIds.length === 0) return out;
-  // Outside collaborators only count the tasks they can see (their own).
-  const scope = onlyAssignee ? and(inArray(schema.task.projectId, projectIds), eq(schema.task.assigneeId, onlyAssignee)) : inArray(schema.task.projectId, projectIds);
+  // Outside collaborators only count the tasks they can see (their own and those shared with them).
+  const scope = onlyAssignee ? and(inArray(schema.task.projectId, projectIds), visibleToOutsider(onlyAssignee)) : inArray(schema.task.projectId, projectIds);
   const rows = await conn
     .select({
       projectId: schema.task.projectId,
@@ -135,7 +195,7 @@ async function loadTaskCounts(conn: DbOrTx, projectIds: string[], onlyAssignee: 
 }
 
 /** Hero photo per project: the pinned one, else the newest. */
-async function loadHeroes(conn: DbOrTx, projects: { id: string; heroPhotoId: string | null }[]) {
+export async function loadHeroes(conn: DbOrTx, projects: { id: string; heroPhotoId: string | null }[]) {
   const out = new Map<string, { id: string; width: number; height: number }>();
   if (projects.length === 0) return out;
   const ids = projects.map((p) => p.id);
@@ -264,7 +324,8 @@ export const projectsRouter = router({
       .where(inArray(schema.project.id, ids))
       .orderBy(asc(schema.project.name));
 
-    const [phases, heroes, mine, counts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, ctx.actor.role === "external" ? ctx.actor.userId : null)]);
+    const outsider = ctx.actor.role === "external" ? ctx.actor.userId : null;
+    const [phases, heroes, mine, counts, facts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, outsider), loadCardFacts(ctx.db, ids, outsider)]);
     const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
     const headlines = finIds.length ? await ctx.db.select().from(schema.projectHeadline).where(inArray(schema.projectHeadline.projectId, finIds)) : [];
 
@@ -284,6 +345,7 @@ export const projectsRouter = router({
         ...p,
         phases: phases.get(p.id) ?? [],
         taskCounts: counts.get(p.id) ?? {},
+        facts: facts.get(p.id)!,
         hero: heroes.get(p.id) ?? null,
         memberIds: members.filter((m) => m.projectId === p.id).map((m) => m.userId),
         headline: finIds.includes(p.id) ? (headlineOrNull(headlines.find((h) => h.projectId === p.id)) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
@@ -323,13 +385,15 @@ export const projectsRouter = router({
       .innerJoin(schema.company, eq(schema.company.id, schema.project.companyId))
       .where(eq(schema.project.id, input.projectId));
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-    const [phases, heroes, counts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p]), loadTaskCounts(ctx.db, [p.id], ctx.project.can("task.viewAll") ? null : ctx.actor.userId)]);
+    const outsider = ctx.project.can("task.viewAll") ? null : ctx.actor.userId;
+    const [phases, heroes, counts, facts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p]), loadTaskCounts(ctx.db, [p.id], outsider), loadCardFacts(ctx.db, [p.id], outsider)]);
     const canFin = ctx.project.can("financials.view");
     const [h] = canFin ? await ctx.db.select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, p.id)) : [];
     return {
       ...p,
       phases: phases.get(p.id) ?? [],
       taskCounts: counts.get(p.id) ?? {},
+      facts: facts.get(p.id)!,
       hero: heroes.get(p.id) ?? null,
       headline: canFin ? (headlineOrNull(h) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
       access: {
@@ -343,6 +407,7 @@ export const projectsRouter = router({
         canUploadPhotos: ctx.project.can("photos.upload"),
         canManagePhotos: ctx.project.can("photos.manage"),
         canViewActivity: ctx.project.can("activity.view"),
+        canSeeAllTasks: ctx.project.can("task.viewAll"),
         canSaveTemplate: ctx.project.can("checklist.edit") && (ctx.actor.role === "owner" || ctx.actor.role === "admin"),
       },
     };

@@ -6,10 +6,11 @@ import { Badge, StatusPill } from "@/components/ui/primitives";
 import { PROJECT_TYPE_SHORT, type ProjectTypeKey } from "@/core/labels";
 import { daysInPhase, projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
-import { todayET } from "@/core/time";
+import { formatIsoDate, todayET } from "@/core/time";
+import { IconAlert, IconBlocked, IconCalendar } from "@/components/ui/icons";
 import type { PortfolioProject } from "./portfolio-view";
 
-/** Tall photo cards (brief §7.1). Task-driven fields (next action, blockers, overdue) join in Milestone 4. */
+/** Tall photo cards (brief §7.1). */
 export function PortfolioCards({ projects }: { projects: PortfolioProject[] }) {
   const today = todayET();
   return (
@@ -56,6 +57,36 @@ export function PortfolioCards({ projects }: { projects: PortfolioProject[] }) {
                     <dd className="truncate font-medium">{p.companyShort}</dd>
                   </div>
                 </dl>
+                <div className="mt-4 border-t border-border pt-4 text-[13px]">
+                  <p className="text-muted">Next action</p>
+                  {p.facts.nextAction ? (
+                    <p className="mt-0.5 line-clamp-2 font-medium leading-snug">
+                      {p.facts.nextAction.title}
+                      <span className="font-normal text-muted"> · {p.facts.nextAction.assigneeName ?? "Unassigned"}</span>
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-muted">Nothing open</p>
+                  )}
+                  {(p.facts.blocked > 0 || p.facts.overdue > 0 || p.facts.nextKeyDate) && (
+                    <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+                      {p.facts.blocked > 0 && (
+                        <span className="num inline-flex items-center gap-1 font-medium text-blocked-text">
+                          <IconBlocked size={14} /> {p.facts.blocked} blocked
+                        </span>
+                      )}
+                      {p.facts.overdue > 0 && (
+                        <span className="num inline-flex items-center gap-1 font-medium text-attention-text">
+                          <IconAlert size={14} /> {p.facts.overdue} overdue
+                        </span>
+                      )}
+                      {p.facts.nextKeyDate && (
+                        <span className="inline-flex items-center gap-1 text-muted">
+                          <IconCalendar size={14} /> {p.facts.nextKeyDate.label} <span className="num">{formatIsoDate(p.facts.nextKeyDate.date, { month: "short", day: "numeric", year: p.facts.nextKeyDate.date.slice(0, 4) === today.slice(0, 4) ? undefined : "numeric" })}</span>
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
                 {p.headline && <HeadlineFigures headline={p.headline} className="mt-4 border-t border-border pt-4" />}
               </div>
             </Link>
