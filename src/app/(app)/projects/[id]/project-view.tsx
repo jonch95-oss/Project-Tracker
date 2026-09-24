@@ -19,6 +19,7 @@ import { ActivityTab } from "./activity-tab";
 import { ChecklistTab } from "./checklist-tab";
 import { FilesTab } from "./files-tab";
 import { RecordsTab } from "./records-tab";
+import { FieldTab } from "./field/field-tab";
 import { FinancialsTab } from "./financials-tab";
 import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
@@ -27,7 +28,7 @@ import { PhotoGallery } from "./photos";
 import { TeamTab } from "./team-tab";
 
 type Project = RouterOutputs["projects"]["get"];
-type TabKey = "overview" | "checklist" | "team" | "dates" | "financials" | "files" | "records" | "activity";
+type TabKey = "overview" | "checklist" | "team" | "dates" | "financials" | "files" | "field" | "records" | "activity";
 
 export function ProjectView({ projectId, viewerId }: { projectId: string; viewerId: string }) {
   const trpc = useTRPC();
@@ -72,6 +73,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
     ...(p.access.canSeeAllTasks ? [{ key: "dates" as const, label: "Dates & Expiries" }] : []),
     ...(p.access.canViewFinancials ? [{ key: "financials" as const, label: "Financials" }] : []),
     { key: "files", label: "Files" },
+    { key: "field", label: "Construction" },
     ...(p.access.canSeeAllTasks ? [{ key: "records" as const, label: "Public Records" }] : []),
     ...(p.access.canViewActivity ? [{ key: "activity" as const, label: "Activity" }] : []),
   ];
@@ -143,6 +145,8 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
           <FinancialsTab projectId={projectId} />
         ) : tab === "activity" ? (
           <ActivityTab projectId={projectId} />
+        ) : tab === "field" ? (
+          <FieldTab projectId={projectId} internal={p.access.canSeeAllTasks} onOpenTask={(id) => setTab("checklist", undefined, id)} />
         ) : tab === "records" ? (
           <RecordsTab projectId={projectId} onOpenTask={(id) => setTab("checklist", undefined, id)} />
         ) : null}

@@ -78,3 +78,28 @@ export async function putObject(mode: "blob" | "local", uploadId: string, pathna
 export function photoUrl(id: string, size: "thumb" | "full" = "thumb"): string {
   return `/api/media/photos/${id}?size=${size}`;
 }
+
+interface PhotoClient {
+  photos: {
+    beginUpload: { mutate: (i: { projectId: string; contentType: PhotoContentType; fullBytes: number; thumbBytes: number; width: number; height: number; takenAt: Date | null; siteLogId?: string | null; caption?: string | null }) => Promise<{ uploadId: string; mode: "blob" | "local"; objects: { role: string; pathname: string }[] }> };
+    completeUpload: { mutate: (i: { projectId: string; uploadId: string }) => Promise<{ id: string }> };
+  };
+}
+
+/** Compress and upload photos one at a time (camera or library); returns the new photo ids and any per-file errors. */
+export async function uploadPhotos(client: PhotoClient, projectId: string, files: File[], extra: { siteLogId?: string | null } = {}, onProgress?: (done: number, total: number) => void): Promise<{ ids: string[]; errors: string[] }> {
+  const ids: string[] = [];
+  const errors: string[] = [];
+  for (const [i, file] of files.entries()) {
+    try {
+      const c = await compressPhoto(file);
+      const begin = await client.photos.beginUpload.mutate({ projectId, contentType: c.contentType, fullBytes: c.full.size, thumbBytes: c.thumb.size, width: c.width, height: c.height, takenAt: c.takenAt, siteLogId: extra.siteLogId ?? null });
+      for (const o of begin.objects) await putObject(begin.mode, begin.uploadId, o.pathname, o.role === "full" ? c.full : c.thumb, c.contentType);
+      ids.push((await client.photos.completeUpload.mutate({ projectId, uploadId: begin.uploadId })).id);
+    } catch (e) {
+      errors.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    onProgress?.(i + 1, files.length);
+  }
+  return { ids, errors };
+}

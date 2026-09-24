@@ -34,7 +34,7 @@ function canApproveMoney(ctx: Ctx): boolean {
 }
 
 /** Tell the people who can approve money that something is waiting (no dollar figures in notifications, brief §9). */
-async function notifyMoneyApprovers(tx: DbOrTx, ctx: Ctx, title: string) {
+export async function notifyMoneyApprovers(tx: DbOrTx, ctx: Ctx, title: string) {
   const rows = await tx
     .select({ id: schema.user.id, role: schema.user.role, fin: schema.projectMember.canViewFinancials, approve: schema.projectMember.canApprove })
     .from(schema.user)
@@ -71,7 +71,7 @@ async function financialFile(tx: DbOrTx, projectId: string, fileId: string | nul
 }
 
 /** The next change-order or draw number. It never goes backwards, even after a delete (the number may already be on paper). */
-async function nextNumber(tx: DbOrTx, table: typeof schema.changeOrder | typeof schema.draw, kind: "change_order" | "draw", projectId: string): Promise<number> {
+export async function nextNumber(tx: DbOrTx, table: typeof schema.changeOrder | typeof schema.draw, kind: "change_order" | "draw", projectId: string): Promise<number> {
   const [max] = await tx.select({ n: sql<number>`coalesce(max(${table.number}), 0)::int` }).from(table).where(eq(table.projectId, projectId));
   const [r] = await tx
     .insert(schema.projectSequence)

@@ -7,6 +7,7 @@ import { PROJECT_TYPE_SHORT, type ProjectTypeKey } from "@/core/labels";
 import { daysInPhase, projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
 import { formatIsoDate, todayET } from "@/core/time";
+import { slippageLabel } from "@/core/schedule";
 import { IconAlert, IconBlocked, IconCalendar, IconClock, IconFlag, IconShield } from "@/components/ui/icons";
 import type { PortfolioProject } from "./portfolio-view";
 
@@ -67,11 +68,16 @@ export function PortfolioCards({ projects }: { projects: PortfolioProject[] }) {
                   ) : (
                     <p className="mt-0.5 text-muted">Nothing open</p>
                   )}
-                  {(p.facts.blocked > 0 || p.facts.overdue > 0 || p.facts.nextKeyDate || p.facts.expired > 0 || p.facts.ordersInForce > 0 || p.facts.coiFlags.length > 0 || p.facts.openViolations > 0) && (
+                  {(p.facts.blocked > 0 || p.facts.overdue > 0 || p.facts.nextKeyDate || p.facts.expired > 0 || p.facts.ordersInForce > 0 || p.facts.coiFlags.length > 0 || p.facts.openViolations > 0 || (p.facts.slippage !== null && p.facts.slippage !== 0)) && (
                     <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
                       {p.facts.ordersInForce > 0 && (
                         <span className="inline-flex items-center gap-1 font-semibold text-blocked-text">
                           <IconAlert size={14} /> {p.facts.ordersInForce === 1 ? "Stop-work or vacate order" : `${p.facts.ordersInForce} stop-work / vacate orders`}
+                        </span>
+                      )}
+                      {p.facts.slippage !== null && p.facts.slippage !== 0 && (
+                        <span className={`num inline-flex items-center gap-1 font-medium ${p.facts.slippage > 0 ? "text-attention-text" : "text-done"}`}>
+                          <IconCalendar size={14} /> {slippageLabel(p.facts.slippage)}
                         </span>
                       )}
                       {p.facts.expired > 0 && (

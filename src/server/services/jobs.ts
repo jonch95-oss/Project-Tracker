@@ -13,6 +13,7 @@ import { followUpJob, keyDateReminderJob } from "./tasks";
 import { closeStalePending, dispatchPending, releaseHeld } from "./push";
 import { digestJob, dueTomorrowJob, overdueNudgeJob } from "./notifications";
 import { expiryReminderJob } from "./expiries";
+import { siteLogNudgeJob } from "./field";
 import { recordsSyncJob } from "./records";
 
 export type JobResult = Record<string, unknown>;
@@ -166,6 +167,7 @@ const DAILY: { job: string; hourET: number; fn: () => Promise<JobResult> }[] = [
   { job: "due-tomorrow", hourET: 9, fn: () => dueTomorrowJob() },
   { job: "overdue-nudges", hourET: 9, fn: () => overdueNudgeJob() },
   { job: "expiry-reminders", hourET: 8, fn: () => expiryReminderJob() },
+  { job: "site-log-nudge", hourET: 17, fn: () => siteLogNudgeJob() },
 ];
 
 /** Push: send anything the per-request dispatch missed, release quiet-hours holds, close out stale rows. */

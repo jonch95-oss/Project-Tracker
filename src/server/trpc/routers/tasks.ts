@@ -238,6 +238,8 @@ export const tasksRouter = router({
         if (input.status === "blocked" && !input.blockedReason) throw new TRPCError({ code: "BAD_REQUEST", message: "Say what's blocking it." });
         const today = todayET();
         const set: Partial<typeof schema.task.$inferInsert> = { status: input.status };
+        // Module E: the first time work starts is the actual start.
+        if (input.status === "in_progress" && !t.startedOn) set.startedOn = todayET();
         if (input.status === "waiting") {
           set.waitingOn = input.waitingOn!;
           if (from !== "waiting") set.waitingSince = today;

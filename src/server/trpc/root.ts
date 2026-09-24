@@ -8,6 +8,8 @@ import { auditRouter, systemRouter } from "./routers/system";
 import { keyDatesRouter, notificationsRouter, tasksRouter } from "./routers/tasks";
 import { notifySettingsRouter, pushRouter } from "./routers/notify-settings";
 import { expiriesRouter, recordsRouter } from "./routers/records";
+import { drawingsRouter, punchRouter, rfisRouter, submittalsRouter } from "./routers/docs";
+import { meetingsRouter, scheduleRouter, siteLogsRouter } from "./routers/field";
 import { templatesRouter } from "./routers/templates";
 import { invitesRouter, meRouter, usersRouter } from "./routers/users";
 
@@ -30,6 +32,13 @@ export const appRouter = router({
   push: pushRouter,
   records: recordsRouter,
   expiries: expiriesRouter,
+  siteLogs: siteLogsRouter,
+  schedule: scheduleRouter,
+  meetings: meetingsRouter,
+  rfis: rfisRouter,
+  submittals: submittalsRouter,
+  drawings: drawingsRouter,
+  punch: punchRouter,
   audit: auditRouter,
   system: systemRouter,
 });

@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { MAX_COMPRESSED_PHOTO_BYTES, PHOTO_CONTENT_TYPES } from "@/core/images";
-import { schema, type Database } from "../../db";
+import { schema, type Database, type DbOrTx } from "../../db";
 import { storage } from "../../storage";
 import { recordAudit } from "../../services/audit";
 import {
@@ -23,6 +23,8 @@ const photoMeta = z.object({
   height: z.number().int().min(1).max(20_000),
   takenAt: z.coerce.date().nullish(),
   caption: z.string().trim().max(300).nullish(),
+  /** Module D: a photo for a day's site log. */
+  siteLogId: z.uuid().nullish(),
 });
 
 /** The team adds photos; outside collaborators too when the Photos folder is shared with them. */
@@ -84,7 +86,7 @@ export const photosRouter = router({
           { role: "full", pathname: full, maxBytes: input.fullBytes, contentType: input.contentType },
           { role: "thumb", pathname: thumb, maxBytes: input.thumbBytes, contentType: input.contentType },
         ],
-        meta: { width: input.width, height: input.height, takenAt: input.takenAt?.toISOString() ?? null, caption: input.caption ?? null },
+        meta: { width: input.width, height: input.height, takenAt: input.takenAt?.toISOString() ?? null, caption: input.caption ?? null, siteLogId: input.siteLogId ?? null },
       });
       return {
         uploadId: row.id,
@@ -103,7 +105,7 @@ export const photosRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "This upload has expired. Try again." });
       }
       const objs = await verifyUploadedObjects(row);
-      const meta = row.meta as { width: number; height: number; takenAt: string | null; caption: string | null };
+      const meta = row.meta as { width: number; height: number; takenAt: string | null; caption: string | null; siteLogId?: string | null };
       const [photo] = await ctx.db.transaction(async (tx) => {
         if (!(await claimUpload(tx, row.id, ctx.viewer.id))) throw new TRPCError({ code: "NOT_FOUND", message: "This upload has already been saved or has expired." });
         const inserted = await tx
@@ -119,6 +121,7 @@ export const photosRouter = router({
             height: meta.height,
             caption: meta.caption,
             takenAt: meta.takenAt ? new Date(meta.takenAt) : null,
+            siteLogId: meta.siteLogId ? await siteLogOnProject(tx, input.projectId, meta.siteLogId) : null,
             uploadedById: ctx.viewer.id,
           })
           .returning({ id: schema.projectPhoto.id });
@@ -202,3 +205,9 @@ export const photosRouter = router({
       return { ok: true };
     }),
 });
+
+/** A site log photo must point at a log on the same project (anything else is dropped, not trusted). */
+async function siteLogOnProject(tx: DbOrTx, projectId: string, siteLogId: string): Promise<string | null> {
+  const [l] = await tx.select({ id: schema.siteLog.id }).from(schema.siteLog).where(and(eq(schema.siteLog.id, siteLogId), eq(schema.siteLog.projectId, projectId)));
+  return l?.id ?? null;
+}

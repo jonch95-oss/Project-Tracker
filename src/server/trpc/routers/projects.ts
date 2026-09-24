@@ -15,6 +15,7 @@ import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { expiredCoiFlags, expiredCounts } from "../../services/expiries";
 import { resetProjectRecords } from "../../services/records";
+import { lockBaselineOnPreConstruction, slippageFor } from "../../services/field";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
 import { cardHeadlines } from "../../services/financials";
@@ -141,6 +142,8 @@ export interface CardFacts {
   coiFlags: string[];
   ordersInForce: number;
   openViolations: number;
+  /** Module E: days behind (positive) or ahead (negative) of the locked baseline finish. */
+  slippage: number | null;
 }
 
 /**
@@ -185,6 +188,7 @@ async function loadCardFacts(conn: DbOrTx, projectIds: string[], outsider: strin
       coiFlags: [],
       ordersInForce: 0,
       openViolations: 0,
+      slippage: null,
     });
   }
   return out;
@@ -210,9 +214,11 @@ async function addRiskFacts(conn: DbOrTx, ids: string[], fin: Set<string>, facts
     .from(schema.recordItem)
     .where(and(inArray(schema.recordItem.projectId, ids), eq(schema.recordItem.critical, true)))
     .groupBy(schema.recordItem.projectId);
+  const slip = await slippageFor(conn, ids, today);
   for (const id of ids) {
     const f = facts.get(id);
     if (!f) continue;
+    f.slippage = slip.get(id) ?? null;
     f.expired = expired.get(id) ?? 0;
     f.coiFlags = coi.get(id) ?? [];
     f.ordersInForce = orders.find((o) => o.projectId === id)?.n ?? 0;
@@ -588,6 +594,8 @@ export const projectsRouter = router({
         await savePhases(tx, input.projectId, before, after);
         // A phase that just started gives its tasks their due dates.
         await reschedule(tx, input.projectId);
+        // Module E: entering Pre-Construction locks the schedule baseline (once), on the dates just set.
+        await lockBaselineOnPreConstruction(tx, input.projectId, after.find((p) => p.status === "active")?.key ?? null, ctx.viewer.id);
         const from = before.find((p) => p.status === "active");
         const to = after.find((p) => p.key === input.key)!;
         await recordAudit(tx, {
@@ -618,6 +626,8 @@ export const projectsRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
         }
         await savePhases(tx, input.projectId, before, after);
+        // Skipping can make Pre-Construction the current phase: the baseline locks then too.
+        await lockBaselineOnPreConstruction(tx, input.projectId, after.find((p) => p.status === "active")?.key ?? null, ctx.viewer.id);
         const ph = after.find((p) => p.key === input.key)!;
         await recordAudit(tx, {
           actorId: ctx.viewer.id,

@@ -40,6 +40,10 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/files/[id]
   const signed = await storage()
     .signedGetUrl(key, DOWNLOAD_URL_TTL_MS)
     .catch(() => null); // signing trouble: fall back to streaming it ourselves
+  // The drawing viewer (PDF.js) asks for the link itself, same-origin, then reads the PDF straight from storage.
+  if (new URL(req.url).searchParams.get("sign") === "1") {
+    return Response.json({ url: signed ?? `/api/media/files/${id}` }, { headers: { "Cache-Control": "private, no-store" } });
+  }
   if (signed) {
     // The browser may reuse this redirect for 4 minutes (the link lives 5), so a folder of thumbnails isn't re-signed on every view.
     return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, max-age=240", "Referrer-Policy": "no-referrer" } });

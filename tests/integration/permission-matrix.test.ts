@@ -411,6 +411,142 @@ const MATRIX: Record<string, Row | "public"> = {
       return c.expiries.remove({ projectId: f.projectId, id: e!.id });
     },
   },
+  "siteLogs.get": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.siteLogs.get({ projectId: f.projectId, date: "2026-01-02" }) },
+  "siteLogs.list": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.siteLogs.list({ projectId: f.projectId }) },
+  "siteLogs.range": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.siteLogs.range({ projectId: f.projectId, from: "2026-01-01", to: "2026-01-31" }) },
+  "siteLogs.save": {
+    allowed: INTERNAL_ASSIGNED,
+    call: (c, f) => c.siteLogs.save({ projectId: f.projectId, date: `20${10 + Math.floor(Math.random() * 15)}-0${1 + Math.floor(Math.random() * 9)}-${10 + Math.floor(Math.random() * 18)}`, manpower: [], inspections: [], delays: [], weather: { summary: "Clear", highF: null, lowF: null, precipIn: null, windMph: null } }).catch((e: { code?: string }) => { if (e.code !== "CONFLICT") throw e; }),
+  },
+  "schedule.get": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.schedule.get({ projectId: f.projectId }) },
+  "schedule.setDates": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [t] = await db().insert(schema.task).values({ projectId: f.projectId, phaseKey: "pipeline", title: `Sched ${uid()}` }).returning();
+      return c.schedule.setDates({ projectId: f.projectId, taskId: t!.id, version: 1, startOn: "2030-01-01", dueOn: "2030-01-05" });
+    },
+  },
+  "schedule.lock": { allowed: EDITORS, call: (c, f) => c.schedule.lock({ projectId: f.projectId, reason: null }).catch((e: { code?: string }) => { if (e.code !== "BAD_REQUEST") throw e; }) },
+  "schedule.requestRebaseline": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      await db().update(schema.scheduleBaseline).set({ status: "declined" }).where(and(eq(schema.scheduleBaseline.projectId, f.projectId), eq(schema.scheduleBaseline.status, "requested")));
+      return c.schedule.requestRebaseline({ projectId: f.projectId, reason: "Matrix check" }).catch((e: { code?: string }) => { if (e.code !== "BAD_REQUEST") throw e; });
+    },
+  },
+  "schedule.decideRebaseline": {
+    allowed: OWNER_ONLY,
+    call: async (c, f) => {
+      await db().update(schema.scheduleBaseline).set({ status: "declined" }).where(and(eq(schema.scheduleBaseline.projectId, f.projectId), eq(schema.scheduleBaseline.status, "requested")));
+      const [r] = await db().insert(schema.scheduleBaseline).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), status: "requested", reason: "Matrix" }).returning();
+      return c.schedule.decideRebaseline({ projectId: f.projectId, id: r!.id, approve: false });
+    },
+  },
+  "meetings.list": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.meetings.list({ projectId: f.projectId }) },
+  "meetings.get": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => {
+      const [m] = await db().insert(schema.meeting).values({ projectId: f.projectId, type: "other", number: 100_000 + Math.floor(Math.random() * 900_000), heldOn: "2026-01-01" }).returning();
+      return c.meetings.get({ projectId: f.projectId, id: m!.id });
+    },
+  },
+  "meetings.create": { allowed: EDITORS, call: (c, f) => c.meetings.create({ projectId: f.projectId, type: "design", heldOn: "2026-02-02", title: null }) },
+  "meetings.update": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [m] = await db().insert(schema.meeting).values({ projectId: f.projectId, type: "other", number: 100_000 + Math.floor(Math.random() * 900_000), heldOn: "2026-01-01" }).returning();
+      return c.meetings.update({ projectId: f.projectId, id: m!.id, version: 1, title: "x", heldOn: "2026-01-01", attendees: [], agenda: null, notes: null });
+    },
+  },
+  "meetings.saveItem": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [m] = await db().insert(schema.meeting).values({ projectId: f.projectId, type: "other", number: 100_000 + Math.floor(Math.random() * 900_000), heldOn: "2026-01-01" }).returning();
+      return c.meetings.saveItem({ projectId: f.projectId, meetingId: m!.id, kind: "note", text: "Matrix note", assigneeId: null, dueOn: null });
+    },
+  },
+  "meetings.deleteItem": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [m] = await db().insert(schema.meeting).values({ projectId: f.projectId, type: "other", number: 100_000 + Math.floor(Math.random() * 900_000), heldOn: "2026-01-01" }).returning();
+      const [i] = await db().insert(schema.meetingItem).values({ meetingId: m!.id, kind: "note", text: "x" }).returning();
+      return c.meetings.deleteItem({ projectId: f.projectId, id: i!.id });
+    },
+  },
+  "rfis.list": { allowed: ASSIGNED, call: (c, f) => c.rfis.list({ projectId: f.projectId }) },
+  "rfis.save": { allowed: EDITORS, call: (c, f) => c.rfis.save({ projectId: f.projectId, subject: "Matrix", question: "?", fromUserId: null, fromName: null, toUserId: null, toName: null, dueOn: null, costImpactCents: null, scheduleImpactDays: null }) },
+  "rfis.answer": {
+    allowed: ASSIGNED,
+    call: async (c, f, me) => {
+      const [r] = await db().insert(schema.rfi).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), subject: "x", question: "?", toUserId: me }).returning();
+      return c.rfis.answer({ projectId: f.projectId, id: r!.id, version: 1, answer: "Yes" });
+    },
+  },
+  "rfis.setStatus": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [r] = await db().insert(schema.rfi).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), subject: "x", question: "?" }).returning();
+      return c.rfis.setStatus({ projectId: f.projectId, id: r!.id, version: 1, status: "closed" });
+    },
+  },
+  "rfis.attach": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [r] = await db().insert(schema.rfi).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), subject: "x", question: "?" }).returning();
+      return c.rfis.attach({ projectId: f.projectId, id: r!.id, fileId: await freshFile(f.projectId), on: true });
+    },
+  },
+  "rfis.toChangeOrder": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const [r] = await db().insert(schema.rfi).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), subject: "x", question: "?", status: "answered", answer: "y" }).returning();
+      return c.rfis.toChangeOrder({ projectId: f.projectId, id: r!.id });
+    },
+  },
+  "submittals.list": { allowed: ASSIGNED, call: (c, f) => c.submittals.list({ projectId: f.projectId }) },
+  "submittals.create": { allowed: EDITORS, call: (c, f) => c.submittals.create({ projectId: f.projectId, specSection: null, item: "Matrix", submittedBy: null, reviewerId: null, reviewerName: null, dueOn: null, fileId: null }) },
+  "submittals.decide": {
+    allowed: ASSIGNED,
+    call: async (c, f, me) => {
+      const [s] = await db().insert(schema.submittal).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), item: "x", reviewerId: me }).returning();
+      await db().insert(schema.submittalRevision).values({ submittalId: s!.id, revision: 0 });
+      return c.submittals.decide({ projectId: f.projectId, id: s!.id, version: 1, decision: "approved", notes: null });
+    },
+  },
+  "submittals.resubmit": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [s] = await db().insert(schema.submittal).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), item: "x", status: "rejected" }).returning();
+      await db().insert(schema.submittalRevision).values({ submittalId: s!.id, revision: 0, decision: "rejected" });
+      return c.submittals.resubmit({ projectId: f.projectId, id: s!.id, version: 1, fileId: null });
+    },
+  },
+  "drawings.list": { allowed: ASSIGNED, call: (c, f) => c.drawings.list({ projectId: f.projectId }) },
+  "drawings.createSet": { allowed: EDITORS, call: async (c, f) => c.drawings.createSet({ projectId: f.projectId, discipline: "M", name: "Matrix", issuedOn: null, fileIds: [await freshFile(f.projectId)] }) },
+  "drawings.sheet": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => {
+      const [set] = await db().insert(schema.drawingSet).values({ projectId: f.projectId, discipline: "E", name: "Matrix" }).returning();
+      const [sh] = await db().insert(schema.drawingSheet).values({ setId: set!.id, projectId: f.projectId, number: "E-1", fileId: await freshFile(f.projectId) }).returning();
+      return c.drawings.sheet({ projectId: f.projectId, sheetId: sh!.id });
+    },
+  },
+  "punch.list": { allowed: ASSIGNED, call: (c, f) => c.punch.list({ projectId: f.projectId }) },
+  "punch.create": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.punch.create({ projectId: f.projectId, sheetId: null, page: 1, x: null, y: null, title: "Matrix", description: null, trade: null, vendorName: null, assigneeId: null, floor: null, unit: null, dueOn: null, photoId: null }) },
+  "punch.update": {
+    allowed: ASSIGNED,
+    call: async (c, f, me) => {
+      const [p] = await db().insert(schema.punchItem).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), title: "x", assigneeId: me }).returning();
+      return c.punch.update({ projectId: f.projectId, id: p!.id, version: 1, status: "ready" });
+    },
+  },
+  "punch.remove": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [p] = await db().insert(schema.punchItem).values({ projectId: f.projectId, number: 100_000 + Math.floor(Math.random() * 900_000), title: "x" }).returning();
+      return c.punch.remove({ projectId: f.projectId, id: p!.id });
+    },
+  },
   "notifySettings.get": { allowed: ACTIVE, call: (c) => c.notifySettings.get() },
   "notifySettings.save": { allowed: ACTIVE, call: (c) => c.notifySettings.save({ prefs: {}, quietStart: null, quietEnd: null, digest: true }) },
   "push.config": { allowed: ACTIVE, call: (c) => c.push.config() },

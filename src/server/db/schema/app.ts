@@ -310,6 +310,8 @@ export const projectPhoto = pgTable(
     height: integer("height").notNull(),
     caption: text("caption"),
     takenAt: timestamp("taken_at", { withTimezone: true }),
+    /** Module D: a photo taken for a day's site log. */
+    siteLogId: uuid("site_log_id"),
     uploadedById: text("uploaded_by_id").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
@@ -403,8 +405,11 @@ export const task = pgTable(
     blockedReason: text("blocked_reason"),
     waitingOn: text("waiting_on"),
     priority: text("priority", { enum: ["low", "normal", "high"] }).notNull().default("normal"),
-    /** New York calendar date. */
+    /** New York calendar date: the planned finish. */
     dueOn: text("due_on"),
+    /** Module E: planned start (null = the finish is the plan), and when work actually started. */
+    startOn: text("start_on"),
+    startedOn: text("started_on"),
     dueRule: jsonb("due_rule"),
     /** A person set the date: never recomputed from the rule. */
     dueManual: boolean("due_manual").notNull().default(false),
@@ -1064,4 +1069,277 @@ export const expiryReminder = pgTable(
     sentAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.itemId, t.expiresOn, t.mark] })],
+);
+
+
+/* ------------------------------------------------------------------ */
+/* Milestone 9: field and construction                                 */
+/* ------------------------------------------------------------------ */
+
+export interface SiteWeather {
+  summary: string;
+  highF: number | null;
+  lowF: number | null;
+  precipIn: number | null;
+  windMph: number | null;
+  source: "open-meteo" | "manual";
+}
+
+/** Module D: one log per project per day, built for the phone. */
+export const siteLog = pgTable(
+  "site_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    /** New York date. */
+    date: text("date").notNull(),
+    weather: jsonb("weather").$type<SiteWeather | null>(),
+    manpower: jsonb("manpower").$type<{ trade: string; company: string | null; count: number }[]>().notNull().default([]),
+    workPerformed: text("work_performed"),
+    deliveries: text("deliveries"),
+    inspections: jsonb("inspections").$type<{ what: string; result: "pass" | "fail" | "partial" | "pending"; notes: string | null }[]>().notNull().default([]),
+    visitors: text("visitors"),
+    safety: text("safety"),
+    delays: jsonb("delays").$type<{ cause: string; hours: number | null; notes: string | null }[]>().notNull().default([]),
+    notes: text("notes"),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    updatedById: text("updated_by_id").references(() => user.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("site_log_day_idx").on(t.projectId, t.date)],
+);
+
+/** Module E: a locked schedule baseline (planned dates per task), with history. */
+export const scheduleBaseline = pgTable(
+  "schedule_baseline",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    /** The planned finish of the whole project at lock time. */
+    finishOn: text("finish_on"),
+    items: jsonb("items").$type<{ taskId: string; start: string | null; finish: string | null }[]>().notNull().default([]),
+    reason: text("reason"),
+    status: text("status", { enum: ["requested", "current", "superseded", "declined"] }).notNull().default("current"),
+    requestedById: text("requested_by_id").references(() => user.id, { onDelete: "set null" }),
+    approvedById: text("approved_by_id").references(() => user.id, { onDelete: "set null" }),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("schedule_baseline_number_idx").on(t.projectId, t.number)],
+);
+
+/** Module F: requests for information. */
+export const rfi = pgTable(
+  "rfi",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    subject: text("subject").notNull(),
+    question: text("question").notNull(),
+    fromName: text("from_name"),
+    fromUserId: text("from_user_id").references(() => user.id, { onDelete: "set null" }),
+    toName: text("to_name"),
+    toUserId: text("to_user_id").references(() => user.id, { onDelete: "set null" }),
+    dueOn: text("due_on"),
+    answer: text("answer"),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+    answeredById: text("answered_by_id").references(() => user.id, { onDelete: "set null" }),
+    costImpactCents: bigint("cost_impact_cents", { mode: "number" }),
+    scheduleImpactDays: integer("schedule_impact_days"),
+    status: text("status", { enum: ["draft", "open", "answered", "closed"] }).notNull().default("open"),
+    changeOrderId: uuid("change_order_id").references(() => changeOrder.id, { onDelete: "set null" }),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("rfi_number_idx").on(t.projectId, t.number), index("rfi_status_idx").on(t.projectId, t.status)],
+);
+
+/** Module F: submittals and their revisions. */
+export const submittal = pgTable(
+  "submittal",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    specSection: text("spec_section"),
+    item: text("item").notNull(),
+    submittedBy: text("submitted_by"),
+    reviewerName: text("reviewer_name"),
+    reviewerId: text("reviewer_id").references(() => user.id, { onDelete: "set null" }),
+    dueOn: text("due_on"),
+    status: text("status", { enum: ["pending", "approved", "approved_as_noted", "revise_resubmit", "rejected"] }).notNull().default("pending"),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("submittal_number_idx").on(t.projectId, t.number)],
+);
+
+export const submittalRevision = pgTable(
+  "submittal_revision",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    submittalId: uuid("submittal_id")
+      .notNull()
+      .references(() => submittal.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull(),
+    fileId: uuid("file_id").references(() => file.id, { onDelete: "set null" }),
+    submittedOn: text("submitted_on"),
+    decision: text("decision", { enum: ["approved", "approved_as_noted", "revise_resubmit", "rejected"] }),
+    decidedOn: text("decided_on"),
+    decidedById: text("decided_by_id").references(() => user.id, { onDelete: "set null" }),
+    notes: text("notes"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("submittal_revision_idx").on(t.submittalId, t.revision)],
+);
+
+/** Attachments on RFIs (files in the project's folders). */
+export const rfiAttachment = pgTable(
+  "rfi_attachment",
+  {
+    rfiId: uuid("rfi_id")
+      .notNull()
+      .references(() => rfi.id, { onDelete: "cascade" }),
+    fileId: uuid("file_id")
+      .notNull()
+      .references(() => file.id, { onDelete: "cascade" }),
+    addedAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.rfiId, t.fileId] })],
+);
+
+/** Module F: drawing sets by discipline; one current set per discipline. */
+export const drawingSet = pgTable(
+  "drawing_set",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    discipline: text("discipline", { enum: ["A", "S", "M", "E", "P", "FP"] }).notNull(),
+    name: text("name").notNull(),
+    issuedOn: text("issued_on"),
+    current: boolean("current").notNull().default(true),
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("drawing_set_idx").on(t.projectId, t.discipline, t.current)],
+);
+
+export const drawingSheet = pgTable(
+  "drawing_sheet",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    setId: uuid("set_id")
+      .notNull()
+      .references(() => drawingSet.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    /** e.g. "A-101". */
+    number: text("number").notNull(),
+    title: text("title"),
+    /** The PDF (a file in the project's Drawings folder). */
+    fileId: uuid("file_id")
+      .notNull()
+      .references(() => file.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("drawing_sheet_set_idx").on(t.setId, t.sortOrder)],
+);
+
+/** Module K: a punch item pinned on a drawing sheet. */
+export const punchItem = pgTable(
+  "punch_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    sheetId: uuid("sheet_id").references(() => drawingSheet.id, { onDelete: "set null" }),
+    page: integer("page").notNull().default(1),
+    /** Pin position as a fraction of the page (0–1), so it holds at any zoom. */
+    x: doublePrecision("x"),
+    y: doublePrecision("y"),
+    title: text("title").notNull(),
+    description: text("description"),
+    trade: text("trade"),
+    vendorName: text("vendor_name"),
+    assigneeId: text("assignee_id").references(() => user.id, { onDelete: "set null" }),
+    floor: text("floor"),
+    unit: text("unit"),
+    dueOn: text("due_on"),
+    status: text("status", { enum: ["open", "ready", "closed"] }).notNull().default("open"),
+    photoId: uuid("photo_id").references(() => projectPhoto.id, { onDelete: "set null" }),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("punch_number_idx").on(t.projectId, t.number), index("punch_filter_idx").on(t.projectId, t.status)],
+);
+
+/** Module G: meetings and their items (notes and action items that become tasks). */
+export const meeting = pgTable(
+  "meeting",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    type: text("type", { enum: ["oac", "design", "lender", "partner", "other"] }).notNull(),
+    number: integer("number").notNull(),
+    title: text("title"),
+    heldOn: text("held_on").notNull(),
+    attendees: jsonb("attendees").$type<{ name: string; company: string | null; userId: string | null }[]>().notNull().default([]),
+    agenda: text("agenda"),
+    notes: text("notes"),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("meeting_number_idx").on(t.projectId, t.type, t.number)],
+);
+
+export const meetingItem = pgTable(
+  "meeting_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    meetingId: uuid("meeting_id")
+      .notNull()
+      .references(() => meeting.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["note", "action"] }).notNull().default("action"),
+    text: text("text").notNull(),
+    assigneeId: text("assignee_id").references(() => user.id, { onDelete: "set null" }),
+    dueOn: text("due_on"),
+    /** Action items become tasks. */
+    taskId: uuid("task_id").references(() => task.id, { onDelete: "set null" }),
+    /** Carried forward from an earlier meeting of the same type. */
+    carriedFromId: uuid("carried_from_id"),
+    status: text("status", { enum: ["open", "closed"] }).notNull().default("open"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("meeting_item_meeting_idx").on(t.meetingId, t.sortOrder)],
 );

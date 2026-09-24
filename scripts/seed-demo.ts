@@ -195,6 +195,44 @@ async function main() {
         }),
       );
       await db.insert(schema.saleUnit).values(units.map((u, i) => ({ projectId: row!.id, ...u, sortOrder: i })));
+      // Field: a week of site logs, a locked baseline running a few days behind, an RFI, a submittal, an OAC meeting and punch items.
+      const pid = row!.id;
+      for (let back = 5; back >= 1; back--) {
+        const date = addDays(today, -back);
+        await db.insert(schema.siteLog).values({
+          projectId: pid,
+          date,
+          weather: { summary: back === 2 ? "Rain" : "Partly cloudy", highF: 68 - back, lowF: 55 - back, precipIn: back === 2 ? 0.6 : 0, windMph: 9, source: "open-meteo" },
+          manpower: [
+            { trade: "Concrete", company: "Stone & Sons", count: 6 },
+            { trade: "Carpentry", company: "Brick & Beam Builders", count: 4 },
+            { trade: "Electrical", company: "Volt Electric", count: back % 2 ? 2 : 3 },
+          ],
+          workPerformed: back === 2 ? "Rain day: covered slab, cleaned up rebar." : `Formed and poured level ${8 - back} deck.`,
+          inspections: back === 3 ? [{ what: "DOB concrete pour", result: "pass", notes: null }] : [],
+          delays: back === 2 ? [{ cause: "Rain", hours: 4, notes: null }] : [],
+          deliveries: back === 4 ? "Rebar, 22 tons" : null,
+          createdById: ids["elias@demo.test"]!,
+          updatedById: ids["elias@demo.test"]!,
+        });
+      }
+      const constr = await db.select().from(schema.task).where(and(eq(schema.task.projectId, pid), eq(schema.task.phaseKey, "construction")));
+      for (const [i, t] of constr.slice(0, 8).entries()) {
+        await db.update(schema.task).set({ startOn: addDays(today, -20 + i * 12), dueOn: addDays(today, -10 + i * 12) }).where(eq(schema.task.id, t.id));
+      }
+      await db.insert(schema.scheduleBaseline).values({ projectId: pid, number: 1, finishOn: addDays(today, 70), items: [], reason: "Locked at the start of Pre-Construction", status: "current", lockedAt: new Date(Date.now() - 90 * 86_400_000) });
+      await db.insert(schema.rfi).values([
+        { projectId: pid, number: 1, subject: "Beam depth at grid C/4", question: "Can the W12 at grid C/4 go to W14 to clear the duct run?", fromName: "Brick & Beam Builders", toUserId: ids["architect@demo.test"]!, dueOn: addDays(today, 2), costImpactCents: 1_850_000, scheduleImpactDays: 2, status: "open", createdById: ids["jon@demo.test"]! },
+        { projectId: pid, number: 2, subject: "Window sill height, units A", question: "Confirm 18\" sill height at A-line bedrooms.", fromName: "Brick & Beam Builders", toUserId: ids["architect@demo.test"]!, answer: "Confirmed: 18\" AFF, per A-401.", answeredAt: new Date(), status: "answered", createdById: ids["jon@demo.test"]! },
+      ]);
+      const [sub] = await db.insert(schema.submittal).values({ projectId: pid, number: 1, specSection: "08 41 13", item: "Storefront shop drawings", submittedBy: "ClearView Glass", reviewerId: ids["architect@demo.test"]!, dueOn: addDays(today, 6), createdById: ids["jon@demo.test"]! }).returning();
+      await db.insert(schema.submittalRevision).values({ submittalId: sub!.id, revision: 0, submittedOn: addDays(today, -3) });
+      const [mtg] = await db.insert(schema.meeting).values({ projectId: pid, type: "oac", number: 1, title: "Weekly OAC", heldOn: addDays(today, -2), attendees: [{ name: "Jon Lian", company: "Lian Development", userId: ids["jon@demo.test"]! }, { name: "Elias", company: null, userId: ids["elias@demo.test"]! }], agenda: "Schedule, RFIs, submittals, safety", notes: "Deck pours on track; storefront submittal is the long-lead item." }).returning();
+      await db.insert(schema.meetingItem).values({ meetingId: mtg!.id, kind: "action", text: "Chase the storefront submittal review", assigneeId: ids["elias@demo.test"]!, dueOn: addDays(today, 3), sortOrder: 0 });
+      await db.insert(schema.punchItem).values([
+        { projectId: pid, number: 1, title: "Patch slab edge at stair 2", trade: "Concrete", vendorName: "Stone & Sons", floor: "3", unit: null, dueOn: addDays(today, 5), status: "open" },
+        { projectId: pid, number: 2, title: "Reset outlet box height", trade: "Electrical", vendorName: "Volt Electric", floor: "4", unit: "4B", dueOn: addDays(today, 8), status: "ready" },
+      ]);
     }
   }
   await pool.end();
