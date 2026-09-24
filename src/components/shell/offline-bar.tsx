@@ -18,6 +18,7 @@ import {
   removeOp,
   resolveConflict,
   setQueueViewer,
+  queueSnapshot,
   subscribeQueue,
   type QueueClient,
 } from "@/lib/offline-queue";
@@ -49,24 +50,17 @@ export function OfflineBar({ viewerId }: { viewerId: string }) {
     () => navigator.onLine,
     () => true,
   );
-  const [version, setVersion] = useState(0);
   const [open, setOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read when the queue changes
-  const queue = useMemo(
-    () =>
-      typeof window === "undefined"
-        ? []
-        : readQueue().filter((o) => o.userId === viewerId),
-    [version, viewerId],
-  );
+  // The queue as stored (a string, so React can compare snapshots); read after hydration.
+  const raw = useSyncExternalStore(subscribeQueue, queueSnapshot, () => "");
+  const queue = useMemo(() => (raw ? readQueue().filter((o) => o.userId === viewerId) : []), [raw, viewerId]);
   const pending = queue.filter((o) => o.state === "pending").length;
   const attention = queue.filter((o) => o.state !== "pending");
 
   useEffect(() => {
     setQueueViewer(viewerId);
     void registerServiceWorker();
-    return subscribeQueue(() => setVersion((v) => v + 1));
   }, [viewerId]);
 
   const api: QueueClient = useMemo(

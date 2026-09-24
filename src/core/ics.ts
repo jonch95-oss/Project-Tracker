@@ -27,7 +27,6 @@ export function icsText(s: string): string {
       .replace(/,/g, "\\,")
       .replace(/\r\n|\r|\n/g, "\\n")
       // No other control characters: a stray one could break a line in some parsers.
-      // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
   );
 }

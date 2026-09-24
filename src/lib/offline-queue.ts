@@ -62,6 +62,15 @@ export function setTaskTitleLookup(fn: (taskId: string) => string | null) {
   titleOf = fn;
 }
 
+/** The stored queue as text (cheap to compare), "" when empty. */
+export function queueSnapshot(): string {
+  try {
+    return localStorage.getItem(KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function readQueue(): QueuedOp[] {
   try {
     const raw = localStorage.getItem(KEY);
