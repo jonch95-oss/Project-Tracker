@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { allocate } from "@/core/money";
+import { canProject } from "@/core/permissions";
 import { todayET } from "@/core/time";
 import { capitalAccount, computeDistribution, DEFAULT_TIERS, describeTiers, tierProblems, type InvestorPosition, type Tier } from "@/core/waterfall";
 import { schema, type DbOrTx } from "../../db";
@@ -57,6 +58,35 @@ export async function loadCapital(conn: DbOrTx, projectId: string) {
   }));
   const called = (investorId: string) => callItems.filter((i) => i.investorId === investorId).reduce((a, i) => a + i.amountCents, 0);
   return { commitments, calls, callItems, dists, distItems, positions, called };
+}
+
+/**
+ * An investor record is shared by every project they're in: changing it
+ * (name, email, portal login) needs the owner or financial edit rights on
+ * all of those projects, so nobody rewires an account on a project they
+ * can't see.
+ */
+async function assertCanEditInvestor(tx: DbOrTx, c: Ctx, investorId: string) {
+  if (c.actor.role === "owner") return;
+  const on = await tx
+    .select({ projectId: schema.capitalCommitment.projectId, m: schema.projectMember })
+    .from(schema.capitalCommitment)
+    .leftJoin(schema.projectMember, and(eq(schema.projectMember.projectId, schema.capitalCommitment.projectId), eq(schema.projectMember.userId, c.viewer.id)))
+    .where(eq(schema.capitalCommitment.investorId, investorId));
+  if (on.some((r) => !canProject(c.actor, r.m, "financials.edit"))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "This investor is on projects you can't edit. Ask the owner to change their details." });
+  }
+}
+
+async function upsertCommitment(tx: DbOrTx, projectId: string, investorId: string, committedCents: number, version?: number) {
+  const [existing] = await tx.select().from(schema.capitalCommitment).where(and(eq(schema.capitalCommitment.projectId, projectId), eq(schema.capitalCommitment.investorId, investorId)));
+  if (existing) {
+    if (version !== undefined && existing.version !== version) throw conflict();
+    await tx.update(schema.capitalCommitment).set({ committedCents, version: existing.version + 1 }).where(eq(schema.capitalCommitment.id, existing.id));
+  } else {
+    await tx.insert(schema.capitalCommitment).values({ projectId, investorId, committedCents });
+  }
+  return !!existing;
 }
 
 /** Portal logins linked to these investors that are on the project with the capital flag (they hear about calls and distributions). */
@@ -149,6 +179,7 @@ export const capitalRouter = router({
         const values = { name: input.name, kind: input.kind, contactName: input.contactName || null, email: input.email ? input.email.toLowerCase() : null, userId: input.userId ?? null, notes: input.notes || null };
         let investorId = input.investorId;
         if (investorId) {
+          await assertCanEditInvestor(tx, c, investorId);
           const [row] = await tx
             .update(schema.investor)
             .set({ ...values, version: sql`${schema.investor.version} + 1`, updatedAt: new Date() })
@@ -159,15 +190,23 @@ export const capitalRouter = router({
           const [row] = await tx.insert(schema.investor).values(values).returning({ id: schema.investor.id });
           investorId = row!.id;
         }
-        const [existing] = await tx.select().from(schema.capitalCommitment).where(and(eq(schema.capitalCommitment.projectId, input.projectId), eq(schema.capitalCommitment.investorId, investorId)));
-        if (existing) {
-          if (input.commitmentVersion !== undefined && existing.version !== input.commitmentVersion) throw conflict();
-          await tx.update(schema.capitalCommitment).set({ committedCents: input.committedCents, version: existing.version + 1 }).where(eq(schema.capitalCommitment.id, existing.id));
-        } else {
-          await tx.insert(schema.capitalCommitment).values({ projectId: input.projectId, investorId, committedCents: input.committedCents });
-        }
-        await audit(tx, c, existing ? "update" : "create", "capital_commitment", investorId, `${c.viewer.name} set ${input.name}'s commitment to ${fmt(input.committedCents)}`);
+        const existed = await upsertCommitment(tx, input.projectId, investorId, input.committedCents, input.commitmentVersion);
+        await audit(tx, c, existed ? "update" : "create", "capital_commitment", investorId, `${c.viewer.name} set ${input.name}'s commitment to ${fmt(input.committedCents)}`);
         return { investorId };
+      });
+    }),
+
+  /** Bring an investor already in another project in, or change a commitment, without touching their shared record. */
+  setCommitment: projectProcedure("financials.edit")
+    .input(z.object({ investorId: z.uuid(), committedCents: cents, commitmentVersion: z.number().int().min(1).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const c = ctx as Ctx;
+      return ctx.db.transaction(async (tx) => {
+        const [inv] = await tx.select({ id: schema.investor.id, name: schema.investor.name }).from(schema.investor).where(eq(schema.investor.id, input.investorId));
+        if (!inv) throw new TRPCError({ code: "NOT_FOUND", message: "Investor not found" });
+        const existed = await upsertCommitment(tx, input.projectId, inv.id, input.committedCents, input.commitmentVersion);
+        await audit(tx, c, existed ? "update" : "create", "capital_commitment", inv.id, `${c.viewer.name} set ${inv.name}'s commitment to ${fmt(input.committedCents)}`);
+        return { investorId: inv.id };
       });
     }),
 
@@ -228,6 +267,7 @@ export const capitalRouter = router({
       if (input.receivedCents > 0 && !input.receivedOn) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter the day it was received." });
       if (input.receivedOn && input.receivedOn > todayET()) throw new TRPCError({ code: "BAD_REQUEST", message: "A receipt can't be in the future." });
       return ctx.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`capital:${input.projectId}`}))`);
         const [row] = await tx
           .select({ item: schema.capitalCallItem, number: schema.capitalCall.number })
           .from(schema.capitalCallItem)
@@ -235,6 +275,17 @@ export const capitalRouter = router({
           .where(and(eq(schema.capitalCallItem.id, input.itemId), eq(schema.capitalCall.projectId, input.projectId)));
         if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
         if (row.item.version !== input.version) throw conflict();
+        // Distributions were split knowing what had come in by then: a receipt they relied on can't change under them.
+        const touched = [row.item.receivedCents > 0 ? row.item.receivedOn : null, input.receivedCents > 0 ? input.receivedOn : null].filter((x): x is string => !!x).sort()[0];
+        if (touched) {
+          const [later] = await tx
+            .select({ number: schema.distribution.number, paidOn: schema.distribution.paidOn })
+            .from(schema.distribution)
+            .where(and(eq(schema.distribution.projectId, input.projectId), sql`${schema.distribution.paidOn} >= ${touched}`))
+            .orderBy(asc(schema.distribution.paidOn))
+            .limit(1);
+          if (later) throw new TRPCError({ code: "BAD_REQUEST", message: `Distribution #${later.number} (${later.paidOn}) was split using this money. Remove the later distributions first.` });
+        }
         await tx.update(schema.capitalCallItem).set({ receivedCents: input.receivedCents, receivedOn: input.receivedCents > 0 ? input.receivedOn : null, version: row.item.version + 1 }).where(eq(schema.capitalCallItem.id, row.item.id));
         await audit(tx, c, "update", "capital_call", row.item.callId, `${c.viewer.name} recorded ${fmt(input.receivedCents)} received on capital call #${row.number}`);
         return { ok: true };
@@ -272,6 +323,7 @@ export const capitalRouter = router({
     .input(z.object({ amountCents: cents.min(1), paidOn: planDate, note: text(1000).nullish() }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
+      if (input.paidOn > todayET()) throw new TRPCError({ code: "BAD_REQUEST", message: "Record a distribution once it's paid (today or earlier)." });
       return ctx.db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`capital:${input.projectId}`}))`);
         const cap = await loadCapital(tx, input.projectId);

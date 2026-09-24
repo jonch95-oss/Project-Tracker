@@ -292,6 +292,16 @@ function InvestorDialog({ projectId, data, account, onClose }: { projectId: stri
       onError: (e) => setError(errorMessage(e)),
     }),
   );
+  const attach = useMutation(
+    trpc.capital.setCommitment.mutationOptions({
+      onSuccess: async () => {
+        toast("success", "Investor added");
+        await refresh();
+        onClose();
+      },
+      onError: (e) => setError(errorMessage(e)),
+    }),
+  );
   const remove = useMutation(
     trpc.capital.removeInvestor.mutationOptions({
       onSuccess: async () => {
@@ -310,13 +320,15 @@ function InvestorDialog({ projectId, data, account, onClose }: { projectId: stri
     const s = (k: string) => String(f.get(k) ?? "").trim();
     try {
       const committedCents = optionalMoney(s("committed"), "committed", "Commitment") ?? 0;
+      // Someone already in another project: just their commitment here; their shared record stays as it is.
+      if (picked) return attach.mutate({ projectId, investorId: picked.id, committedCents });
       save.mutate({
         projectId,
-        investorId: inv?.id ?? (existing || undefined),
+        investorId: inv?.id,
         version: inv?.version,
         commitmentVersion: account?.commitmentVersion,
-        name: picked?.name ?? s("name"),
-        kind: (picked?.kind ?? s("kind")) as "equity",
+        name: s("name"),
+        kind: s("kind") as "equity",
         contactName: s("contactName") || null,
         email: s("email") || null,
         userId: s("userId") || null,
@@ -342,7 +354,7 @@ function InvestorDialog({ projectId, data, account, onClose }: { projectId: stri
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" form="inv-form" loading={save.isPending}>
+          <Button type="submit" form="inv-form" loading={save.isPending || attach.isPending}>
             Save
           </Button>
         </>

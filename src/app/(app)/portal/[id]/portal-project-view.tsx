@@ -5,7 +5,12 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ErrorState } from "@/components/ui/architecture";
 import { IconArrowLeft } from "@/components/ui/icons";
-import { Panel, Select, Skeleton, StatusPill } from "@/components/ui/primitives";
+import {
+  Panel,
+  Select,
+  Skeleton,
+  StatusPill,
+} from "@/components/ui/primitives";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
 import { formatMoney } from "@/core/money";
 import { formatIsoDate, todayET } from "@/core/time";
@@ -15,8 +20,12 @@ import { photoUrl } from "@/lib/photo-upload";
 import { useTRPC } from "@/lib/trpc";
 import { FilesTab } from "../../projects/[id]/files-tab";
 
-const $ = (c: number | null | undefined) => (c == null ? "—" : formatMoney(c, { whole: true }));
-const d = (iso: string | null | undefined) => (iso ? formatIsoDate(iso, { month: "short", day: "numeric", year: "numeric" }) : "—");
+const $ = (c: number | null | undefined) =>
+  c == null ? "—" : formatMoney(c, { whole: true });
+const d = (iso: string | null | undefined) =>
+  iso
+    ? formatIsoDate(iso, { month: "short", day: "numeric", year: "numeric" })
+    : "—";
 
 /** Module J: one project as an investor or lender sees it. */
 export function PortalProjectView({ projectId }: { projectId: string }) {
@@ -32,18 +41,33 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
   }, [photo]);
   if (q.isPending) return <Skeleton className="h-[70vh] rounded-card" />;
   if (q.isError) return <ErrorState onRetry={() => q.refetch()} />;
-  const { project: p, phase, progress, schedule, photos, accounts, canSeeAccount } = q.data;
+  const {
+    project: p,
+    phase,
+    progress,
+    schedule,
+    photos,
+    accounts,
+    canSeeAccount,
+  } = q.data;
   const quarters = [-1, 0, -2, -3, -4].map((o) => quarterOf(todayET(), o));
 
   return (
     <>
-      <Link href="/portal" className="mb-6 inline-flex items-center gap-2 text-[13px] text-muted hover:text-text">
+      <Link
+        href="/portal"
+        className="mb-6 inline-flex items-center gap-2 text-[13px] text-muted hover:text-text"
+      >
         <IconArrowLeft size={16} /> Investments
       </Link>
       <header className="mb-10 overflow-hidden rounded-card border border-border bg-surface">
         {p.heroPhotoId && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={photoUrl(p.heroPhotoId, "full")} alt="" className="aspect-[21/9] w-full object-cover" />
+          <img
+            src={photoUrl(p.heroPhotoId, "full")}
+            alt=""
+            className="aspect-[21/9] w-full object-cover"
+          />
         )}
         <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -56,7 +80,11 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
           <div className="flex items-end gap-2">
             <label className="flex flex-col gap-1">
               <span className="text-[12px] text-muted">Quarterly report</span>
-              <Select value={quarter} onChange={(e) => setQuarter(e.target.value)} className="h-9 text-[13px]">
+              <Select
+                value={quarter}
+                onChange={(e) => setQuarter(e.target.value)}
+                className="h-9 text-[13px]"
+              >
                 {quarters.map((x) => (
                   <option key={x} value={x}>
                     {quarterBounds(x)!.label}
@@ -64,7 +92,10 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
                 ))}
               </Select>
             </label>
-            <a href={`/api/export/projects/${projectId}/investor-report?quarter=${quarter}`} className="inline-flex h-9 items-center rounded-control border border-control px-3 text-[13px] font-medium hover:bg-sunken">
+            <a
+              href={`/api/export/projects/${projectId}/investor-report?quarter=${quarter}`}
+              className="inline-flex h-9 items-center rounded-control border border-control px-3 text-[13px] font-medium hover:bg-sunken"
+            >
               Download PDF
             </a>
           </div>
@@ -73,10 +104,23 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
 
       <div className="grid gap-8 lg:grid-cols-[2fr_1fr]">
         <div className="flex flex-col gap-8">
-          <Panel title="Progress" description={`${progress}% of the checklist is done.`}>
+          <Panel
+            title="Progress"
+            description={`${progress}% of the checklist is done.`}
+          >
             <ol className="flex flex-wrap gap-2">
               {phase.phases.map((x) => (
-                <li key={x.name} className={cn("rounded-full border px-3 py-1 text-[13px]", x.status === "active" ? "border-accent bg-accent-tint text-accent-text" : x.status === "done" ? "border-border text-muted" : "border-border text-faint")}>
+                <li
+                  key={x.name}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-[13px]",
+                    x.status === "active"
+                      ? "border-accent bg-accent-tint text-accent-text"
+                      : x.status === "done"
+                        ? "border-border text-muted"
+                        : "border-border text-faint",
+                  )}
+                >
                   {x.status === "done" ? "✓ " : ""}
                   {x.name}
                 </li>
@@ -84,25 +128,47 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
             </ol>
           </Panel>
 
-          <Panel title="Photos">
-            {photos.length === 0 ? (
-              <p className="text-[13px] text-muted">No photos shared yet.</p>
-            ) : (
-              <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                {photos.map((ph) => (
-                  <li key={ph.id}>
-                    <button type="button" onClick={() => setPhoto(ph.id)} className="block aspect-square w-full overflow-hidden rounded-control bg-sunken" aria-label={ph.caption ?? `Photo from ${d((ph.takenAt ?? ph.createdAt).toString().slice(0, 10))}`}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={photoUrl(ph.id)} alt="" className="size-full object-cover" loading="lazy" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Panel>
+          <div id="photos" className="scroll-mt-6">
+            <Panel title="Photos">
+              {photos.length === 0 ? (
+                <p className="text-[13px] text-muted">No photos shared yet.</p>
+              ) : (
+                <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  {photos.map((ph) => (
+                    <li key={ph.id}>
+                      <button
+                        type="button"
+                        onClick={() => setPhoto(ph.id)}
+                        className="block aspect-square w-full overflow-hidden rounded-control bg-sunken"
+                        aria-label={
+                          ph.caption ??
+                          `Photo from ${d((ph.takenAt ?? ph.createdAt).toString().slice(0, 10))}`
+                        }
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={photoUrl(ph.id)}
+                          alt=""
+                          className="size-full object-cover"
+                          loading="lazy"
+                        />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          </div>
 
           {/* The folders shared with them, read-only (the Files tab brings its own heading). */}
-          <FilesTab projectId={projectId} onOpenPhotos={() => undefined} />
+          <FilesTab
+            projectId={projectId}
+            onOpenPhotos={() =>
+              document
+                .getElementById("photos")
+                ?.scrollIntoView({ behavior: "smooth" })
+            }
+          />
         </div>
 
         <aside className="flex flex-col gap-8">
@@ -120,7 +186,15 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted">Against baseline</dt>
                   <dd>
-                    <StatusPill tone={schedule.slippage.includes("behind") ? "attention" : "done"}>{schedule.slippage}</StatusPill>
+                    <StatusPill
+                      tone={
+                        schedule.slippage.includes("behind")
+                          ? "attention"
+                          : "done"
+                      }
+                    >
+                      {schedule.slippage}
+                    </StatusPill>
                   </dd>
                 </div>
               )}
@@ -130,11 +204,18 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
           {canSeeAccount &&
             (accounts.length === 0 ? (
               <Panel title="Your capital account">
-                <p className="text-[13px] text-muted">The sponsor hasn&apos;t linked your account on this project yet.</p>
+                <p className="text-[13px] text-muted">
+                  The sponsor hasn&apos;t linked your account on this project
+                  yet.
+                </p>
               </Panel>
             ) : (
               accounts.map((a) => (
-                <Panel key={a.investorName} title="Your capital account" description={a.investorName}>
+                <Panel
+                  key={a.investorName}
+                  title="Your capital account"
+                  description={a.investorName}
+                >
                   <dl className="num flex flex-col gap-2 text-[14px]">
                     {(
                       [
@@ -143,7 +224,14 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
                         ["Unfunded", a.account.unfunded],
                         ["Distributed", a.account.distributed],
                         ["Still invested", a.account.unreturned],
-                        ...(a.account.prefOwed !== null ? [["Pref accrued, unpaid", a.account.prefOwed] as [string, number]] : []),
+                        ...(a.account.prefOwed !== null
+                          ? [
+                              ["Pref accrued, unpaid", a.account.prefOwed] as [
+                                string,
+                                number,
+                              ],
+                            ]
+                          : []),
                       ] as [string, number][]
                     ).map(([k, v]) => (
                       <div key={k} className="flex justify-between gap-3">
@@ -157,11 +245,22 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
                       <h3 className="eyebrow mb-2 mt-6">Capital calls</h3>
                       <ul className="num flex flex-col gap-1 text-[13px]">
                         {a.calls.map((x) => (
-                          <li key={x.number} className="flex justify-between gap-2">
+                          <li
+                            key={x.number}
+                            className="flex justify-between gap-2"
+                          >
                             <span>
                               #{x.number} · due {d(x.dueOn)}
                             </span>
-                            <span className={x.receivedCents >= x.amountCents ? "text-done-text" : x.dueOn < todayET() ? "text-blocked-text" : "text-muted"}>
+                            <span
+                              className={
+                                x.receivedCents >= x.amountCents
+                                  ? "text-done-text"
+                                  : x.dueOn < todayET()
+                                    ? "text-blocked-text"
+                                    : "text-muted"
+                              }
+                            >
                               {$(x.receivedCents)} / {$(x.amountCents)}
                             </span>
                           </li>
@@ -174,11 +273,16 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
                       <h3 className="eyebrow mb-2 mt-6">Distributions</h3>
                       <ul className="num flex flex-col gap-1 text-[13px]">
                         {a.distributions.map((x) => (
-                          <li key={x.number} className="flex justify-between gap-2">
+                          <li
+                            key={x.number}
+                            className="flex justify-between gap-2"
+                          >
                             <span>
                               #{x.number} · {d(x.paidOn)}
                             </span>
-                            <span>{$(x.rocCents + x.prefCents + x.profitCents)}</span>
+                            <span>
+                              {$(x.rocCents + x.prefCents + x.profitCents)}
+                            </span>
                           </li>
                         ))}
                       </ul>
@@ -197,9 +301,19 @@ export function PortalProjectView({ projectId }: { projectId: string }) {
       </div>
 
       {photo && (
-        <div role="dialog" aria-modal="true" aria-label="Photo" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setPhoto(null)}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Photo"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setPhoto(null)}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={photoUrl(photo, "full")} alt="" className="max-h-full max-w-full rounded-control object-contain" />
+          <img
+            src={photoUrl(photo, "full")}
+            alt=""
+            className="max-h-full max-w-full rounded-control object-contain"
+          />
         </div>
       )}
     </>

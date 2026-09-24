@@ -81,7 +81,7 @@ export async function vendorsWithExpiredCoi(conn: DbOrTx, today = todayET()): Pr
  * Projects touched by a vendor with an expired COI (Module B: flag the
  * vendor on every project they are on), via commitments or expiry items.
  */
-export async function expiredCoiFlags(conn: DbOrTx, projectIds: string[], today = todayET()): Promise<Map<string, string[]>> {
+export async function expiredCoiFlags(conn: DbOrTx, projectIds: string[], today = todayET(), financial: (projectId: string) => boolean = () => true): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
   if (projectIds.length === 0) return out;
   const expired = await vendorsWithExpiredCoi(conn, today);
@@ -94,11 +94,12 @@ export async function expiredCoiFlags(conn: DbOrTx, projectIds: string[], today 
     const list = out.get(projectId) ?? [];
     if (!list.includes(name)) out.set(projectId, [...list, name]);
   };
-  for (const c of commitments) add(c.projectId, vendorKey(c.vendor));
+  // Contracts and invoices are financial: they only tie a vendor to a project for people who see the financials.
+  for (const c of commitments) if (financial(c.projectId)) add(c.projectId, vendorKey(c.vendor));
   for (const i of items) if (i.key) add(i.projectId, i.key);
   // Directory links (Module C): invoices, tasks given to the vendor and punch items name them too.
   const invoices = await conn.select({ projectId: schema.invoice.projectId, vendor: schema.invoice.vendorName }).from(schema.invoice).where(inArray(schema.invoice.projectId, projectIds));
-  for (const i of invoices) add(i.projectId, vendorKey(i.vendor));
+  for (const i of invoices) if (financial(i.projectId)) add(i.projectId, vendorKey(i.vendor));
   const tasks = await conn.select({ projectId: schema.task.projectId, key: schema.vendor.key }).from(schema.task).innerJoin(schema.vendor, eq(schema.vendor.id, schema.task.vendorId)).where(inArray(schema.task.projectId, projectIds));
   for (const t of tasks) add(t.projectId, t.key);
   const punch = await conn.select({ projectId: schema.punchItem.projectId, vendor: schema.punchItem.vendorName }).from(schema.punchItem).where(and(inArray(schema.punchItem.projectId, projectIds), isNotNull(schema.punchItem.vendorName)));

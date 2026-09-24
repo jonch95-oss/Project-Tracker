@@ -203,7 +203,7 @@ async function addRiskFacts(conn: DbOrTx, ids: string[], fin: Set<string>, facts
   const today = todayET();
   const [expired, coi, risk] = await Promise.all([
     expiredCounts(conn, ids, today, (id) => fin.has(id)),
-    expiredCoiFlags(conn, ids, today),
+    expiredCoiFlags(conn, ids, today, (id) => fin.has(id)),
     conn
       .select({
         projectId: schema.violationCase.projectId,
@@ -508,7 +508,7 @@ export const projectsRouter = router({
       const tpl = input.templateId ? await loadTemplate(ctx.db, input.templateId) : await defaultTemplateFor(ctx.db, input.type);
       if (!tpl || tpl.row.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
       if (tpl.row.projectType !== input.type) throw new TRPCError({ code: "BAD_REQUEST", message: "That template is for a different project type." });
-      return ctx.db.transaction(async (tx) => {
+      const created = await ctx.db.transaction(async (tx) => {
         const [p] = await tx
           .insert(schema.project)
           .values({
@@ -525,7 +525,6 @@ export const projectsRouter = router({
           })
           .returning({ id: schema.project.id });
         const id = p!.id;
-        if (bbl) queueFirstSnapshot(id);
         const built = await buildProjectChecklist(tx, { projectId: id, type: input.type, template: tpl, chosenToggles: toggles, today, userId: ctx.viewer.id });
         // The creator is always a member (admins need membership to see it).
         await tx.insert(schema.projectMember).values({ projectId: id, userId: ctx.viewer.id, projectRole: "PM", ...flags, addedById: ctx.viewer.id });
@@ -557,6 +556,9 @@ export const projectsRouter = router({
         }
         return { id };
       });
+      // Module A: a new project with a lot pulls its first public-records snapshot once it's committed.
+      if (bbl) queueFirstSnapshot(created.id);
+      return created;
     }),
 
   update: projectProcedure("project.edit")
@@ -580,12 +582,13 @@ export const projectsRouter = router({
         ...input.facts,
         ...(moved ? { latitude: geo?.latitude ?? null, longitude: geo?.longitude ?? null } : {}),
       };
-      return ctx.db.transaction(async (tx) => {
+      let lotChanged = false;
+      const saved = await ctx.db.transaction(async (tx) => {
         const version = await bumpVersion(tx, input.projectId, input.version, changes);
         // A different lot (or street address, which drives the DOB BIS and complaint lookups): start the records watch fresh.
         if (before.bbl !== bbl || before.address.trim().toUpperCase() !== input.address.trim().toUpperCase()) {
           await resetProjectRecords(tx, input.projectId);
-          if (bbl) queueFirstSnapshot(input.projectId);
+          lotChanged = !!bbl;
         }
         const changed = Object.fromEntries(
           Object.entries(changes).filter(([k, v]) => (before as Record<string, unknown>)[k] !== v),
@@ -603,6 +606,9 @@ export const projectsRouter = router({
         });
         return { version };
       });
+      // A new lot pulls its first snapshot, after the reset above is committed.
+      if (lotChanged) queueFirstSnapshot(input.projectId);
+      return saved;
     }),
 
   /** Headline numbers (gated): owner, or an admin with financial visibility. */
@@ -750,6 +756,8 @@ export const membersRouter = router({
     const isExternal = !isInternalRole(ctx.actor.role);
     return rows.map((r) => ({
       userId: r.userId,
+      /** Can be given tasks and items (investors and lenders can't). */
+      assignable: r.globalRole !== "investor",
       name: r.name,
       title: r.title,
       company: r.company,

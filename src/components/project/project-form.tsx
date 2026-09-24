@@ -305,7 +305,8 @@ function useLotLookup(onFilled: () => void) {
         kept.push(label);
         continue;
       }
-      input.value = typeof v === "number" && Number.isInteger(v) && name !== "residFar" && name !== "builtFar" ? v.toLocaleString("en-US") : String(v);
+      // Whole square feet read best with commas; FAR and feet are decimals, and their fields don't take commas.
+      input.value = typeof v === "number" && (name === "lotAreaSqft" || name === "unusedZsf") ? v.toLocaleString("en-US") : String(v);
       filled.push(label);
     }
     onFilled();

@@ -134,7 +134,8 @@ export const filesRouter = router({
         watching: watching.has(f.id),
       })),
       access: {
-        canUpload: scope.folders.length > 0,
+        // Investors and lenders read what's shared with them; they don't add to it.
+        canUpload: scope.folders.length > 0 && c.actor.role !== "investor",
         canEditFolders: ctx.project.can("checklist.edit"),
         canShare,
         canManageAll: ctx.project.can("checklist.edit"),

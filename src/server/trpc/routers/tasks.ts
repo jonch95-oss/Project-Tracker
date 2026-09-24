@@ -66,7 +66,8 @@ export async function projectPeople(conn: DbOrTx, projectId: string): Promise<Pr
     .select({ id: schema.user.id, name: schema.user.name, role: schema.user.role, projectRole: schema.projectMember.projectRole })
     .from(schema.projectMember)
     .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-    .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.user.status, "active")));
+    // Investors and lenders read their portal; they are never given, shown or @mentioned on tasks.
+    .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.user.status, "active"), ne(schema.user.role, "investor")));
   const owners = await conn.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role }).from(schema.user).where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active")));
   const out = new Map<string, ProjectPerson>();
   for (const o of owners) out.set(o.id, { ...o, projectRole: "Owner", external: false });
@@ -500,7 +501,8 @@ export const tasksRouter = router({
   mine: protectedProcedure.query(async ({ ctx }) => {
     const { projectIds, memberships } = await accessibleProjects(ctx);
     const empty = { today: todayET(), sections: MY_TASK_SECTIONS.map((key) => ({ key, groups: [] as never[] })), total: 0 };
-    if (projectIds.length === 0) return empty;
+    // Investors and lenders have no tasks, whatever the data says.
+    if (projectIds.length === 0 || ctx.actor.role === "investor") return empty;
     const me = ctx.actor.userId;
     const rows = await ctx.db
       .select({
@@ -558,7 +560,7 @@ export const tasksRouter = router({
     const { projectIds, memberships } = await accessibleProjects(ctx);
     const today = todayET();
     const empty = { counts: { approvals: 0, blocked: 0 }, approvals: [], blocked: [], overdueByPerson: [], keyDates: [], recordAlerts: [] as RailAlert[], expired: [] as RailExpiry[] };
-    if (projectIds.length === 0) return empty;
+    if (projectIds.length === 0 || ctx.actor.role === "investor") return empty;
     const full = projectIds.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "task.viewAll"));
     const approvable = projectIds.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "task.approve"));
     const names = new Map((await ctx.db.select({ id: schema.project.id, name: schema.project.name }).from(schema.project).where(inArray(schema.project.id, projectIds))).map((p) => [p.id, p.name]));

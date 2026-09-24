@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { planDate } from "../dates";
 import { clamp01, sheetNumberFromName } from "@/core/field";
@@ -21,7 +21,12 @@ const MAX_CENTS = 1_000_000_000_000;
 
 export async function assertOnProject(tx: DbOrTx, projectId: string, userId: string | null | undefined) {
   if (!userId) return;
-  const [m] = await tx.select({ id: schema.projectMember.userId }).from(schema.projectMember).where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId)));
+  const [m] = await tx
+    .select({ id: schema.projectMember.userId })
+    .from(schema.projectMember)
+    .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
+    // Investors and lenders aren't given work.
+    .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId), ne(schema.user.role, "investor")));
   const [o] = await tx.select({ id: schema.user.id }).from(schema.user).where(and(eq(schema.user.id, userId), eq(schema.user.role, "owner")));
   if (!m && !o) throw new TRPCError({ code: "BAD_REQUEST", message: "That person isn't on this project." });
 }

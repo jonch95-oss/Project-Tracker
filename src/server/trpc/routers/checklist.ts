@@ -260,7 +260,8 @@ export const checklistRouter = router({
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const t = await loadTask(tx, input.projectId, input.taskId);
-        if (input.vendorId) {
+        // A new link must be to a live company; a task already linked to one since archived keeps its link.
+        if (input.vendorId && input.vendorId !== t.vendorId) {
           const [v] = await tx.select({ id: schema.vendor.id }).from(schema.vendor).where(and(eq(schema.vendor.id, input.vendorId), isNull(schema.vendor.archivedAt)));
           if (!v) throw new TRPCError({ code: "NOT_FOUND", message: "That company isn't in the directory." });
         }

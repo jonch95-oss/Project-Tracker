@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { planDate } from "../dates";
 import { carryForward, manpowerTotal, MAX_LOG_RANGE_DAYS, meetingItemStatus } from "@/core/field";
@@ -411,7 +411,11 @@ export const meetingsRouter = router({
         const m = await loadMeeting(tx, input.projectId, input.meetingId);
         if (input.kind === "action" && (!input.assigneeId || !input.dueOn)) throw new TRPCError({ code: "BAD_REQUEST", message: "An action item needs someone and a due date." });
         if (input.assigneeId) {
-          const [mem] = await tx.select().from(schema.projectMember).where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.assigneeId)));
+          const [mem] = await tx
+            .select({ userId: schema.projectMember.userId })
+            .from(schema.projectMember)
+            .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
+            .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.assigneeId), ne(schema.user.role, "investor")));
           const [owner] = await tx.select().from(schema.user).where(and(eq(schema.user.id, input.assigneeId), eq(schema.user.role, "owner")));
           if (!mem && !owner) throw new TRPCError({ code: "BAD_REQUEST", message: "That person isn't on this project." });
         }

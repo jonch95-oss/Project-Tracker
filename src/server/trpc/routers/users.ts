@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { passwordProblem } from "@/core/password";
-import { canAssignGlobalRole, GLOBAL_ROLES } from "@/core/permissions";
+import { canAssignGlobalRole, defaultFlags, GLOBAL_ROLES } from "@/core/permissions";
 import { auth } from "../../auth";
 import { schema } from "../../db";
 import { env } from "../../env";
@@ -274,6 +274,20 @@ export const usersRouter = router({
         if (!before) throw new TRPCError({ code: "NOT_FOUND" });
         if (before.role === input.role) return;
         await tx.update(schema.user).set({ role: input.role, updatedAt: new Date() }).where(eq(schema.user.id, input.userId));
+        // Project flags mean different things for an investor (the financials flag is their own capital account),
+        // so crossing that line starts every membership from the new role's defaults.
+        if (before.role === "investor" || input.role === "investor") {
+          await tx.update(schema.projectMember).set({ ...defaultFlags(input.role), updatedAt: new Date() }).where(eq(schema.projectMember.userId, input.userId));
+          if (input.role === "investor") {
+            // An investor isn't given work: their tasks, watches and pending approvals go back to the team.
+            await tx.update(schema.task).set({ assigneeId: null, updatedAt: new Date() }).where(and(eq(schema.task.assigneeId, input.userId), sql`${schema.task.status} <> 'done'`));
+            await tx.delete(schema.taskWatcher).where(eq(schema.taskWatcher.userId, input.userId));
+            await rerouteApprovals(tx, input.userId, ctx.viewer.id);
+          } else {
+            // No longer an investor: their portal link to an investor's account ends.
+            await tx.update(schema.investor).set({ userId: null, updatedAt: new Date() }).where(eq(schema.investor.userId, input.userId));
+          }
+        }
         await recordAudit(tx, {
           actorId: ctx.viewer.id,
           actorName: ctx.viewer.name,

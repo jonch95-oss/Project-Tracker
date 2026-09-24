@@ -249,7 +249,8 @@ function SheetViewer({ projectId, sheetId, onBack }: { projectId: string; sheetI
   if (q.isError) return <ErrorState onRetry={() => q.refetch()} />;
   const { sheet, set, superseded, pins, canPin } = q.data;
   const onTap = (e: MouseEvent<HTMLDivElement>) => {
-    if (!pinMode || !size) return;
+    // A tap works as soon as the sheet is on screen, even while a big PDF is still drawing.
+    if (!pinMode) return;
     const rect = e.currentTarget.getBoundingClientRect();
     setDraft({ sheetId: sheet.id, page, x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height });
     setPinMode(false);

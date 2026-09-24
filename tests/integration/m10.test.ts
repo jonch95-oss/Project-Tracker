@@ -4,6 +4,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
+import { vendorKey } from "@/core/expiries";
 import { addDays, todayET } from "@/core/time";
 import { db, schema } from "@/server/db";
 import { directoryReminderJob } from "@/server/services/directory";
@@ -101,7 +102,7 @@ describe("Milestone 10", () => {
       const [task] = await db().select().from(schema.task).where(eq(schema.task.id, sel.taskId!));
       expect(task).toMatchObject({ title: "Unit 4B · Kitchen: Calacatta quartz, waterfall island", status: "waiting", waitingOn: "Buyer sign-off", dueOn: due, phaseKey: "construction" });
       expect((await inbox(editor.id)).some((n) => n.taskId === task!.id && n.kind === "assigned")).toBe(true);
-      expect((await mc.units.list({ projectId })).units.find((u) => u.id === unitId)!.selections[0]).toMatchObject({ upgradeCents: null, isUpgrade: true });
+      expect((await mc.units.list({ projectId })).units.find((u) => u.id === unitId)!.selections[0]).toMatchObject({ upgradeCents: null, isUpgrade: null });
       await expect(ec.units.saveSelection({ projectId, id, version: sel.version, unitId, category: "Kitchen", choice: "x", upgradeCents: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
       await expect(ac.units.signOff({ projectId, id, version: sel.version, signedOffOn: addDays(today, 1), signedOffName: "Buyer" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
       await ac.units.signOff({ projectId, id, version: sel.version, signedOffOn: today, signedOffName: "Dana Buyer" });
@@ -243,6 +244,66 @@ describe("Milestone 10", () => {
       expect((await investorReport(new Request("http://t/?quarter=2026-Q9"), { params: Promise.resolve({ id: projectId }) } as never)).status).toBe(400);
       as = (await createUser("external")).id;
       expect((await investorReport(new Request("http://t/"), { params: Promise.resolve({ id: projectId }) } as never)).status).toBe(404);
+    });
+  });
+
+  describe("review fixes", () => {
+    it("an investor record shared with a project you can't edit can't be rewired from yours; an existing investor attaches by commitment", async () => {
+      const other = (await oc.projects.create({ name: `Other LP ${Date.now()}`, address: "5 Else St", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [] })).id;
+      const oo = await callerFor(owner.id);
+      const shared = (await oo.capital.saveInvestor({ projectId: other, name: `Big LP ${Date.now()}`, kind: "equity", committedCents: 1_000_00 })).investorId;
+      const [inv] = await db().select().from(schema.investor).where(eq(schema.investor.id, shared));
+      await expect(ac.capital.saveInvestor({ projectId, investorId: shared, version: inv!.version, name: "Hijacked", kind: "equity", userId: lp2.id, committedCents: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await ac.capital.setCommitment({ projectId, investorId: shared, committedCents: 250_000_00 });
+      expect((await ac.capital.overview({ projectId })).accounts.find((a) => a.investor.id === shared)!.account.committed).toBe(250_000_00);
+      // Still can't edit it: it's on the other project too.
+      await expect(ac.capital.saveInvestor({ projectId, investorId: shared, version: inv!.version, name: "Hijacked", kind: "equity", committedCents: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect((await db().select().from(schema.investor).where(eq(schema.investor.id, shared)))[0]!.name).toBe(inv!.name);
+    });
+
+    it("investors aren't given work, and have no task lists", async () => {
+      const [t] = await db().select().from(schema.task).where(eq(schema.task.projectId, projectId)).limit(1);
+      await expect(oc.tasks.assign({ projectId, taskId: t!.id, version: t!.version, assigneeId: lp.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      const unit = (await ac.units.list({ projectId })).units[0]!;
+      await expect(ac.units.saveSelection({ projectId, unitId: unit.id, category: "Bath", choice: "x", assigneeId: lp.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect((await lc.tasks.mine()).total).toBe(0);
+      expect((await lc.members.list({ projectId }).catch((e) => e)).code).toBe("FORBIDDEN");
+    });
+
+    it("receipts that a distribution relied on are locked; distributions can't be dated ahead", async () => {
+      const call = (await ac.capital.overview({ projectId })).calls.find((x) => x.number === 1)!;
+      const item = call.items[0]!;
+      await expect(ac.capital.recordReceipt({ projectId, itemId: item.id, version: item.version, receivedCents: 1_00, receivedOn: "2025-01-01" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(ac.capital.recordDistribution({ projectId, amountCents: 1_00, paidOn: addDays(today, 2) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("links to a company survive its archiving: tasks still save, contracts keep their link", async () => {
+      const [v] = await db().select().from(schema.vendor).where(eq(schema.vendor.name, "Brick & Beam Builders LLC"));
+      await ac.directory.setArchived({ id: v!.id, archived: true });
+      const [t] = await db().select().from(schema.task).where(eq(schema.task.vendorId, v!.id)).limit(1);
+      await ac.checklist.updateTask({ projectId, taskId: t!.id, version: t!.version, title: "Renamed while archived", vendorId: v!.id });
+      const [com] = await db().select().from(schema.commitment).where(eq(schema.commitment.projectId, projectId));
+      await oc.financials.saveCommitment({ projectId, id: com!.id, version: com!.version, vendorName: com!.vendorName, amountCents: com!.amountCents + 1, status: "executed", retainageBps: 1000, budgetLineId: null, description: null, signedOn: null, fileId: null });
+      expect((await db().select().from(schema.commitment).where(eq(schema.commitment.id, com!.id)))[0]!.vendorId).toBe(v!.id);
+      await ac.directory.setArchived({ id: v!.id, archived: false });
+    });
+
+    it("sale status and upgrades stay with financial access; COI flags from contracts only show with it", async () => {
+      const u = (await mc.units.list({ projectId })).units.find((x) => x.unit === "4B")!;
+      expect(u.status).toBeNull();
+      expect(u.selections.every((s) => s.isUpgrade === null)).toBe(true);
+      await oc.financials.saveCommitment({ projectId, vendorName: "Only Contract Co", amountCents: 1_00, status: "draft", retainageBps: 0, budgetLineId: null, description: null, signedOn: null, fileId: null });
+      const [vd] = await db().insert(schema.vendor).values({ name: "Only Contract Co", key: vendorKey("Only Contract Co") }).returning({ id: schema.vendor.id });
+      await db().insert(schema.vendorDocument).values({ vendorId: vd!.id, kind: "coi", category: "vendor_coi_gl", expiresOn: addDays(today, -5) });
+      expect((await expiredCoiFlags(db(), [projectId])).get(projectId)).toContain("Only Contract Co");
+      expect((await expiredCoiFlags(db(), [projectId], today, () => false)).get(projectId) ?? []).not.toContain("Only Contract Co");
+    });
+
+    it("leaving the investor role resets project flags and ends the portal link", async () => {
+      await oc.users.setRole({ userId: lp.id, role: "external" });
+      const [m] = await db().select().from(schema.projectMember).where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, lp.id)));
+      expect(m!.canViewFinancials).toBe(false);
+      expect(await db().select().from(schema.investor).where(eq(schema.investor.userId, lp.id))).toEqual([]);
     });
   });
 });

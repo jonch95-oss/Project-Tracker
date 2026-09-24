@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { vendorIdForName } from "../../services/directory";
+import { keepOrLink } from "../../services/directory";
 import { BUDGET_CATEGORIES, categoryLabel, drawTotals, revisedCommitment, lienWaiversComplete, nextDrawStatus, perSf, UNIT_STATUSES, type DrawStatus } from "@/core/financials";
 import { formatMoney, sum } from "@/core/money";
 import { todayET } from "@/core/time";
@@ -323,8 +323,8 @@ export const financialsRouter = router({
           signedOn: input.signedOn ?? null,
           retainageBps: input.retainageBps,
           fileId: await financialFile(tx, input.projectId, input.fileId),
-          // Module C: a name that matches a directory company links to it.
-          vendorId: await vendorIdForName(tx, input.vendorName),
+          // Module C: a name that matches a directory company links to it (an existing link stays while the name means the same company).
+          vendorId: await keepOrLink(tx, input.id ? (await tx.select({ name: schema.commitment.vendorName, vendorId: schema.commitment.vendorId }).from(schema.commitment).where(and(eq(schema.commitment.id, input.id), eq(schema.commitment.projectId, input.projectId))))[0] : undefined, input.vendorName),
         };
         if (input.id) {
           const r = await tx
@@ -377,7 +377,7 @@ export const financialsRouter = router({
           retainageBps: input.retainageBps ?? commitment?.retainageBps ?? 0,
           note: input.note ?? null,
           fileId: await financialFile(tx, input.projectId, input.fileId),
-          vendorId: await vendorIdForName(tx, input.vendorName),
+          vendorId: await keepOrLink(tx, input.id ? (await tx.select({ name: schema.invoice.vendorName, vendorId: schema.invoice.vendorId }).from(schema.invoice).where(and(eq(schema.invoice.id, input.id), eq(schema.invoice.projectId, input.projectId))))[0] : undefined, input.vendorName),
         };
         if (input.id) {
           const [cur] = await tx.select().from(schema.invoice).where(and(eq(schema.invoice.id, input.id), eq(schema.invoice.projectId, input.projectId)));

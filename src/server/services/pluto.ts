@@ -42,7 +42,9 @@ export type LotResult = { status: "found"; facts: LotFacts } | { status: "not_fo
 
 /** Never throws: the form says what happened and carries on either way. */
 export async function lookupLot(bbl: string): Promise<LotResult> {
-  const f = override ?? (process.env.PLUTO === "stub" ? stubLookup : process.env.PLUTO === "off" ? async () => null : socrataLookup);
+  // The made-up lot is for end-to-end tests only: never on the live site, whatever the setting says.
+  const stub = process.env.PLUTO === "stub" && process.env.VERCEL_ENV !== "production";
+  const f = override ?? (stub ? stubLookup : process.env.PLUTO === "off" ? async () => null : socrataLookup);
   try {
     const facts = await f(bbl);
     return facts ? { status: "found", facts } : { status: "not_found" };

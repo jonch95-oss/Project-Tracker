@@ -172,7 +172,7 @@ export const expiriesRouter = router({
     assertInternal(ctx.project);
     const fin = ctx.project.can("financials.view");
     const rows = await ctx.db.select().from(schema.expiryItem).where(eq(schema.expiryItem.projectId, input.projectId)).orderBy(asc(schema.expiryItem.expiresOn));
-    const flags = await expiredCoiFlags(ctx.db, [input.projectId]);
+    const flags = await expiredCoiFlags(ctx.db, [input.projectId], undefined, () => fin);
     return {
       items: rows.filter((r) => fin || !FINANCIAL_EXPIRY.has(r.category)).map((r) => ({ ...r, name: expiryLabel(r.category, r.vendorName ?? r.label), fromRecords: !!r.recordRef })),
       coiFlags: flags.get(input.projectId) ?? [],

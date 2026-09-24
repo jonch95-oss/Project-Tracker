@@ -14,6 +14,12 @@ export async function vendorIdForName(tx: DbOrTx, name: string | null | undefine
   return v?.id ?? null;
 }
 
+/** On an edit: keep the row's directory link while its name still means the same company; otherwise link by the new name. */
+export async function keepOrLink(tx: DbOrTx, before: { name: string; vendorId: string | null } | undefined, name: string): Promise<string | null> {
+  if (before?.vendorId && vendorKey(before.name) === vendorKey(name)) return before.vendorId;
+  return vendorIdForName(tx, name);
+}
+
 export type VendorLink = "commitment" | "invoice" | "task" | "coi" | "punch";
 
 /**
@@ -65,8 +71,12 @@ export async function directoryReminderJob(now = new Date()): Promise<{ reminded
     const latest = new Map(newest.map((n) => [`${n.vendorId}|${n.category}`, n.latest]));
     const owners = await activeOwners(tx);
     let reminded = 0;
+    const seen = new Set<string>();
     for (const { d, vendorName } of docs) {
       if (latest.get(`${d.vendorId}|${d.category}`) !== d.expiresOn) continue;
+      // Two copies of the same paper (same kind, same date) remind once.
+      if (seen.has(`${d.vendorId}|${d.category}`)) continue;
+      seen.add(`${d.vendorId}|${d.category}`);
       const sent = new Set(d.remindedFor === d.expiresOn && d.remindedMark ? [d.remindedMark] : []);
       const mark = expiryReminderMark(d.expiresOn!, today, sent);
       if (!mark) continue;

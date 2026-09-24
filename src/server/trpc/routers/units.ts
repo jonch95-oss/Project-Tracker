@@ -15,6 +15,17 @@ const text = (max: number) => z.string().trim().max(max);
 const conflict = () => new TRPCError({ code: "CONFLICT", message: "Someone else just changed this. Reload to see the latest." });
 const priceCents = z.number().int().min(0).max(1_000_000_000_000);
 
+/** Two people adding the same unit at once: the second gets a clear answer, not a server error. */
+async function uniqueUnit<T>(unit: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const code = (e as { cause?: { code?: string } }).cause?.code ?? (e as { code?: string }).code;
+    if (code === "23505") throw new TRPCError({ code: "CONFLICT", message: `There's already a unit ${unit}.` });
+    throw e;
+  }
+}
+
 function team(access: ProjectAccess) {
   if (!access.can("task.viewAll")) throw new TRPCError({ code: "FORBIDDEN", message: "This is for the project team." });
 }
@@ -38,15 +49,22 @@ async function syncSelectionTask(tx: DbOrTx, c: Ctx, sel: typeof schema.unitSele
   const title = taskTitle(unit, sel.category, sel.choice);
   const description = `Buyer selection for unit ${unit}.${sel.signOffBy ? ` Sign-off due ${sel.signOffBy}.` : ""}${sel.notes ? `\n\n${sel.notes}` : ""}`;
   const state = signed ? { status: "not_started" as const, waitingOn: null, waitingSince: null } : { status: "waiting" as const, waitingOn: "Buyer sign-off", waitingSince: todayET() };
+  // Until it's signed the task is due when the buyer must sign; after that the GC sets their own date.
+  const due = signed ? { dueOn: null, dueManual: false } : { dueOn: sel.signOffBy, dueManual: !!sel.signOffBy };
   if (sel.taskId) {
     const [t] = await tx.select().from(schema.task).where(eq(schema.task.id, sel.taskId));
     if (t) {
-      // Work already under way keeps its status; only the waiting/ready switch follows the sign-off.
-      const follow = t.status === "waiting" || (t.status === "not_started" && !signed);
+      // Work already under way keeps its status; only the waiting/ready switch follows the sign-off,
+      // and a task already waiting keeps the day it started waiting.
+      const follow = (t.status === "waiting" && signed) || (t.status === "not_started" && !signed);
+      const reassigned = assigneeId !== undefined && assigneeId !== t.assigneeId;
       await tx
         .update(schema.task)
-        .set({ title, description, dueOn: sel.signOffBy, dueManual: !!sel.signOffBy, ...(assigneeId !== undefined ? { assigneeId } : {}), ...(follow ? state : {}), version: sql`${schema.task.version} + 1`, updatedAt: new Date() })
+        .set({ title, description, ...(signed && t.dueManual && t.dueOn !== sel.signOffBy ? {} : due), ...(assigneeId !== undefined ? { assigneeId } : {}), ...(follow ? state : {}), version: sql`${schema.task.version} + 1`, updatedAt: new Date() })
         .where(eq(schema.task.id, t.id));
+      if (reassigned && assigneeId && assigneeId !== c.viewer.id) {
+        await notify(tx, c.viewer.id, [{ userId: assigneeId, kind: "assigned", title: `Assigned: “${title}”`, body: signed ? "Signed off by the buyer." : "Waiting on the buyer's sign-off.", projectId: c.project.projectId, taskId: t.id, href: taskHref(c.project.projectId, t.id) }]);
+      }
       return t.id;
     }
   }
@@ -54,7 +72,7 @@ async function syncSelectionTask(tx: DbOrTx, c: Ctx, sel: typeof schema.unitSele
   const [max] = await tx.select({ m: sql<number>`coalesce(max(${schema.task.sortOrder}), -1)::int` }).from(schema.task).where(and(eq(schema.task.projectId, c.project.projectId), eq(schema.task.phaseKey, phaseKey)));
   const [t] = await tx
     .insert(schema.task)
-    .values({ projectId: c.project.projectId, phaseKey, title, role: "Construction", description, assigneeId: assigneeId ?? null, dueOn: sel.signOffBy, dueManual: !!sel.signOffBy, ...state, sortOrder: (max?.m ?? -1) + 1, createdById: c.viewer.id })
+    .values({ projectId: c.project.projectId, phaseKey, title, role: "Construction", description, assigneeId: assigneeId ?? null, ...due, ...state, sortOrder: (max?.m ?? -1) + 1, createdById: c.viewer.id })
     .returning({ id: schema.task.id });
   await tx.update(schema.unitSelection).set({ taskId: t!.id }).where(eq(schema.unitSelection.id, sel.id));
   if (assigneeId && assigneeId !== c.viewer.id) {
@@ -107,7 +125,8 @@ export const unitsRouter = router({
       category: r.s.category,
       choice: r.s.choice,
       upgradeCents: fin ? r.s.upgradeCents : null,
-      isUpgrade: r.s.upgradeCents !== null && r.s.upgradeCents > 0,
+      // Whether the buyer paid extra is a money fact too.
+      isUpgrade: fin ? r.s.upgradeCents !== null && r.s.upgradeCents > 0 : null,
       signOffBy: r.s.signOffBy,
       signedOffOn: r.s.signedOffOn,
       signedOffName: r.s.signedOffName,
@@ -130,7 +149,8 @@ export const unitsRouter = router({
         exposure: u.exposure,
         outdoorSf: u.outdoorSf,
         outdoorType: u.outdoorType,
-        status: u.status,
+        // Sale status (available, in contract…) belongs to the sales tracker: financial access only.
+        status: fin ? u.status : null,
         askCents: fin ? u.askCents : null,
         askPsfCents: fin ? pricePerSf(u.askCents, u.sf) : null,
         version: u.version,
@@ -152,7 +172,7 @@ export const unitsRouter = router({
       const c = ctx as Ctx;
       const priced = input.askCents !== undefined;
       if (priced && !c.project.can("financials.edit")) throw new TRPCError({ code: "FORBIDDEN", message: "Asking prices are for people who edit the financials." });
-      return ctx.db.transaction(async (tx) => {
+      return uniqueUnit(input.unit, () => ctx.db.transaction(async (tx) => {
         const clash = await tx
           .select({ id: schema.saleUnit.id })
           .from(schema.saleUnit)
@@ -183,7 +203,7 @@ export const unitsRouter = router({
         const [row] = await tx.insert(schema.saleUnit).values({ ...values, projectId: input.projectId, sortOrder: (max?.m ?? -1) + 1 }).returning({ id: schema.saleUnit.id });
         await audit(tx, c, row!.id, `${c.viewer.name} added unit ${input.unit}`, "create", priced);
         return { id: row!.id };
-      });
+      }));
     }),
 
   saveSelection: projectProcedure("checklist.edit")

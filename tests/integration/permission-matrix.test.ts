@@ -10,6 +10,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { db, schema } from "@/server/db";
 import { storage } from "@/server/storage";
+import { todayET } from "@/core/time";
 import { appRouter } from "@/server/trpc/root";
 import { setLotLookupForTests } from "@/server/services/pluto";
 import { addMember, callerFor, companyId, createProject, createUser, deactivate } from "../support/fixtures";
@@ -791,6 +792,13 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "capital.saveInvestor": { allowed: FIN_EDIT, call: (c, f) => c.capital.saveInvestor({ projectId: f.projectId, name: `Matrix LP ${uid()}`, kind: "equity", committedCents: 50_000_00 }) },
+  "capital.setCommitment": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const [inv] = await db().insert(schema.investor).values({ name: `Matrix Attach ${uid()}` }).returning({ id: schema.investor.id });
+      return c.capital.setCommitment({ projectId: f.projectId, investorId: inv!.id, committedCents: 1_000_00 });
+    },
+  },
   "capital.removeInvestor": { allowed: FIN_EDIT, call: async (c, f) => c.capital.removeInvestor({ projectId: f.projectId, investorId: await investorFixture(f.projectId) }) },
   "capital.createCall": {
     allowed: FIN_EDIT,
@@ -826,14 +834,14 @@ const MATRIX: Record<string, Row | "public"> = {
     allowed: FIN_EDIT,
     call: async (c, f) => {
       await investorFixture(f.projectId);
-      return c.capital.recordDistribution({ projectId: f.projectId, amountCents: 1_000_00, paidOn: "2099-12-31" });
+      return c.capital.recordDistribution({ projectId: f.projectId, amountCents: 1_000_00, paidOn: todayET() });
     },
   },
   "capital.deleteDistribution": {
     allowed: FIN_EDIT,
     call: async (c, f) => {
       const [latest] = await db().select({ n: schema.distribution.number }).from(schema.distribution).where(eq(schema.distribution.projectId, f.projectId)).orderBy(desc(schema.distribution.number)).limit(1);
-      const [d] = await db().insert(schema.distribution).values({ projectId: f.projectId, number: (latest?.n ?? 0) + 1, paidOn: "2099-12-31", totalCents: 100 }).returning();
+      const [d] = await db().insert(schema.distribution).values({ projectId: f.projectId, number: (latest?.n ?? 0) + 1, paidOn: todayET(), totalCents: 100 }).returning();
       return c.capital.deleteDistribution({ projectId: f.projectId, id: d!.id });
     },
   },

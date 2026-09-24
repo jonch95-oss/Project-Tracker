@@ -161,17 +161,19 @@ export function UnitsTab({
                       <IconPlus size={16} /> Selection
                     </Button>
                   )}
-                  <StatusPill
-                    tone={
-                      u.status === "closed"
-                        ? "done"
-                        : u.status === "available"
-                          ? "neutral"
-                          : "accent"
-                    }
-                  >
-                    {UNIT_STATUS[u.status] ?? u.status}
-                  </StatusPill>
+                  {u.status && (
+                    <StatusPill
+                      tone={
+                        u.status === "closed"
+                          ? "done"
+                          : u.status === "available"
+                            ? "neutral"
+                            : "accent"
+                      }
+                    >
+                      {UNIT_STATUS[u.status] ?? u.status}
+                    </StatusPill>
+                  )}
                   {access.canSeePrices && u.askCents != null && (
                     <span className="num text-[13px] text-muted">
                       {formatMoney(u.askCents, { whole: true })}

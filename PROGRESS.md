@@ -1,5 +1,90 @@
 # Progress
 
+## Milestone 10 — Directory, BBL auto-fill, investors and units (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (the Directory in the sidebar; each condo project's Units tab and Financials → Capital; investors sign in to their own portal)
+
+### What shipped
+
+- **BBL auto-fill (Module A).**
+  - **Filling the form:** in New project and Edit project, a full BBL, or the address alone, fills the lot's facts from PLUTO (NYC Open Data 64uk-42ks): zoning with overlays and special districts, lot area, frontage and depth, residential FAR, built FAR, and unused ZSF ((residential FAR − built FAR) × lot area).
+  - **What it won't touch:** only empty fields are filled; what someone typed is kept. The form says which release it used, or why it couldn't (no BBL for the address, wrong borough, not in PLUTO yet, city service down).
+  - **Real data:** columns and value formats were checked against a live row pulled through the `Records probe` workflow. That row is now the test fixture.
+  - **First records snapshot:** a project that gets a lot, on create or when its BBL changes, pulls its public-records snapshot right after the save is committed, instead of waiting for the nightly run.
+  - **Kept separate:** the deal-origination platform is never touched.
+- **Vendor and contact directory (Module C).**
+  - **Each company has:** kind, trade, contact details, an internal 1–5 rating and notes, and the people who work there.
+  - **Paperwork:** licenses (GC, DOB registration, master plumber and electrician), COIs (GL, workers' comp, disability) and W-9s, each with its number, expiry and the file itself (PDF or photo).
+  - **Reminders:** licenses and COIs remind the owners at 30, 14 and 7 days, then daily once expired, and only the newest document of each kind counts.
+  - **Lapsed COIs:** a lapsed directory COI flags the company on every live project it's on, the same way as the expiry tracker. A renewal clears the flag.
+  - **Links to the work:** contracts and invoices typed under a company's name link to it automatically, including after a rename. Tasks can name the company doing them.
+  - **Projects list:** each company page shows the projects it's on, and contract links only appear for people who can see financials.
+  - **Outside collaborators:** invited straight from a contact, with a copy-or-WhatsApp link, since email is off.
+  - **Access:** the internal team reads the directory; owners and admins keep it. W-9s carry a tax ID, so only owners and admins see them.
+- **Investor / lender portal (Module J).**
+  - **The role:** a new read-only "Investor" role. Investors land on their portal and can reach only it, the project's photos and the folders shared with them. A single allowlist on the server enforces this, whatever a screen asks for.
+  - **Portal contents:** phase and progress, photos (shared automatically when they're added to a project), schedule status against the baseline, shared documents, and their own capital account if the financials flag is on for them. They never see anyone else's account.
+  - **Capital (Financials → Capital):**
+    - **Investors:** shared across projects, with a commitment on each.
+    - **Calls:** split by commitment, with receipts recorded as money comes in.
+    - **Distributions:** split by the waterfall as of the day paid, previewed before saving, and recorded in date order.
+    - **Waterfall:** configurable tiers: a simple preferred return, return of capital, and LP/sponsor splits with optional multiple hurdles.
+    - **Accounts:** each shows committed, called, contributed, distributed (capital, pref and profit), still invested, unfunded and pref owed.
+  - **The math:** lives in `src/core/waterfall.ts` and is unit-tested. It runs in integer cents, and the parts always sum to the whole.
+  - **Quarterly report PDF:** progress, the quarter's milestones and phases, schedule, capital activity and the waterfall. Investors get their own account only; financial staff get the whole table.
+  - **Notices:** linked investors get in-app and push notices of calls and distributions.
+- **Condo unit tracker (Module L).**
+  - **Units tab:** each unit with floor, sf, beds and baths, exposure and outdoor space. Asking price, $/sf and sale status show only to people with financial access. These are the same rows as the sales tracker in Financials.
+  - **Buyer selections:** upgrades and finish choices per unit, each with a sign-off deadline. Each one creates a GC task that waits on the buyer's sign-off, then goes live once it's recorded. Overdue sign-offs show in red.
+
+### Review
+
+The independent review found 4 P0, 4 P1, 6 P2 and 3 P3 issues. All are fixed, with regression tests.
+
+The P0s were:
+
+- **An investor record could be rewired from another project.** An admin with financial access on one project could change the name, email or portal login of an investor who was also on a project that admin couldn't see. Editing an investor now needs the owner, or financial edit rights on every project they're in. Adding an existing investor to a project only sets the commitment.
+- **Investors could be given tasks,** which then showed up outside their portal. They're now left out of every assignee, watcher and @mention list, and their task lists are always empty.
+- **Changing someone's role kept flags that mean different things.** For an investor, the financials flag means "my own account"; for a collaborator it means the whole Financials tab. Crossing into or out of the investor role now resets their project flags. Becoming an investor also releases their tasks and approvals, and leaving the role ends the portal link.
+- **Receipts could be edited after a distribution was split using them.** They're now locked once a distribution relies on them, and the edit takes the same lock as distributions.
+
+The P1s were:
+
+- "Add an existing investor" always failed.
+- Tasks linked to a company that was later archived couldn't be saved.
+- Contract and invoice edits dropped their directory link.
+- Distributions could be dated in the future.
+
+The P2s and P3s fixed:
+
+- **First records snapshot:** it's now queued only after the save commits, and the request route has an explicit time limit.
+- **PLUTO fill:** a lot 1,000 ft or deeper no longer fails the form.
+- **Reminders:** duplicate same-date documents remind once.
+- **Unique names:** duplicate company or unit names arriving at the same moment get a clear message instead of a server error.
+- **Selection tasks:** the "waiting since" date no longer resets on every save, reassignment notifies the new GC, and a signed-off task drops the buyer's deadline.
+- **COI flags:** a flag that comes from contracts or invoices only shows to people with financial access.
+- **Units:** sale status and upgrade flags are hidden without financial access.
+- **Portal files:** no upload button for investors, and the Photos folder jumps to the photos.
+- **PLUTO stub:** it can never run on the live site.
+
+### Test results
+
+- 3,499 unit and integration tests pass. New this milestone: `tests/unit/pluto.test.ts` (on the live PLUTO row), `tests/unit/waterfall.test.ts` (hand-checked scenarios) and `tests/integration/m10.test.ts` (18 tests).
+- The permission matrix adds investor scenarios (with and without the capital flag, and unassigned). It re-checks every procedure for the new role and covers every new procedure: 3,000+ cases.
+- 38 of 38 Playwright end-to-end tests pass. New in `tests/e2e/m10.spec.ts`:
+  - PLUTO fills the new-project form
+  - the directory flags a lapsed COI, adds a person and invites them
+  - a unit selection is signed off
+  - a capital receipt and a distribution run through the waterfall
+  - the investor lands on the portal, sees only their own account, and is redirected away from the project page and Portfolio
+- Checked visually at desktop and iPhone sizes: Directory, company page, Units, Capital, portal list and portal project. No console errors, no sideways scrolling.
+
+### Known limitations
+
+- PLUTO lags new condo lots by a release or two; the form says so when a lot isn't there yet.
+- The waterfall's preferred return is simple interest (not compounding) on each investor's unreturned capital, actual/365. IRR-based hurdles aren't offered; hurdles are equity multiples.
+- A W-9's file is stored in Blob like other uploads; only owners and admins can open it.
+
 ## Milestone 9 — Field and construction (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (each project's Construction tab: Daily log, Schedule, RFIs, Submittals, Drawings, Punch, Meetings)

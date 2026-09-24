@@ -18,6 +18,9 @@ function sameOrigin(req: Request): boolean {
   return allowedOrigins().includes(origin);
 }
 
+/** Room after the response for a first public-records snapshot (each capped at 50 seconds). */
+export const maxDuration = 120;
+
 function handler(req: Request) {
   if (req.method !== "GET" && !sameOrigin(req)) {
     return new Response(JSON.stringify({ error: "Cross-origin request blocked" }), {

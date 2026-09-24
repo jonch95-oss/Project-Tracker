@@ -170,7 +170,7 @@ export const directoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       const key = vendorKey(input.name);
       if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the company a name." });
-      return ctx.db.transaction(async (tx) => {
+      return uniqueName(input.name, () => ctx.db.transaction(async (tx) => {
         const [clash] = await tx.select({ id: schema.vendor.id, name: schema.vendor.name }).from(schema.vendor).where(and(eq(schema.vendor.key, key), input.id ? sql`${schema.vendor.id} <> ${input.id}` : undefined));
         if (clash) throw new TRPCError({ code: "CONFLICT", message: `${clash.name} is already in the directory.` });
         const values = { name: input.name, key, kind: input.kind, trade: input.trade || null, phone: input.phone || null, email: input.email || null, website: input.website || null, address: input.address || null, rating: input.rating ?? null, notes: input.notes || null };
@@ -181,6 +181,8 @@ export const directoryRouter = router({
             .where(and(eq(schema.vendor.id, input.id), eq(schema.vendor.version, input.version ?? 0)))
             .returning({ id: schema.vendor.id });
           if (!row) throw conflict();
+          // A new name picks up contracts and invoices typed under it.
+          await relinkByName(tx, row.id, key);
           await audit(tx, ctx, "update", "vendor", row.id, `${ctx.viewer.name} updated ${input.name} in the directory`);
           return { id: row.id };
         }
@@ -189,7 +191,7 @@ export const directoryRouter = router({
         await relinkByName(tx, row!.id, key);
         await audit(tx, ctx, "create", "vendor", row!.id, `${ctx.viewer.name} added ${input.name} to the directory`);
         return { id: row!.id };
-      });
+      }));
     }),
 
   setArchived: globalProcedure("directory.edit")
@@ -306,6 +308,17 @@ export const directoryRouter = router({
       return { ok: true };
     }),
 });
+
+/** Two people adding the same company at once: the second gets a clear answer, not a server error. */
+async function uniqueName<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const code = (e as { code?: string; cause?: { code?: string } }).code ?? (e as { cause?: { code?: string } }).cause?.code;
+    if (code === "23505") throw new TRPCError({ code: "CONFLICT", message: `${name} is already in the directory.` });
+    throw e;
+  }
+}
 
 /** A new directory company picks up contracts and invoices already typed under its name. */
 async function relinkByName(tx: DbOrTx, vendorId: string, key: string) {
