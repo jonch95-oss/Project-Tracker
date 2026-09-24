@@ -31,6 +31,7 @@
     "better-auth": "^1.7.5",
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.3",
+    "exceljs": "^4.4.0",
     "geist": "^1.7.2",
     "maplibre-gl": "^5.24.0",
     "next": "16.3.6",

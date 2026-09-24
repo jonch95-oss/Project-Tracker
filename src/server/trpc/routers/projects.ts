@@ -15,6 +15,7 @@ import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
+import { cardHeadlines } from "../../services/financials";
 import { releaseFromProject, rerouteApprovals } from "../../services/tasks";
 import { globalProcedure, projectProcedure, protectedProcedure, router, type AuthedContext } from "../init";
 
@@ -269,10 +270,6 @@ async function savePhases(tx: DbOrTx, projectId: string, before: PhaseState[], a
   }
 }
 
-function headlineOrNull(h: typeof schema.projectHeadline.$inferSelect | undefined) {
-  return h ? { purchasePriceCents: h.purchasePriceCents, totalBudgetCents: h.totalBudgetCents, projectedSelloutCents: h.projectedSelloutCents } : null;
-}
-
 export const companiesRouter = router({
   list: protectedProcedure.query(({ ctx }) =>
     ctx.db
@@ -336,7 +333,8 @@ export const projectsRouter = router({
     const photoOk = outsider ? await projectsWithSharedPhotos(ctx.db, outsider, ids) : null;
     const [phases, heroes, mine, counts, facts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, photoOk ? rows.filter((r) => photoOk.has(r.id)) : rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, outsider), loadCardFacts(ctx.db, ids, outsider)]);
     const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
-    const headlines = finIds.length ? await ctx.db.select().from(schema.projectHeadline).where(inArray(schema.projectHeadline.projectId, finIds)) : [];
+    // Computed: once a project has a budget or unit schedule, its card follows them.
+    const headlines = await cardHeadlines(ctx.db, finIds);
 
     const internal = ctx.actor.role !== "external";
     const members = internal
@@ -357,7 +355,7 @@ export const projectsRouter = router({
         facts: facts.get(p.id)!,
         hero: heroes.get(p.id) ?? null,
         memberIds: members.filter((m) => m.projectId === p.id).map((m) => m.userId),
-        headline: finIds.includes(p.id) ? (headlineOrNull(headlines.find((h) => h.projectId === p.id)) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
+        headline: finIds.includes(p.id) ? (headlines.get(p.id) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
       })),
       people: [...people].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
     };
@@ -398,7 +396,7 @@ export const projectsRouter = router({
     const photosOk = await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id);
     const [phases, heroes, counts, facts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, photosOk ? [p] : []), loadTaskCounts(ctx.db, [p.id], outsider), loadCardFacts(ctx.db, [p.id], outsider)]);
     const canFin = ctx.project.can("financials.view");
-    const [h] = canFin ? await ctx.db.select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, p.id)) : [];
+    const h = canFin ? (await cardHeadlines(ctx.db, [p.id])).get(p.id) : undefined;
     return {
       ...p,
       phases: phases.get(p.id) ?? [],
@@ -406,7 +404,7 @@ export const projectsRouter = router({
       facts: facts.get(p.id)!,
       hero: heroes.get(p.id) ?? null,
       heroPhotoId: photosOk ? p.heroPhotoId : null,
-      headline: canFin ? (headlineOrNull(h) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
+      headline: canFin ? (h ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
       access: {
         projectRole: ctx.project.membership?.projectRole ?? (ctx.actor.role === "owner" ? "Owner" : null),
         canViewFinancials: canFin,

@@ -122,6 +122,41 @@ async function main() {
     if (active[3]) await db.update(schema.task).set({ status: "awaiting_approval", requiresApproval: true, approverRole: "Owner", approverId: ids["jon@demo.test"]!, approvalRequestedAt: new Date() }).where(eq(schema.task.id, active[3].id));
     const kd = p.type === "foreclosure_auction" ? [{ kind: "auction", date: addDays(today, 5) }] : p.type === "contract_flip" ? [{ kind: "closing", date: addDays(today, 12) }, { kind: "dd_expiry", date: addDays(today, 3) }] : [{ kind: "loan_maturity", date: addDays(today, 200) }, { kind: "tco_expiry", date: addDays(today, 45) }];
     await db.insert(schema.keyDate).values(kd.map((k) => ({ projectId: row!.id, ...k })));
+    // Financial detail for the condo: a budget, contracts, invoices, a change order, a draw and a unit schedule.
+    if (p.type === "ground_up_condo") {
+      const L = async (category: string, name: string, dollars: number) =>
+        (await db.insert(schema.budgetLine).values({ projectId: row!.id, category, name, originalCents: dollars * 100 }).returning())[0]!.id;
+      const land = await L("acquisition", "Land", 5_800_000);
+      await L("closing", "Transfer taxes and title", 290_000);
+      const arch = await L("soft", "Architect and engineers", 620_000);
+      const hard = await L("hard", "General contractor", 9_400_000);
+      await L("financing", "Construction loan interest and fees", 1_150_000);
+      await L("contingency", "Hard-cost contingency", 470_000);
+      await L("sales", "Marketing and broker fees", 1_300_000);
+      const [gc] = await db.insert(schema.commitment).values({ projectId: row!.id, budgetLineId: hard, vendorName: "Brick & Beam Builders", description: "GC contract, foundation to TCO", amountCents: 9_150_000_00, retainageBps: 1000, signedOn: addDays(today, -150) }).returning();
+      await db.insert(schema.commitment).values({ projectId: row!.id, budgetLineId: arch, vendorName: "Brooks Studio", description: "Architecture, CA through TCO", amountCents: 540_000_00, retainageBps: 0, signedOn: addDays(today, -300) });
+      await db.insert(schema.invoice).values([
+        { projectId: row!.id, budgetLineId: land, vendorName: "Seller (closing)", amountCents: 5_800_000_00, status: "paid", paidOn: addDays(today, -300), invoiceDate: addDays(today, -300) },
+        { projectId: row!.id, budgetLineId: arch, vendorName: "Brooks Studio", number: "BS-14", amountCents: 45_000_00, status: "paid", paidOn: addDays(today, -40), invoiceDate: addDays(today, -50) },
+        { projectId: row!.id, budgetLineId: hard, commitmentId: gc!.id, vendorName: "Brick & Beam Builders", number: "Req 4", amountCents: 820_000_00, retainageBps: 1000, status: "approved", invoiceDate: addDays(today, -10) },
+        { projectId: row!.id, budgetLineId: hard, commitmentId: gc!.id, vendorName: "Brick & Beam Builders", number: "Req 5", amountCents: 910_500_00, retainageBps: 1000, status: "received", invoiceDate: addDays(today, -2) },
+      ]);
+      await db.insert(schema.changeOrder).values({ projectId: row!.id, budgetLineId: hard, commitmentId: gc!.id, number: 1, description: "Rock removal at the rear footing", amountCents: 185_000_00, scheduleDays: 8, status: "approved", decidedAt: new Date() });
+      await db.insert(schema.projectHeadline).values({ projectId: row!.id, loanAmountCents: 12_500_000_00 }).onConflictDoUpdate({ target: schema.projectHeadline.projectId, set: { loanAmountCents: 12_500_000_00 } });
+      // 18 units: A (2 bed), B (1 bed), C (3 bed) on floors 2–7; PH sold, a few in contract.
+      const plan = { A: [1050, 2, 2, 1_850_000], B: [780, 1, 1, 1_290_000], C: [1400, 3, 2, 2_450_000] } as const;
+      const status = (floor: number, line: string): "closed" | "contract" | "reserved" | "available" =>
+        floor === 7 && line === "C" ? "closed" : floor >= 6 || (floor === 3 && line === "B") ? "contract" : floor === 4 && line === "A" ? "reserved" : "available";
+      const units = [2, 3, 4, 5, 6, 7].flatMap((floor) =>
+        (["A", "B", "C"] as const).map((line) => {
+          const [sf, beds, baths, base] = plan[line];
+          const ask = Math.round((base * (1 + (floor - 2) * 0.03)) / 5000) * 5000;
+          const st = status(floor, line);
+          return { unit: `${floor}${line}`, floor: String(floor), sf, beds, baths, askCents: ask * 100, contractCents: st === "contract" || st === "closed" ? (ask - 25_000) * 100 : null, status: st };
+        }),
+      );
+      await db.insert(schema.saleUnit).values(units.map((u, i) => ({ projectId: row!.id, ...u, sortOrder: i })));
+    }
   }
   await pool.end();
   console.log("Demo seed complete. Users: jon@ / elias@ / ariel@ / architect@demo.test — password: demo password 1");

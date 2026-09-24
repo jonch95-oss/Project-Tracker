@@ -1,6 +1,7 @@
 import { createCallerFactory, router } from "./init";
 import { checklistRouter } from "./routers/checklist";
 import { filesRouter } from "./routers/files";
+import { financialsRouter } from "./routers/financials";
 import { photosRouter } from "./routers/photos";
 import { companiesRouter, membersRouter, projectsRouter } from "./routers/projects";
 import { auditRouter, systemRouter } from "./routers/system";
@@ -17,6 +18,7 @@ export const appRouter = router({
   members: membersRouter,
   photos: photosRouter,
   files: filesRouter,
+  financials: financialsRouter,
   checklist: checklistRouter,
   templates: templatesRouter,
   tasks: tasksRouter,

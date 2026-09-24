@@ -49,6 +49,10 @@ const OWNER_ONLY: Scenario[] = ["owner"];
 const EDITORS: Scenario[] = ["owner", "admin+fin", "admin"];
 const INTERNAL_ASSIGNED: Scenario[] = ["owner", "admin+fin", "admin", "member+fin", "member"];
 const TEMPLATE_EDITORS: Scenario[] = ["owner", "admin+fin", "admin", "admin-unassigned"];
+/** Financial visibility on the matrix project (outsiders only when granted). */
+const FIN_VIEW: Scenario[] = ["owner", "admin+fin", "member+fin", "external+fin"];
+/** Edit and approve financials: the owner and admins with financial access. */
+const FIN_EDIT: Scenario[] = ["owner", "admin+fin"];
 
 async function taskVersion(id: string): Promise<number> {
   const [t] = await db().select({ version: schema.task.version }).from(schema.task).where(eq(schema.task.id, id));
@@ -70,6 +74,20 @@ async function freshFile(projectId: string, opts: { trashed?: boolean } = {}): P
 async function folderId(projectId: string, name = "Design"): Promise<string> {
   const [folder] = await db().select().from(schema.folder).where(and(eq(schema.folder.projectId, projectId), eq(schema.folder.name, name)));
   return folder!.id;
+}
+
+async function fin<T extends "budgetLine" | "invoice" | "changeOrder" | "commitment" | "draw" | "saleUnit">(table: T, projectId: string, values: Record<string, unknown> = {}): Promise<{ id: string; version: number }> {
+  const t = schema[table] as never as typeof schema.invoice;
+  const base: Record<string, Record<string, unknown>> = {
+    budgetLine: { category: "hard", name: `Line ${uid()}`, originalCents: 100 },
+    invoice: { vendorName: "V", amountCents: 100 },
+    changeOrder: { number: Math.floor(Math.random() * 1e9), description: "x", amountCents: 100 },
+    commitment: { vendorName: "V", amountCents: 100 },
+    draw: { number: Math.floor(Math.random() * 1e9) },
+    saleUnit: { unit: `U${uid()}` },
+  };
+  const [r] = await db().insert(t).values({ projectId, ...base[table], ...values } as never).returning();
+  return { id: (r as { id: string }).id, version: (r as { version: number }).version };
 }
 
 /** A plain task on the project, so each call starts from a known state. */
@@ -396,6 +414,59 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "files.shareFolder": { allowed: EDITORS, call: async (c, f) => c.files.shareFolder({ projectId: f.projectId, folderId: await folderId(f.projectId), userId: f.externalId, on: true }) },
+
+  "financials.overview": { allowed: FIN_VIEW, call: (c, f) => c.financials.overview({ projectId: f.projectId }) },
+  "financials.saveHeadline": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveHeadline({ projectId: f.projectId, purchasePriceCents: 1, totalBudgetCents: null, projectedSelloutCents: null, loanAmountCents: null }) },
+  "financials.saveLine": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveLine({ projectId: f.projectId, category: "soft", name: `L ${uid()}`, originalCents: 100 }) },
+  "financials.deleteLine": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteLine({ projectId: f.projectId, id: (await fin("budgetLine", f.projectId)).id }) },
+  "financials.startBudget": { allowed: FIN_EDIT, call: (c, f) => c.financials.startBudget({ projectId: f.projectId }) },
+  "financials.saveCommitment": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveCommitment({ projectId: f.projectId, vendorName: "V", amountCents: 100 }) },
+  "financials.deleteCommitment": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteCommitment({ projectId: f.projectId, id: (await fin("commitment", f.projectId)).id }) },
+  "financials.saveInvoice": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveInvoice({ projectId: f.projectId, vendorName: "V", amountCents: 100 }) },
+  "financials.decideInvoice": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const line = await fin("budgetLine", f.projectId);
+      const inv = await fin("invoice", f.projectId, { budgetLineId: line.id });
+      return c.financials.decideInvoice({ projectId: f.projectId, id: inv.id, version: inv.version, decision: "approved" });
+    },
+  },
+  "financials.markPaid": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const inv = await fin("invoice", f.projectId, { status: "approved" });
+      return c.financials.markPaid({ projectId: f.projectId, id: inv.id, version: inv.version, paidOn: "2030-01-02" });
+    },
+  },
+  "financials.deleteInvoice": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteInvoice({ projectId: f.projectId, id: (await fin("invoice", f.projectId)).id }) },
+  "financials.saveChangeOrder": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveChangeOrder({ projectId: f.projectId, description: "x", amountCents: 100 }) },
+  "financials.decideChangeOrder": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const line = await fin("budgetLine", f.projectId);
+      const co = await fin("changeOrder", f.projectId, { budgetLineId: line.id });
+      return c.financials.decideChangeOrder({ projectId: f.projectId, id: co.id, version: co.version, decision: "approved" });
+    },
+  },
+  "financials.deleteChangeOrder": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteChangeOrder({ projectId: f.projectId, id: (await fin("changeOrder", f.projectId)).id }) },
+  "financials.createDraw": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      await db().update(schema.draw).set({ status: "funded" }).where(and(eq(schema.draw.projectId, f.projectId), eq(schema.draw.status, "draft")));
+      return c.financials.createDraw({ projectId: f.projectId });
+    },
+  },
+  "financials.updateDraw": { allowed: FIN_EDIT, call: async (c, f) => { const d = await fin("draw", f.projectId, { status: "submitted" }); return c.financials.updateDraw({ projectId: f.projectId, id: d.id, version: d.version, notes: "n" }); } },
+  "financials.advanceDraw": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const d = await fin("draw", f.projectId, { status: "inspector_approved" });
+      return c.financials.advanceDraw({ projectId: f.projectId, id: d.id, version: d.version });
+    },
+  },
+  "financials.deleteDraw": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteDraw({ projectId: f.projectId, id: (await fin("draw", f.projectId, { status: "draft" })).id }) },
+  "financials.saveUnit": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveUnit({ projectId: f.projectId, unit: `U${uid()}`, status: "available" }) },
+  "financials.deleteUnit": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteUnit({ projectId: f.projectId, id: (await fin("saleUnit", f.projectId)).id }) },
 
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],

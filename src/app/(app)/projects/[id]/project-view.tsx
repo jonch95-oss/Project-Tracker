@@ -10,7 +10,6 @@ import { IconArrowLeft } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
 import { Badge, Button, Skeleton, StatusPill } from "@/components/ui/primitives";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
-import { formatMoney } from "@/core/money";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
 import { projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
@@ -19,6 +18,7 @@ import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { ActivityTab } from "./activity-tab";
 import { ChecklistTab } from "./checklist-tab";
 import { FilesTab } from "./files-tab";
+import { FinancialsTab } from "./financials-tab";
 import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
 import { PhaseStepper } from "./phase-stepper";
@@ -139,7 +139,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
         ) : tab === "team" ? (
           <TeamTab projectId={projectId} canManage={p.access.canManageMembers} />
         ) : tab === "financials" && p.access.canViewFinancials ? (
-          <FinancialsTab project={p} onEdit={p.access.canEditFinancials ? () => setEditing(true) : undefined} />
+          <FinancialsTab projectId={projectId} />
         ) : tab === "activity" ? (
           <ActivityTab projectId={projectId} />
         ) : (
@@ -236,37 +236,6 @@ function Overview({ project: p, viewerId, onOpenTask, onOpenDates }: { project: 
   );
 }
 
-function FinancialsTab({ project: p, onEdit }: { project: Project; onEdit?: () => void }) {
-  const h = p.headline;
-  const rows = [
-    ["Purchase price", h?.purchasePriceCents],
-    ["Total project budget", h?.totalBudgetCents],
-    ["Projected sellout", h?.projectedSelloutCents],
-  ] as const;
-  return (
-    <section aria-labelledby="fin-h">
-      <div className="mb-6 flex items-center justify-between gap-4">
-        <h2 id="fin-h" className="serif text-heading">
-          Headline financials
-        </h2>
-        {onEdit && (
-          <Button variant="secondary" onClick={onEdit}>
-            Edit
-          </Button>
-        )}
-      </div>
-      <dl className="grid gap-4 sm:grid-cols-3">
-        {rows.map(([k, v]) => (
-          <div key={k} className="rounded-card border border-border bg-surface p-6">
-            <dt className="text-[13px] text-muted">{k}</dt>
-            <dd className="serif num mt-2 text-heading">{v == null ? "—" : formatMoney(v, { whole: true })}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="mt-6 text-[13px] text-muted">Budget lines, commitments, invoices, change orders, draws and the sales tracker build on these numbers.</p>
-    </section>
-  );
-}
 
 const UPCOMING: Record<string, { title: string; body: string }> = {
   records: { title: "Public records are on the way", body: "Nightly DOB, HPD, ECB, ACRIS and tax checks for this BBL, with alerts when anything changes." },

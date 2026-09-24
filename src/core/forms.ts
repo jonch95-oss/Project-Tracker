@@ -48,10 +48,24 @@ export function optionalMoney(raw: string | null | undefined, field: string, lab
   }
 }
 
+/** Amounts that may be negative (a credit change order, a budget adjustment): "-5,000" or "(5,000)". */
+export function optionalSignedMoney(raw: string | null | undefined, field: string, label: string): Cents | null {
+  const s = (raw ?? "").trim();
+  if (s === "") return null;
+  try {
+    return parseMoney(s);
+  } catch (e) {
+    if (e instanceof MoneyError) throw new FieldError(field, `${label} isn't a valid amount.`);
+    throw e;
+  }
+}
+
 /** Cents back to an editable string ("1250000.50" → "1,250,000.50"; whole dollars drop the cents). */
 export function centsToInput(cents: Cents | null | undefined): string {
   if (cents == null) return "";
-  const whole = Math.trunc(cents / 100);
-  const frac = Math.abs(cents % 100);
-  return `${whole.toLocaleString("en-US")}${frac ? `.${String(frac).padStart(2, "0")}` : ""}`;
+  const sign = cents < 0 ? "-" : "";
+  const abs = Math.abs(cents);
+  const whole = Math.floor(abs / 100);
+  const frac = abs % 100;
+  return `${sign}${whole.toLocaleString("en-US")}${frac ? `.${String(frac).padStart(2, "0")}` : ""}`;
 }

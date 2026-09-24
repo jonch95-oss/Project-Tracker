@@ -18,7 +18,8 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
   const companies = useQuery({ ...trpc.companies.list.queryOptions(), enabled: open });
   const [fieldError, setFieldError] = useState<FieldError | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const showHeadline = project.access.canEditFinancials;
+  // Money is edited on the Financials tab now (its headline follows the budget and unit schedule).
+  const showHeadline = false;
 
   const refresh = () =>
     Promise.all([

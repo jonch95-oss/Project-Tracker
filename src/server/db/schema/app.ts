@@ -264,6 +264,8 @@ export const projectHeadline = pgTable("project_headline", {
   purchasePriceCents: bigint("purchase_price_cents", { mode: "number" }),
   totalBudgetCents: bigint("total_budget_cents", { mode: "number" }),
   projectedSelloutCents: bigint("projected_sellout_cents", { mode: "number" }),
+  /** Senior debt, for equity required and the equity multiple (brief §8). */
+  loanAmountCents: bigint("loan_amount_cents", { mode: "number" }),
   updatedAt: updatedAt(),
 });
 
@@ -667,4 +669,168 @@ export const taskAttachment = pgTable(
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.taskId, t.fileId] }), index("task_attachment_file_idx").on(t.fileId)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Financials (brief §8). Every amount is integer cents.               */
+/* ------------------------------------------------------------------ */
+
+const money = (name: string) => bigint(name, { mode: "number" });
+
+export const budgetLine = pgTable(
+  "budget_line",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    name: text("name").notNull(),
+    originalCents: money("original_cents").notNull().default(0),
+    notes: text("notes"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("budget_line_project_idx").on(t.projectId, t.category, t.sortOrder)],
+);
+
+/** Contracts / POs by vendor. */
+export const commitment = pgTable(
+  "commitment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    budgetLineId: uuid("budget_line_id").references(() => budgetLine.id, { onDelete: "set null" }),
+    vendorName: text("vendor_name").notNull(),
+    /** Directory vendor (Milestone 10). */
+    vendorId: uuid("vendor_id"),
+    description: text("description"),
+    amountCents: money("amount_cents").notNull(),
+    status: text("status", { enum: ["draft", "executed", "closed"] }).notNull().default("executed"),
+    signedOn: text("signed_on"),
+    /** Retainage withheld on this contract's invoices, basis points. */
+    retainageBps: integer("retainage_bps").notNull().default(0),
+    fileId: uuid("file_id").references(() => file.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("commitment_project_idx").on(t.projectId)],
+);
+
+export const draw = pgTable(
+  "draw",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    periodEnd: text("period_end"),
+    status: text("status", { enum: ["draft", "submitted", "inspector_approved", "funded"] }).notNull().default("draft"),
+    /** Lien waiver checklist: one row per vendor on the draw. */
+    lienWaivers: jsonb("lien_waivers").$type<{ vendor: string; received: boolean }[]>().notNull().default([]),
+    inspectorName: text("inspector_name"),
+    inspectorSignedOn: text("inspector_signed_on"),
+    submittedOn: text("submitted_on"),
+    fundedOn: text("funded_on"),
+    /** Amount the lender actually funded (may differ from the request). */
+    fundedCents: money("funded_cents"),
+    notes: text("notes"),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("draw_project_number_idx").on(t.projectId, t.number)],
+);
+
+export const invoice = pgTable(
+  "invoice",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    budgetLineId: uuid("budget_line_id").references(() => budgetLine.id, { onDelete: "set null" }),
+    commitmentId: uuid("commitment_id").references(() => commitment.id, { onDelete: "set null" }),
+    vendorName: text("vendor_name").notNull(),
+    vendorId: uuid("vendor_id"),
+    number: text("number"),
+    invoiceDate: text("invoice_date"),
+    amountCents: money("amount_cents").notNull(),
+    retainageBps: integer("retainage_bps").notNull().default(0),
+    status: text("status", { enum: ["received", "approved", "rejected", "paid"] }).notNull().default("received"),
+    note: text("note"),
+    decisionNote: text("decision_note"),
+    decidedById: text("decided_by_id").references(() => user.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    paidOn: text("paid_on"),
+    drawId: uuid("draw_id").references(() => draw.id, { onDelete: "set null" }),
+    /** The invoice PDF, kept in the gated Financial folder. */
+    fileId: uuid("file_id").references(() => file.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("invoice_project_idx").on(t.projectId, t.status), index("invoice_draw_idx").on(t.drawId)],
+);
+
+export const changeOrder = pgTable(
+  "change_order",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    budgetLineId: uuid("budget_line_id").references(() => budgetLine.id, { onDelete: "set null" }),
+    commitmentId: uuid("commitment_id").references(() => commitment.id, { onDelete: "set null" }),
+    number: integer("number").notNull(),
+    description: text("description").notNull(),
+    /** Positive adds to the budget; negative is a credit. */
+    amountCents: money("amount_cents").notNull(),
+    scheduleDays: integer("schedule_days").notNull().default(0),
+    status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull().default("pending"),
+    decisionNote: text("decision_note"),
+    decidedById: text("decided_by_id").references(() => user.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    fileId: uuid("file_id").references(() => file.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("change_order_project_number_idx").on(t.projectId, t.number)],
+);
+
+/** Sales tracker, per unit (brief §8; Module L extends it in Milestone 10). */
+export const saleUnit = pgTable(
+  "sale_unit",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    unit: text("unit").notNull(),
+    floor: text("floor"),
+    sf: integer("sf"),
+    beds: numeric("beds", { precision: 3, scale: 1, mode: "number" }),
+    baths: numeric("baths", { precision: 3, scale: 1, mode: "number" }),
+    askCents: money("ask_cents"),
+    contractCents: money("contract_cents"),
+    status: text("status", { enum: ["available", "reserved", "contract", "closed"] }).notNull().default("available"),
+    buyerName: text("buyer_name"),
+    contractOn: text("contract_on"),
+    closingOn: text("closing_on"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("sale_unit_project_unit_idx").on(t.projectId, sql`lower(${t.unit})`)],
 );
