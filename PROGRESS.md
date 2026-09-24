@@ -1,5 +1,73 @@
 # Progress
 
+## Milestone 5 — Files (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (each project's Files tab; attachments in every task sheet)
+
+### What shipped
+
+- **Folders:** every project gets its template's folders (brief §14): Acquisition, Legal, Title & Survey, Environmental, Design, DOB & Permits, Construction, Photos, Financial, Sales, Closeout.
+  - Financial is **gated**: only people with financial access on the project ever see it or anything in it, including names in the activity feed and moves in or out.
+  - Financial and Photos always exist, even if a template leaves them out.
+  - Folders can be added, renamed and removed (empty ones) per project, and edited per template in the Template studio.
+- **Uploads:**
+  - straight from the device to private Blob storage, with signed tokens scoped to one object, its size and its type
+  - up to 500 MB per file, with progress and a warning over 100 MB (storage is shared 10 GB)
+  - multi-file and drag-and-drop on desktop, a file picker on iPhone
+  - the upload window scales with file size, and leaving mid-upload asks first
+- **Versions:** upload a new version of any file. Every version stays downloadable, with who uploaded it and when.
+- **Previews:** image thumbnails made on the device, a full image preview, and an inline PDF viewer (the whole PDF opens with Open).
+- **Downloads** are checked for access on every request, then served from a signed storage link that expires in 5 minutes. Anything that isn't an image or PDF is stored and served as a plain download, never rendered as a page.
+- **Trash:** removed files are kept 30 days (restore puts them back everywhere), then purged automatically. Admins can delete for good, with a confirmation.
+- **Task attachments:** upload onto a task or attach an existing file. A file lives in its folder and shows on the task.
+  - A task with a required attachment routes one-tap complete to the attach step, and approval re-checks it.
+  - Outside collaborators can upload onto their own tasks even with no folders shared. The file is filed by the task's phase and they see it only on the task.
+- **Sharing with outside collaborators:** admins share folders one by one. Outsiders see only shared folders; site photos follow the Photos folder, and they get no hero photos they can't open.
+- **Virus-scan hook:** set `VIRUS_SCAN_URL` to have every upload checked before it's recorded. A flagged file is deleted and refused. No free hosted scanner exists that fits the $0 rule, so by default files are recorded "not scanned".
+
+### Review
+
+The independent review found no P0 issues, 6 P1 and 12 P2; all fixed, with regression tests:
+- **P1:**
+  - uploads of HTML or SVG are stored as plain downloads, so they can't run on the storage domain
+  - Financial and Photos folders are guaranteed
+  - long uploads get a longer window
+  - outsiders' cards no longer show broken hero images
+  - outsiders can attach to their own tasks
+  - a confirmation before deleting for good
+- **P2:**
+  - two purges at once count the bytes back once
+  - thumbnail paths can't collide
+  - non-Latin file names keep their extension
+  - gated attachments can't be detached without financial access
+  - approval re-checks required attachments
+  - the download route uses a light access check and a 4-minute cached redirect
+  - scanning only when configured, after the upload is claimed
+  - drops outside the zone never navigate away
+  - the large-file warning on new versions
+  - "complete" rolls back before routing to the attach step, including from My Tasks
+  - honest trash wording
+  - download URLs are covered by permission tests for every role
+  - PDF preview on phones
+
+### Test results
+
+- Unit: 196 tests
+- Integration: 1,308 tests, including:
+  - the permission matrix for every Files procedure
+  - a download-route matrix (anonymous, owner, members with and without financial access, outsiders with and without shares, unassigned)
+  - the review regressions above
+- E2E: 23/23. New:
+  - upload into a folder, preview, new version, rename, trash and restore
+  - a required-attachment task routes to the attach step, then completes
+  - sharing a folder with the architect, who then sees only that folder
+- Checked at 1440px and at iPhone size (393px) with no horizontal scroll: folder list, folder view, file sheet with preview
+
+### Known limitations
+
+- The virus scan is a hook, not a scanner (no free hosted option); see above.
+- A renamed file downloads under its original file name; the app shows the new name everywhere.
+
 ## Milestone 4 — Tasks (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (My Tasks, Inbox, the Needs-you rail on Portfolio, and each project's Checklist and Key Dates tabs)

@@ -32,6 +32,7 @@ export function ChecklistTab({
   focusPhase,
   focusTask,
   onFocusTask,
+  focusAttach,
 }: {
   projectId: string;
   canSaveTemplate: boolean;
@@ -39,6 +40,8 @@ export function ChecklistTab({
   /** The open task lives in the URL (?task=) so notifications and My Tasks can link straight to it. */
   focusTask?: string | null;
   onFocusTask: (taskId: string | null) => void;
+  /** Opened from "complete" elsewhere (My Tasks) because an attachment is needed first. */
+  focusAttach?: boolean;
 }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
@@ -65,7 +68,9 @@ export function ChecklistTab({
         if (prev) qc.setQueryData<Checklist>(key, { ...prev, tasks: prev.tasks.map((t) => (t.id === v.taskId ? { ...t, status: v.done ? (t.requiresApproval && !prev.access.canApprove ? "awaiting_approval" : "done") : "not_started" } : t)) });
         return { prev };
       },
-      onSuccess: (r, v) => {
+      onSuccess: (r, v, ctx) => {
+        // Nothing changed on the server: undo the optimistic tick before routing to the attach step.
+        if (r.status === "needs_attachment" && ctx?.prev) qc.setQueryData(trpc.checklist.get.queryKey({ projectId }), ctx.prev);
         // Take the server's new version at once, so a quick second tap isn't refused as stale.
         const key = trpc.checklist.get.queryKey({ projectId });
         const cur = qc.getQueryData<Checklist>(key);
@@ -276,7 +281,7 @@ export function ChecklistTab({
           }}
           onChanged={refresh}
           onToggle={() => toggle(current)}
-          focusAttachments={attachFor === current.id}
+          focusAttachments={attachFor === current.id || (!!focusAttach && focusTask === current.id)}
         />
       )}
       {dialog === "toggles" && <TogglesDialog projectId={projectId} checklist={cl} onClose={() => setDialog(null)} onChanged={refresh} />}

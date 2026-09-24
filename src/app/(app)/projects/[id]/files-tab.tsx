@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconArrowLeft, IconChevronRight, IconLock, IconPaperclip, IconPlus, IconTeam } from "@/components/ui/icons";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
@@ -245,12 +245,25 @@ function FolderView({
 
 function DropZone({ onFiles, disabled, children }: { onFiles: (f: FileList | null) => void; disabled: boolean; children: ReactNode }) {
   const [over, setOver] = useState(false);
+  useEffect(() => {
+    // A file dropped anywhere else on the page must not navigate away (and kill uploads).
+    const stop = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    window.addEventListener("dragover", stop);
+    window.addEventListener("drop", stop);
+    return () => {
+      window.removeEventListener("dragover", stop);
+      window.removeEventListener("drop", stop);
+    };
+  }, []);
   return (
     <div
       onDragOver={(e) => {
-        if (disabled || !e.dataTransfer.types.includes("Files")) return;
+        if (!e.dataTransfer.types.includes("Files")) return;
+        // Always claim the drop, so the browser never opens the file and leaves the app.
         e.preventDefault();
-        setOver(true);
+        if (!disabled) setOver(true);
       }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => {
@@ -455,6 +468,7 @@ export function FileSheet({ projectId, fileId, folders, onClose }: { projectId: 
                       const file = e.target.files?.[0];
                       e.target.value = "";
                       if (!file) return;
+                      if (largeFiles([file]).length && !window.confirm(`${file.name} is ${formatFileSize(file.size)}. All project files share 10 GB of storage — upload anyway?`)) return;
                       const r = await up.upload([file], { fileId });
                       if (r.ok) toast("success", "New version uploaded");
                       await invalidate();
@@ -487,7 +501,7 @@ export function FileSheet({ projectId, fileId, folders, onClose }: { projectId: 
       <ConfirmDialog
         open={confirmRemove}
         title="Move to the trash?"
-        body={`It's taken off every task too, and kept in the trash for ${TRASH_DAYS} days in case you need it back.`}
+        body={`It disappears from Files and from any task it's on. It stays in the trash for ${TRASH_DAYS} days; restoring it puts it back everywhere.`}
         confirmLabel="Move to trash"
         danger
         busy={remove.isPending}
@@ -506,8 +520,8 @@ function Preview({ versionId, kind, name }: { versionId: string; kind: "image" |
   if (kind === "pdf") {
     return (
       <div>
-        <iframe src={fileUrl(versionId)} title={`Preview of ${name}`} className="hidden h-[60vh] w-full rounded-panel border border-border bg-sunken sm:block" />
-        <p className="text-[13px] text-muted sm:hidden">Tap Open to read the PDF.</p>
+        <iframe src={fileUrl(versionId)} title={`Preview of ${name}`} className="h-[50vh] w-full rounded-panel border border-border bg-sunken sm:h-[60vh]" />
+        <p className="mt-2 text-[13px] text-muted sm:hidden">On a phone the preview may show the first page only. Tap Open for the whole PDF.</p>
       </div>
     );
   }
@@ -668,6 +682,7 @@ function TrashDialog({ projectId, canPurge, onClose }: { projectId: string; canP
   const onError = (e: unknown) => toast("error", errorMessage(e));
   const restore = useMutation(trpc.files.restore.mutationOptions({ onSuccess: () => toast("success", "Restored"), onError, onSettled: invalidate }));
   const purge = useMutation(trpc.files.purge.mutationOptions({ onSuccess: () => toast("success", "Deleted for good"), onError, onSettled: invalidate }));
+  const [confirmPurge, setConfirmPurge] = useState<{ id: string; name: string } | null>(null);
   return (
     <Dialog open onClose={onClose} size="lg" title="Trash" description={`Removed files are kept ${TRASH_DAYS} days, then deleted for good.`}>
       {q.isPending ? (
@@ -688,7 +703,7 @@ function TrashDialog({ projectId, canPurge, onClose }: { projectId: string; canP
                 Restore
               </Button>
               {canPurge && (
-                <Button size="sm" variant="ghost" onClick={() => purge.mutate({ projectId, fileId: f.id })}>
+                <Button size="sm" variant="ghost" onClick={() => setConfirmPurge({ id: f.id, name: f.name })}>
                   Delete now
                 </Button>
               )}
@@ -696,6 +711,32 @@ function TrashDialog({ projectId, canPurge, onClose }: { projectId: string; canP
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        open={!!confirmPurge}
+        title={`Delete ${confirmPurge?.name ?? "this file"} for good?`}
+        body="Every version is deleted permanently. This can't be undone."
+        confirmLabel="Delete for good"
+        danger
+        busy={purge.isPending}
+        onCancel={() => setConfirmPurge(null)}
+        onConfirm={() => {
+          purge.mutate({ projectId, fileId: confirmPurge!.id });
+          setConfirmPurge(null);
+        }}
+      />
+      <ConfirmDialog
+        open={!!confirmPurge}
+        title={`Delete ${confirmPurge?.name ?? "this file"} for good?`}
+        body="Every version is deleted permanently. This can't be undone."
+        confirmLabel="Delete for good"
+        danger
+        busy={purge.isPending}
+        onCancel={() => setConfirmPurge(null)}
+        onConfirm={() => {
+          purge.mutate({ projectId, fileId: confirmPurge!.id });
+          setConfirmPurge(null);
+        }}
+      />
     </Dialog>
   );
 }

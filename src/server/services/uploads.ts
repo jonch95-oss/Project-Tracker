@@ -5,10 +5,15 @@ import { and, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { FREE_TIER_LIMITS, uploadAllowed } from "@/core/freeTier";
 import { db, schema, type Database, type DbOrTx } from "../db";
 import { storage } from "../storage";
+import { logError } from "./errors";
 import { bumpCounter } from "./usage";
 
-/** How long a client has to finish an authorized upload. */
+/** How long a client has to finish an authorized upload (small files). */
 export const UPLOAD_WINDOW_MS = 15 * 60 * 1000;
+/** Big files get longer: 15 minutes plus the time at a slow 1 Mbps uplink, up to 2 hours. */
+export function uploadWindowMs(totalBytes: number): number {
+  return Math.min(2 * 3_600_000, UPLOAD_WINDOW_MS + Math.ceil((totalBytes * 8) / 1_000_000) * 1000);
+}
 
 export type UploadObject = { role: string; pathname: string; maxBytes: number; contentType: string };
 export type PendingUpload = typeof schema.pendingUpload.$inferSelect;
@@ -62,7 +67,7 @@ export async function createPendingUpload(
 ): Promise<PendingUpload> {
   const [row] = await conn
     .insert(schema.pendingUpload)
-    .values({ ...input, meta: input.meta ?? null, expiresAt: new Date(now.getTime() + UPLOAD_WINDOW_MS) })
+    .values({ ...input, meta: input.meta ?? null, expiresAt: new Date(now.getTime() + uploadWindowMs(input.objects.reduce((s, o) => s + o.maxBytes, 0))) })
     .returning();
   return row!;
 }
@@ -116,10 +121,18 @@ export async function meterStored(bytes: number): Promise<void> {
   if (bytes > 0) await bumpCounter("blob.storage", bytes);
 }
 
-/** Remove stored objects and give their bytes back to the meter. */
+/**
+ * Remove stored objects and give their bytes back to the meter. The meter
+ * goes down first (the rows are already gone); a storage failure is logged
+ * with the keys so they can be removed by hand rather than lost silently.
+ */
 export async function deleteStoredObjects(pathnames: string[], bytes: number): Promise<void> {
-  await storage().delete(pathnames);
   if (bytes > 0) await bumpCounter("blob.storage", -bytes);
+  try {
+    await storage().delete(pathnames);
+  } catch (e) {
+    await logError("job", e, { path: "storage.delete", context: { pathnames } });
+  }
 }
 
 /**

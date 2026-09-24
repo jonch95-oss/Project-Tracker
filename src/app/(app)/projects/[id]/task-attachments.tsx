@@ -29,10 +29,11 @@ export function TaskAttachments({ projectId, taskId, required, canWork, highligh
   const [open, setOpen] = useState<string | null>(null);
   const detach = useMutation(trpc.files.detach.mutationOptions({ onError: (e) => toast("error", errorMessage(e)), onSettled: invalidate }));
 
-  const usable = (folders.data?.folders ?? []).filter((f) => !f.gated);
-  const target = folderId || usable[0]?.id || folders.data?.folders[0]?.id || "";
-  const files = list.data ?? [];
-  const missing = !!required && files.length === 0;
+  const visibleFolders = folders.data?.folders ?? [];
+  // Blank = let the server file it by the task's phase (it may be a folder this person can't browse).
+  const target = folderId;
+  const files = list.data?.files ?? [];
+  const missing = !!required && files.length === 0 && (list.data?.hidden ?? 0) === 0;
   const section = useRef<HTMLElement>(null);
   useEffect(() => {
     if (highlight) section.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -41,9 +42,9 @@ export function TaskAttachments({ projectId, taskId, required, canWork, highligh
   const pick = async (fl: FileList | null) => {
     const chosen = [...(fl ?? [])];
     if (input.current) input.current.value = "";
-    if (!chosen.length || !target) return;
+    if (!chosen.length) return;
     if (largeFiles(chosen).length && !window.confirm("Over 100 MB. All project files share 10 GB of storage — upload anyway?")) return;
-    const r = await up.upload(chosen, { folderId: target, taskId });
+    const r = await up.upload(chosen, target ? { folderId: target, taskId } : { taskId });
     if (r.ok) toast("success", r.ok === 1 ? "Attached" : `${r.ok} files attached`);
     await invalidate();
   };
@@ -54,11 +55,13 @@ export function TaskAttachments({ projectId, taskId, required, canWork, highligh
         <h3 id="td-att-h" className="flex items-center gap-2 text-[13px] font-medium">
           <IconPaperclip size={16} /> Attachments
         </h3>
-        {canWork && folders.data && folders.data.folders.length > 0 && (
+        {canWork && folders.data && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setPicking(true)}>
-              From Files
-            </Button>
+            {visibleFolders.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => setPicking(true)}>
+                From Files
+              </Button>
+            )}
             <Button variant="secondary" size="sm" onClick={() => input.current?.click()} loading={up.busy}>
               <IconPlus size={16} /> Upload
             </Button>
@@ -67,11 +70,12 @@ export function TaskAttachments({ projectId, taskId, required, canWork, highligh
         )}
       </div>
       {missing && <p className="mb-2 rounded-panel bg-attention-tint/60 px-3 py-2 text-[13px] text-attention-text">Needs {required} before it can be checked off.</p>}
-      {canWork && folders.data && folders.data.folders.length > 1 && (
+      {canWork && visibleFolders.length > 1 && (
         <div className="mb-3 max-w-xs">
           <Field label="Uploads go to" htmlFor="att-folder">
             <Select id="att-folder" value={target} onChange={(e) => setFolderId(e.target.value)}>
-              {folders.data.folders.map((f) => (
+              <option value="">The folder for this phase</option>
+              {visibleFolders.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>
@@ -108,7 +112,8 @@ export function TaskAttachments({ projectId, taskId, required, canWork, highligh
           ))}
         </ul>
       )}
-      {open && <FileSheet projectId={projectId} fileId={open} folders={folders.data?.folders ?? []} onClose={() => setOpen(null)} />}
+      {(list.data?.hidden ?? 0) > 0 && <p className="mt-2 text-[12px] text-muted">Plus {list.data!.hidden} restricted file{list.data!.hidden === 1 ? "" : "s"}.</p>}
+      {open && <FileSheet projectId={projectId} fileId={open} folders={visibleFolders} onClose={() => setOpen(null)} />}
       {picking && <PickFromFiles projectId={projectId} taskId={taskId} onClose={() => setPicking(false)} />}
     </section>
   );

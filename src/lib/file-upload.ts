@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fitLongEdge } from "@/core/images";
 import { MAX_FILE_BYTES, MAX_THUMB_BYTES, MULTIPART_FROM_BYTES, normalizeContentType, previewKind, THUMB_LONG_EDGE, WARN_FILE_BYTES, formatFileSize } from "@/core/files";
 import { errorMessage, useTRPC } from "./trpc";
@@ -125,8 +125,17 @@ export function useFileUpload(projectId: string) {
     [begin, complete, projectId],
   );
 
+  const busy = items.some((i) => i.state === "uploading");
+  useEffect(() => {
+    if (!busy) return;
+    // Leaving the page mid-upload would lose it: ask first.
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
+
   const clear = useCallback(() => setItems((cur) => cur.filter((i) => i.state === "uploading")), []);
-  return { upload, items, clear, busy: items.some((i) => i.state === "uploading") };
+  return { upload, items, clear, busy };
 }
 
 export function fileUrl(versionId: string, opts: { thumb?: boolean } = {}): string {

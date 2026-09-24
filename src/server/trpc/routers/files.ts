@@ -1,12 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { cleanDisplayName, DOWNLOAD_URL_TTL_MS, MAX_FILE_BYTES, MAX_THUMB_BYTES, normalizeContentType, previewKind } from "@/core/files";
+import { cleanDisplayName, DOWNLOAD_URL_TTL_MS, fileExtension, MAX_FILE_BYTES, MAX_THUMB_BYTES, normalizeContentType, previewKind, storedContentType } from "@/core/files";
 import { safeFileName } from "@/core/images";
 import { schema, type DbOrTx } from "../../db";
 import { storage } from "../../storage";
 import { recordAudit } from "../../services/audit";
-import { attachedVisibleFileIds, folderCounts, folderScope, purgeFiles, type FileRow, type FolderRow } from "../../services/files";
+import { attachedVisibleFileIds, defaultFolderForPhase, folderCounts, folderScope, purgeFiles, type FileRow, type FolderRow } from "../../services/files";
 import { scanner } from "../../services/scan";
 import { sharedTaskIds } from "../../services/tasks";
 import { assertUploadBudget, claimUpload, createPendingUpload, filePath, meterStored, openUpload, verifyUploadedObjects } from "../../services/uploads";
@@ -146,6 +146,14 @@ export const filesRouter = router({
       return rows.map((r) => ({ ...r, preview: previewKind(r.contentType) }));
     }),
 
+  /** Just "may this person read this file?" — for the download route (no version or task lists). */
+  canRead: projectProcedure()
+    .input(z.object({ fileId: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      await visibleFile(ctx as Ctx, ctx.db, input.fileId);
+      return { ok: true };
+    }),
+
   /** One file: its versions, and the tasks it's attached to (those the viewer can see). */
   get: projectProcedure()
     .input(z.object({ fileId: z.uuid() }))
@@ -196,33 +204,48 @@ export const filesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
-      if (!!input.folderId === !!input.fileId) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a folder, or a file to add a version to." });
+      if (input.folderId && input.fileId) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a folder, or a file to add a version to." });
+      if (!input.folderId && !input.fileId && !input.taskId) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a folder." });
       const scope = await folderScope(ctx.db, ctx.project, ctx.viewer.id);
+      const task = input.taskId ? await assertTaskAttachable(c, ctx.db, input.taskId) : null;
       let folder: FolderRow;
+      // Uploading straight onto a task you work (e.g. an outside collaborator's required attachment)
+      // doesn't need access to the folder it's filed in: they see it on the task only.
+      let viaTask = false;
       if (input.fileId) {
         const a = await visibleFile(c, ctx.db, input.fileId);
         if (!a.viaFolder) throw new TRPCError({ code: "FORBIDDEN", message: "You can open this file from the task, but not add versions to it." });
         folder = a.folder;
-      } else {
-        folder = await loadFolder(ctx.db, input.projectId, input.folderId!);
+      } else if (input.folderId) {
+        folder = await loadFolder(ctx.db, input.projectId, input.folderId);
         if (!scope.canSee(folder)) throw new TRPCError({ code: "NOT_FOUND", message: "Folder not found" });
+      } else {
+        const all = await ctx.db.select().from(schema.folder).where(eq(schema.folder.projectId, input.projectId));
+        const id = defaultFolderForPhase(all, task!.phaseKey);
+        if (!id) throw new TRPCError({ code: "BAD_REQUEST", message: "This project has no folder for task files." });
+        folder = all.find((f) => f.id === id)!;
+        viaTask = !scope.canSee(folder);
       }
-      if (!canWriteFolder(scope, folder)) throw new TRPCError({ code: "FORBIDDEN" });
-      if (input.taskId) await assertTaskAttachable(c, ctx.db, input.taskId);
-      const contentType = normalizeContentType(input.contentType);
+      if (!viaTask && !canWriteFolder(scope, folder)) throw new TRPCError({ code: "FORBIDDEN" });
+      // Only images and PDFs keep their type (they preview); everything else is stored as a plain
+      // download, so nothing uploaded can ever render as a page (HTML, SVG) from storage.
+      const contentType = storedContentType(normalizeContentType(input.contentType));
       if (input.thumb && previewKind(contentType) !== "image") throw new TRPCError({ code: "BAD_REQUEST", message: "Only images carry a thumbnail." });
       await assertUploadBudget(input.sizeBytes + (input.thumb?.bytes ?? 0), ctx.db);
       const name = cleanDisplayName(input.name);
-      const { dir, object } = filePath(input.projectId, safeFileName(name));
+      const ext = fileExtension(name);
+      const base = safeFileName(ext ? name.slice(0, -(ext.length + 1)) : name, "file");
+      const { dir, object } = filePath(input.projectId, ext ? `${base}.${ext}` : base);
       const row = await createPendingUpload(ctx.db, {
         userId: ctx.viewer.id,
         projectId: input.projectId,
         purpose: "file",
         objects: [
           { role: "file", pathname: object, maxBytes: input.sizeBytes, contentType },
-          ...(input.thumb ? [{ role: "thumb", pathname: `${dir}/thumb.${input.thumb.contentType === "image/webp" ? "webp" : "jpg"}`, maxBytes: input.thumb.bytes, contentType: input.thumb.contentType }] : []),
+          // A sibling of the file's folder, so no file name can collide with it.
+          ...(input.thumb ? [{ role: "thumb", pathname: `${dir}.thumb.${input.thumb.contentType === "image/webp" ? "webp" : "jpg"}`, maxBytes: input.thumb.bytes, contentType: input.thumb.contentType }] : []),
         ],
-        meta: { folderId: folder.id, fileId: input.fileId ?? null, name, taskId: input.taskId ?? null, note: input.note ?? null },
+        meta: { folderId: folder.id, fileId: input.fileId ?? null, name, taskId: input.taskId ?? null, note: input.note ?? null, viaTask },
       });
       return {
         uploadId: row.id,
@@ -238,55 +261,67 @@ export const filesRouter = router({
       const c = ctx as Ctx;
       const row = await openUpload(ctx.db, input.uploadId, ctx.viewer.id);
       if (!row || row.projectId !== input.projectId || row.purpose !== "file") throw new TRPCError({ code: "NOT_FOUND", message: "This upload has expired. Try again." });
-      const meta = row.meta as { folderId: string; fileId: string | null; name: string; taskId: string | null; note: string | null };
+      const meta = row.meta as { folderId: string; fileId: string | null; name: string; taskId: string | null; note: string | null; viaTask?: boolean };
       const objs = await verifyUploadedObjects(row);
       const main = objs.file!;
       const thumb = objs.thumb ?? null;
-      // Scan hook: infected bytes are deleted and never recorded.
-      const result = await scanner().scan({ downloadUrl: await storage().signedGetUrl(main.pathname, DOWNLOAD_URL_TTL_MS), name: meta.name, contentType: main.contentType, size: main.size });
+      const bytes = main.size + (thumb?.size ?? 0);
+      // Claim first: a double-submit can't scan twice or race the recording.
+      if (!(await ctx.db.transaction((tx) => claimUpload(tx, row.id, ctx.viewer.id)))) throw new TRPCError({ code: "NOT_FOUND", message: "This upload has already been saved or has expired." });
+      const discard = () => storage().delete(row.objects.map((o) => o.pathname)).catch(() => undefined);
+      const scan = scanner();
+      const result = scan.enabled ? await scan.scan({ downloadUrl: await storage().signedGetUrl(main.pathname, DOWNLOAD_URL_TTL_MS).catch(() => null), name: meta.name, contentType: main.contentType, size: main.size }) : "not_scanned";
       if (result === "infected") {
-        await storage().delete(row.objects.map((o) => o.pathname));
-        await ctx.db.update(schema.pendingUpload).set({ completedAt: new Date() }).where(eq(schema.pendingUpload.id, row.id));
+        await discard();
         throw new TRPCError({ code: "BAD_REQUEST", message: "The virus scan flagged this file, so it wasn't saved." });
       }
-      const out = await ctx.db.transaction(async (tx) => {
-        if (!(await claimUpload(tx, row.id, ctx.viewer.id))) throw new TRPCError({ code: "NOT_FOUND", message: "This upload has already been saved or has expired." });
-        // Re-check access inside the transaction: shares or folders may have changed during the upload.
-        const scope = await folderScope(tx, ctx.project, ctx.viewer.id);
-        const folder = await loadFolder(tx, input.projectId, meta.folderId);
-        if (!canWriteFolder(scope, folder)) throw new TRPCError({ code: "FORBIDDEN" });
-        let fileId = meta.fileId;
-        let number = 1;
-        if (fileId) {
-          const [f] = await tx.select().from(schema.file).where(and(eq(schema.file.id, fileId), eq(schema.file.projectId, input.projectId))).for("update");
-          if (!f || f.deletedAt || f.folderId !== folder.id) throw new TRPCError({ code: "CONFLICT", message: "That file was moved or removed while you were uploading." });
-          number = f.currentVersion + 1;
-          await tx.update(schema.file).set({ currentVersion: number, updatedAt: new Date(), version: sql`${schema.file.version} + 1` }).where(eq(schema.file.id, f.id));
-        } else {
-          const [f] = await tx.insert(schema.file).values({ projectId: input.projectId, folderId: folder.id, name: meta.name, createdById: ctx.viewer.id }).returning();
-          fileId = f!.id;
-        }
-        await tx.insert(schema.fileVersion).values({
-          fileId,
-          number,
-          objectKey: main.pathname,
-          thumbKey: thumb?.pathname ?? null,
-          originalName: meta.name,
-          contentType: main.contentType,
-          sizeBytes: main.size,
-          thumbBytes: thumb?.size ?? 0,
-          scanStatus: result,
-          note: meta.note,
-          uploadedById: ctx.viewer.id,
+      let out: { fileId: string; number: number };
+      try {
+        out = await ctx.db.transaction(async (tx) => {
+          // Re-check access: shares, folders or the task may have changed during the upload.
+          const scope = await folderScope(tx, ctx.project, ctx.viewer.id);
+          const folder = await loadFolder(tx, input.projectId, meta.folderId);
+          if (meta.viaTask) {
+            if (!meta.taskId) throw new TRPCError({ code: "FORBIDDEN" });
+            await assertTaskAttachable(c, tx, meta.taskId);
+          } else if (!canWriteFolder(scope, folder)) throw new TRPCError({ code: "FORBIDDEN" });
+          let fileId = meta.fileId;
+          let number = 1;
+          if (fileId) {
+            const [f] = await tx.select().from(schema.file).where(and(eq(schema.file.id, fileId), eq(schema.file.projectId, input.projectId))).for("update");
+            if (!f || f.deletedAt || f.folderId !== folder.id) throw new TRPCError({ code: "CONFLICT", message: "That file was moved or removed while you were uploading." });
+            number = f.currentVersion + 1;
+            await tx.update(schema.file).set({ currentVersion: number, updatedAt: new Date(), version: sql`${schema.file.version} + 1` }).where(eq(schema.file.id, f.id));
+          } else {
+            const [f] = await tx.insert(schema.file).values({ projectId: input.projectId, folderId: folder.id, name: meta.name, createdById: ctx.viewer.id }).returning();
+            fileId = f!.id;
+          }
+          await tx.insert(schema.fileVersion).values({
+            fileId,
+            number,
+            objectKey: main.pathname,
+            thumbKey: thumb?.pathname ?? null,
+            originalName: meta.name,
+            contentType: main.contentType,
+            sizeBytes: main.size,
+            thumbBytes: thumb?.size ?? 0,
+            scanStatus: result,
+            note: meta.note,
+            uploadedById: ctx.viewer.id,
+          });
+          if (meta.taskId) {
+            await assertTaskAttachable(c, tx, meta.taskId);
+            await tx.insert(schema.taskAttachment).values({ taskId: meta.taskId, fileId, addedById: ctx.viewer.id }).onConflictDoNothing();
+          }
+          await audit(tx, c, folder, number === 1 ? `${ctx.viewer.name} added ${meta.name} to ${folder.name}` : `${ctx.viewer.name} uploaded version ${number} of ${meta.name}`, fileId, "create", { bytes: main.size, taskId: meta.taskId });
+          return { fileId, number };
         });
-        if (meta.taskId) {
-          await assertTaskAttachable(c, tx, meta.taskId);
-          await tx.insert(schema.taskAttachment).values({ taskId: meta.taskId, fileId, addedById: ctx.viewer.id }).onConflictDoNothing();
-        }
-        await audit(tx, c, folder, number === 1 ? `${ctx.viewer.name} added ${meta.name} to ${folder.name}` : `${ctx.viewer.name} uploaded version ${number} of ${meta.name}`, fileId, "create", { bytes: main.size, taskId: meta.taskId });
-        return { fileId, number };
-      });
-      await meterStored(main.size + (thumb?.size ?? 0));
+      } catch (e) {
+        // Nothing points at the bytes: remove them (the claimed row is never cleaned up otherwise).
+        await discard();
+        throw e;
+      }
+      await meterStored(bytes);
       return { ...out, scanStatus: result };
     }),
 
@@ -406,6 +441,7 @@ export const filesRouter = router({
           .innerJoin(schema.folder, eq(schema.folder.id, schema.file.folderId))
           .where(and(eq(schema.taskAttachment.taskId, t.id), eq(schema.taskAttachment.fileId, input.fileId)));
         if (!row) return { ok: true };
+        if (row.gated && !ctx.project.can("financials.view")) throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
         await tx.delete(schema.taskAttachment).where(and(eq(schema.taskAttachment.taskId, t.id), eq(schema.taskAttachment.fileId, input.fileId)));
         await audit(tx, c, row, `${ctx.viewer.name} detached ${row.name} from "${t.title}"`, input.fileId, "update", { taskId: t.id });
         return { ok: true };
@@ -430,9 +466,9 @@ export const filesRouter = router({
         .leftJoin(schema.user, eq(schema.user.id, schema.fileVersion.uploadedById))
         .where(and(eq(schema.taskAttachment.taskId, input.taskId), eq(schema.file.projectId, input.projectId), isNull(schema.file.deletedAt)))
         .orderBy(asc(schema.taskAttachment.createdAt));
-      return rows
-        .filter((r) => !r.gated || fin)
-        .map((r) => ({ ...r, preview: previewKind(r.contentType), folderName: scope.ids.has(r.folderId) ? r.folderName : null }));
+      const files = rows.filter((r) => !r.gated || fin).map((r) => ({ ...r, preview: previewKind(r.contentType), folderName: scope.ids.has(r.folderId) ? r.folderName : null }));
+      // Attachments this person can't see still count toward a required attachment.
+      return { files, hidden: rows.length - files.length };
     }),
 
   /* ---------------- folders ---------------- */

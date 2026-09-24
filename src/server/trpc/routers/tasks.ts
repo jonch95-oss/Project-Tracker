@@ -281,6 +281,14 @@ export const tasksRouter = router({
         if (t.status !== "awaiting_approval") throw new TRPCError({ code: "CONFLICT", message: "This task isn't waiting for approval any more. It has been refreshed." });
         if (!canDecideApproval(t, { id: ctx.viewer.id, role: ctx.actor.role }) || !ctx.project.can("task.approve")) throw new TRPCError({ code: "FORBIDDEN", message: "This approval is waiting on someone else." });
         if (input.decision === "rejected" && !input.note) throw new TRPCError({ code: "BAD_REQUEST", message: "Add a note saying what needs to change." });
+        if (input.decision === "approved" && t.requiredAttachment) {
+          const [att] = await tx
+            .select({ n: sql<number>`count(*)::int` })
+            .from(schema.taskAttachment)
+            .innerJoin(schema.file, eq(schema.file.id, schema.taskAttachment.fileId))
+            .where(and(eq(schema.taskAttachment.taskId, t.id), isNull(schema.file.deletedAt)));
+          if ((att?.n ?? 0) === 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `The ${t.requiredAttachment} was removed. Send it back so it can be attached again.` });
+        }
         const today = todayET();
         const approved = input.decision === "approved";
         const version = await bump(tx, t.id, input.version, {

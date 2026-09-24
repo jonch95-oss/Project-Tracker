@@ -129,6 +129,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
             canSaveTemplate={p.access.canSaveTemplate}
             focusPhase={params.get("phase")}
             focusTask={params.get("task")}
+            focusAttach={params.get("attach") === "1"}
             onFocusTask={(id) => setTab("checklist", params.get("phase") ?? undefined, id ?? undefined)}
           />
         ) : tab === "files" ? (

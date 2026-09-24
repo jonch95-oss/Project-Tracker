@@ -357,6 +357,7 @@ const MATRIX: Record<string, Row | "public"> = {
 
   "files.folders": { allowed: ASSIGNED, call: (c, f) => c.files.folders({ projectId: f.projectId }) },
   "files.list": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.list({ projectId: f.projectId, folderId: await folderId(f.projectId) }) },
+  "files.canRead": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.canRead({ projectId: f.projectId, fileId: await freshFile(f.projectId) }) },
   "files.get": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.get({ projectId: f.projectId, fileId: await freshFile(f.projectId) }) },
   "files.beginUpload": {
     allowed: INTERNAL_ASSIGNED,

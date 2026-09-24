@@ -53,7 +53,7 @@ export function MyTasksView() {
       onSuccess: (r, v) => {
         if (r.status === "needs_attachment") {
           toast("error", `Attach ${"label" in r ? r.label : "the required file"} first.`);
-          router.push(`/projects/${v.projectId}?tab=checklist&task=${v.taskId}`);
+          router.push(`/projects/${v.projectId}?tab=checklist&task=${v.taskId}&attach=1`);
           return;
         }
         toast("success", r.status === "awaiting_approval" ? "Sent for approval" : "Done");

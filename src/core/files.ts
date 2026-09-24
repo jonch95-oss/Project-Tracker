@@ -35,6 +35,11 @@ export function normalizeContentType(type: string | null | undefined): string {
   return /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/.test(t) ? t : "application/octet-stream";
 }
 
+/** The type a file is stored under: images and PDFs keep theirs (they preview); anything else is a plain download. */
+export function storedContentType(type: string): string {
+  return previewKind(type) === "none" ? "application/octet-stream" : type;
+}
+
 /** A display name: trimmed, no path parts or control characters, at most 200 characters. */
 export function cleanDisplayName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "";

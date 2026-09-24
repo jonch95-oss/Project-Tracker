@@ -14,7 +14,7 @@ import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
-import { canSeePhotos } from "../../services/files";
+import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
 import { releaseFromProject, rerouteApprovals } from "../../services/tasks";
 import { globalProcedure, projectProcedure, protectedProcedure, router, type AuthedContext } from "../init";
 
@@ -239,9 +239,6 @@ async function membershipsOf(conn: DbOrTx, userId: string, projectIds: string[])
   return out;
 }
 
-function headlineOrNull(h: typeof schema.projectHeadline.$inferSelect | undefined) {
-  return h ? { purchasePriceCents: h.purchasePriceCents, totalBudgetCents: h.totalBudgetCents, projectedSelloutCents: h.projectedSelloutCents } : null;
-}
 
 const conflict = () =>
   new TRPCError({
@@ -270,6 +267,10 @@ async function savePhases(tx: DbOrTx, projectId: string, before: PhaseState[], a
       .set({ status: p.status, startedOn: p.startedOn, completedOn: p.completedOn })
       .where(and(eq(schema.projectPhase.projectId, projectId), eq(schema.projectPhase.key, p.key)));
   }
+}
+
+function headlineOrNull(h: typeof schema.projectHeadline.$inferSelect | undefined) {
+  return h ? { purchasePriceCents: h.purchasePriceCents, totalBudgetCents: h.totalBudgetCents, projectedSelloutCents: h.projectedSelloutCents } : null;
 }
 
 export const companiesRouter = router({
@@ -331,7 +332,9 @@ export const projectsRouter = router({
       .orderBy(asc(schema.project.name));
 
     const outsider = ctx.actor.role === "external" ? ctx.actor.userId : null;
-    const [phases, heroes, mine, counts, facts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, outsider), loadCardFacts(ctx.db, ids, outsider)]);
+    // Outside collaborators see a project's photos only when its Photos folder is shared with them.
+    const photoOk = outsider ? await projectsWithSharedPhotos(ctx.db, outsider, ids) : null;
+    const [phases, heroes, mine, counts, facts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, photoOk ? rows.filter((r) => photoOk.has(r.id)) : rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, outsider), loadCardFacts(ctx.db, ids, outsider)]);
     const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
     const headlines = finIds.length ? await ctx.db.select().from(schema.projectHeadline).where(inArray(schema.projectHeadline.projectId, finIds)) : [];
 
@@ -392,7 +395,8 @@ export const projectsRouter = router({
       .where(eq(schema.project.id, input.projectId));
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
     const outsider = ctx.project.can("task.viewAll") ? null : ctx.actor.userId;
-    const [phases, heroes, counts, facts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p]), loadTaskCounts(ctx.db, [p.id], outsider), loadCardFacts(ctx.db, [p.id], outsider)]);
+    const photosOk = await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id);
+    const [phases, heroes, counts, facts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, photosOk ? [p] : []), loadTaskCounts(ctx.db, [p.id], outsider), loadCardFacts(ctx.db, [p.id], outsider)]);
     const canFin = ctx.project.can("financials.view");
     const [h] = canFin ? await ctx.db.select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, p.id)) : [];
     return {
@@ -401,6 +405,7 @@ export const projectsRouter = router({
       taskCounts: counts.get(p.id) ?? {},
       facts: facts.get(p.id)!,
       hero: heroes.get(p.id) ?? null,
+      heroPhotoId: photosOk ? p.heroPhotoId : null,
       headline: canFin ? (headlineOrNull(h) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
       access: {
         projectRole: ctx.project.membership?.projectRole ?? (ctx.actor.role === "owner" ? "Owner" : null),
@@ -410,7 +415,7 @@ export const projectsRouter = router({
         canApprove: ctx.project.can("task.approve"),
         canEdit: ctx.project.can("project.edit"),
         canManageMembers: ctx.project.can("project.manageMembers"),
-        canUploadPhotos: ctx.project.can("photos.upload") || (await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id)),
+        canUploadPhotos: ctx.project.can("photos.upload") || photosOk,
         canManagePhotos: ctx.project.can("photos.manage"),
         canViewActivity: ctx.project.can("activity.view"),
         canSeeAllTasks: ctx.project.can("task.viewAll"),

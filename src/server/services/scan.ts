@@ -4,6 +4,8 @@ import { env } from "../env";
 export type ScanResult = "clean" | "infected" | "not_scanned";
 
 export interface Scanner {
+  /** False when no scanner is configured (files are recorded "not scanned" without extra work). */
+  enabled: boolean;
   scan(input: { downloadUrl: string | null; name: string; contentType: string; size: number }): Promise<ScanResult>;
 }
 
@@ -22,8 +24,9 @@ export function setScannerForTests(s: Scanner | null) {
 export function scanner(): Scanner {
   if (override) return override;
   const url = env().VIRUS_SCAN_URL;
-  if (!url) return { scan: async () => "not_scanned" };
+  if (!url) return { enabled: false, scan: async () => "not_scanned" };
   return {
+    enabled: true,
     async scan(input) {
       if (!input.downloadUrl) return "not_scanned";
       try {

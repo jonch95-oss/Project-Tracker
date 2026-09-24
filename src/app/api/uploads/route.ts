@@ -2,7 +2,7 @@ import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import { db } from "@/server/db";
 import { authedContextFrom } from "@/server/request-context";
-import { openUpload, UPLOAD_WINDOW_MS } from "@/server/services/uploads";
+import { openUpload } from "@/server/services/uploads";
 import { storage } from "@/server/storage";
 
 /**
@@ -32,7 +32,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           maximumSizeInBytes: obj.maxBytes,
           addRandomSuffix: false,
           allowOverwrite: false,
-          validUntil: Math.min(row.expiresAt.getTime(), Date.now() + UPLOAD_WINDOW_MS),
+          validUntil: row.expiresAt.getTime(),
         };
       },
     });

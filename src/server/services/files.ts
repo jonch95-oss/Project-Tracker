@@ -9,9 +9,14 @@ import { deleteStoredObjects } from "./uploads";
 export type FolderRow = typeof schema.folder.$inferSelect;
 export type FileRow = typeof schema.file.$inferSelect;
 
-/** A new project's folders, from its template (or the defaults). Financial is gated; Photos also holds site photos. */
+/**
+ * A new project's folders, from its template (or the defaults). Financial
+ * (gated) and Photos are always there, whatever the template says, so money
+ * documents always have a restricted home and site photos can be shared.
+ */
 export async function ensureProjectFolders(tx: DbOrTx, projectId: string, names: readonly string[] = DEFAULT_FOLDERS): Promise<void> {
-  const list = names.length ? names : DEFAULT_FOLDERS;
+  const list = [...(names.length ? names : DEFAULT_FOLDERS)];
+  for (const must of [PHOTOS_FOLDER, DEFAULT_GATED_FOLDER]) if (!list.some((n) => n.toLowerCase() === must.toLowerCase())) list.push(must);
   await tx
     .insert(schema.folder)
     .values(list.map((name, i) => ({ projectId, name, gated: name === DEFAULT_GATED_FOLDER, isPhotos: name === PHOTOS_FOLDER, sortOrder: i })))
@@ -59,6 +64,35 @@ export async function canSeePhotos(conn: DbOrTx, access: ProjectAccess, userId: 
   return !!f;
 }
 
+/** Of these projects, those whose Photos folder is shared with this outside collaborator. */
+export async function projectsWithSharedPhotos(conn: DbOrTx, userId: string, projectIds: string[]): Promise<Set<string>> {
+  if (projectIds.length === 0) return new Set();
+  const rows = await conn
+    .select({ projectId: schema.folder.projectId })
+    .from(schema.folder)
+    .innerJoin(schema.folderShare, and(eq(schema.folderShare.folderId, schema.folder.id), eq(schema.folderShare.userId, userId)))
+    .where(and(inArray(schema.folder.projectId, projectIds), eq(schema.folder.isPhotos, true)));
+  return new Set(rows.map((r) => r.projectId));
+}
+
+/** The folder a task's uploads go to by default: by phase, else the first ordinary folder. */
+export function defaultFolderForPhase(folders: Pick<FolderRow, "id" | "name" | "gated" | "isPhotos">[], phaseKey: string): string | null {
+  const byPhase: Record<string, string> = {
+    design_zoning: "Design",
+    dob_filing: "DOB & Permits",
+    tco_co: "DOB & Permits",
+    pre_construction: "Construction",
+    construction: "Construction",
+    ag_plan_sales: "Sales",
+    marketing: "Sales",
+    closed: "Closeout",
+    due_diligence: "Title & Survey",
+  };
+  const plain = folders.filter((f) => !f.gated && !f.isPhotos);
+  const want = byPhase[phaseKey] ?? "Acquisition";
+  return (plain.find((f) => f.name.toLowerCase() === want.toLowerCase()) ?? plain[0] ?? null)?.id ?? null;
+}
+
 /**
  * Files attached to tasks this person can see show on those tasks even if
  * the folder isn't theirs — except anything in the gated Financial folder,
@@ -75,20 +109,22 @@ export async function attachedVisibleFileIds(conn: DbOrTx, projectId: string, vi
   return new Set(rows.filter((r) => !r.gated || financials).map((r) => r.id));
 }
 
-/** Bytes of every version of the given files (for metering on purge). */
-async function fileBytes(conn: DbOrTx, fileIds: string[]) {
-  if (fileIds.length === 0) return { keys: [] as string[], bytes: 0 };
-  const v = await conn.select().from(schema.fileVersion).where(inArray(schema.fileVersion.fileId, fileIds));
-  return { keys: v.flatMap((x) => [x.objectKey, ...(x.thumbKey ? [x.thumbKey] : [])]), bytes: v.reduce((s, x) => s + x.sizeBytes + x.thumbBytes, 0) };
-}
-
-/** Delete files for good: bytes from storage (and the meter), then the rows. */
+/**
+ * Delete files for good. The rows go first, in one statement that returns
+ * exactly the versions it removed, so two purges at once can't both give the
+ * same bytes back to the meter; then their bytes leave storage.
+ */
 export async function purgeFiles(conn: Database, fileIds: string[]): Promise<number> {
   if (fileIds.length === 0) return 0;
-  const { keys, bytes } = await fileBytes(conn, fileIds);
-  await conn.delete(schema.file).where(inArray(schema.file.id, fileIds));
-  await deleteStoredObjects(keys, bytes);
-  return fileIds.length;
+  const { versions, files } = await conn.transaction(async (tx) => {
+    const versions = await tx.delete(schema.fileVersion).where(inArray(schema.fileVersion.fileId, fileIds)).returning();
+    const files = await tx.delete(schema.file).where(inArray(schema.file.id, fileIds)).returning({ id: schema.file.id });
+    return { versions, files };
+  });
+  const keys = versions.flatMap((x) => [x.objectKey, ...(x.thumbKey ? [x.thumbKey] : [])]);
+  const bytes = versions.reduce((s, x) => s + x.sizeBytes + x.thumbBytes, 0);
+  if (keys.length) await deleteStoredObjects(keys, bytes);
+  return files.length;
 }
 
 /** Hourly: files in the trash longer than TRASH_DAYS are purged. */

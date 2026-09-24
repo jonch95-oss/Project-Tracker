@@ -26,8 +26,8 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/files/[id]
     .where(and(eq(schema.fileVersion.id, id)));
   if (!v) return new Response("Not found", { status: 404 });
   try {
-    // The same visibility rules as the Files tab: if files.get refuses, so do we.
-    await createCaller(c).files.get({ projectId: v.projectId, fileId: v.v.fileId });
+    // The same visibility rules as the Files tab: if the files router refuses, so do we.
+    await createCaller(c).files.canRead({ projectId: v.projectId, fileId: v.v.fileId });
   } catch (e) {
     if (e instanceof TRPCError) return new Response("Not found", { status: 404 });
     throw e;
@@ -37,9 +37,12 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/files/[id]
   if (!key) return new Response("Not found", { status: 404 });
   const size = thumb ? v.v.thumbBytes : v.v.sizeBytes;
   await bumpCounter("blob.transfer", size);
-  const signed = await storage().signedGetUrl(key, DOWNLOAD_URL_TTL_MS);
+  const signed = await storage()
+    .signedGetUrl(key, DOWNLOAD_URL_TTL_MS)
+    .catch(() => null); // signing trouble: fall back to streaming it ourselves
   if (signed) {
-    return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" } });
+    // The browser may reuse this redirect for 4 minutes (the link lives 5), so a folder of thumbnails isn't re-signed on every view.
+    return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, max-age=240", "Referrer-Policy": "no-referrer" } });
   }
   const obj = await storage().get(key);
   if (!obj) return new Response("Not found", { status: 404 });

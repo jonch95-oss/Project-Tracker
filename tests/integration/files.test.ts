@@ -171,7 +171,7 @@ describe("files", () => {
     await expect(upload(xc, projectId, { folderId: legal.id, taskId: t!.id }, "LOI.pdf")).rejects.toMatchObject({ code: "NOT_FOUND" });
     // The team attaches a Legal file to the task; the outsider sees it there, not in Legal.
     const loi = await upload(mc, projectId, { folderId: legal.id, taskId: t!.id }, "LOI signed.pdf");
-    const onTask = await xc.files.forTask({ projectId, taskId: t!.id });
+    const onTask = (await xc.files.forTask({ projectId, taskId: t!.id })).files;
     expect(onTask.map((f) => f.id)).toEqual([loi.fileId]);
     expect(onTask[0]!.folderName).toBeNull();
     const seen = await xc.files.get({ projectId, fileId: loi.fileId });
@@ -180,7 +180,9 @@ describe("files", () => {
     // A gated file attached to the task stays hidden from them.
     const fin = await folderNamed(fc, projectId, "Financial");
     const gated = await upload(fc, projectId, { folderId: fin.id, taskId: t!.id }, "Wire instructions.pdf");
-    expect((await xc.files.forTask({ projectId, taskId: t!.id })).map((f) => f.id)).toEqual([loi.fileId]);
+    const after = await xc.files.forTask({ projectId, taskId: t!.id });
+    expect(after.files.map((f) => f.id)).toEqual([loi.fileId]);
+    expect(after.hidden).toBe(1);
     await expect(xc.files.get({ projectId, fileId: gated.fileId })).rejects.toMatchObject({ code: "NOT_FOUND" });
     // Now it completes.
     const done = await xc.checklist.setDone({ projectId, taskId: t!.id, done: true, version: 1 });
@@ -192,20 +194,20 @@ describe("files", () => {
     expect((await mc.checklist.setDone({ projectId, taskId: t2!.id, done: true, version: 1 })).status).toBe("needs_attachment");
     // Attach an existing file, then detach.
     await mc.files.attach({ projectId, taskId: t2!.id, fileId: loi.fileId });
-    expect((await mc.files.forTask({ projectId, taskId: t2!.id })).map((f) => f.id)).toEqual([loi.fileId]);
+    expect((await mc.files.forTask({ projectId, taskId: t2!.id })).files.map((f) => f.id)).toEqual([loi.fileId]);
     await mc.files.detach({ projectId, taskId: t2!.id, fileId: loi.fileId });
-    expect(await mc.files.forTask({ projectId, taskId: t2!.id })).toEqual([]);
+    expect((await mc.files.forTask({ projectId, taskId: t2!.id })).files).toEqual([]);
   });
 
   it("the virus-scan hook rejects infected files and deletes their bytes", async () => {
-    setScannerForTests({ scan: async () => "infected" });
+    setScannerForTests({ enabled: true, scan: async () => "infected" });
     const f = await folderNamed(mc, projectId, "Construction");
     const b = await mc.files.beginUpload({ projectId, folderId: f.id, name: "invoice.exe", contentType: "application/octet-stream", sizeBytes: 50 });
     for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(50), { contentType: o.contentType });
     await expect(mc.files.completeUpload({ projectId, uploadId: b.uploadId })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     for (const o of b.objects) expect(await storage().head(o.pathname)).toBeNull();
     expect((await mc.files.list({ projectId, folderId: f.id })).some((x) => x.name === "invoice.exe")).toBe(false);
-    setScannerForTests({ scan: async () => "clean" });
+    setScannerForTests({ enabled: true, scan: async () => "clean" });
     const ok = await upload(mc, projectId, { folderId: f.id }, "clean.pdf");
     expect(ok.scanStatus).toBe("clean");
   });
@@ -247,5 +249,77 @@ describe("files", () => {
     await oc.files.shareFolder({ projectId, folderId: d.id, userId: gc.id, on: true });
     await oc.members.remove({ projectId, userId: gc.id });
     expect(await db().select().from(schema.folderShare).where(and(eq(schema.folderShare.userId, gc.id)))).toHaveLength(0);
+  });
+
+  describe("Milestone 5 review regressions", () => {
+    it("an outsider can upload onto their own task even with no folders shared; it's filed by phase and seen only on the task", async () => {
+      const [t] = await db().insert(schema.task).values({ projectId, phaseKey: "design_zoning", title: "Upload stamped drawings", assigneeId: outsider.id, requiredAttachment: "Stamped set" }).returning();
+      const b = await xc.files.beginUpload({ projectId, taskId: t!.id, name: "A-100 stamped.pdf", contentType: "application/pdf", sizeBytes: 10 });
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(10), { contentType: o.contentType });
+      const r = await xc.files.completeUpload({ projectId, uploadId: b.uploadId });
+      const [f] = await db().select({ folder: schema.folder.name }).from(schema.file).innerJoin(schema.folder, eq(schema.folder.id, schema.file.folderId)).where(eq(schema.file.id, r.fileId));
+      expect(f!.folder).toBe("Design");
+      expect((await xc.files.forTask({ projectId, taskId: t!.id })).files.map((x) => x.id)).toEqual([r.fileId]);
+      expect((await xc.checklist.setDone({ projectId, taskId: t!.id, done: true, version: 1 })).status).toBe("done");
+      // Someone else's task: no.
+      const [other] = await db().insert(schema.task).values({ projectId, phaseKey: "design_zoning", title: "Not theirs" }).returning();
+      await expect(xc.files.beginUpload({ projectId, taskId: other!.id, name: "x.pdf", contentType: "application/pdf", sizeBytes: 10 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("only images and PDFs keep their type; names keep their extension; thumbnails can't collide", async () => {
+      const f = await folderNamed(mc, projectId, "Design");
+      const html = await mc.files.beginUpload({ projectId, folderId: f.id, name: "page.html", contentType: "text/html", sizeBytes: 5 });
+      expect(html.objects[0]!.contentType).toBe("application/octet-stream");
+      const svg = await mc.files.beginUpload({ projectId, folderId: f.id, name: "logo.svg", contentType: "image/svg+xml", sizeBytes: 5 });
+      expect(svg.objects[0]!.contentType).toBe("application/octet-stream");
+      const cn = await mc.files.beginUpload({ projectId, folderId: f.id, name: "合同.pdf", contentType: "application/pdf", sizeBytes: 5 });
+      expect(cn.objects[0]!.pathname).toMatch(/\/file\.pdf$/);
+      const img = await mc.files.beginUpload({ projectId, folderId: f.id, name: "thumb.webp", contentType: "image/webp", sizeBytes: 50, thumb: { bytes: 10, contentType: "image/webp" } });
+      expect(new Set(img.objects.map((o) => o.pathname)).size).toBe(2);
+    });
+
+    it("Financial and Photos folders exist even if a template leaves them out", async () => {
+      // A throwaway template (never the shared default other tests rely on).
+      const created = await oc.templates.create({ name: `No folders ${Date.now()}`, from: { projectType: "gut_renovation" } });
+      const [tpl] = await db().select().from(schema.template).where(eq(schema.template.id, created.id));
+      const def = { ...(tpl!.definition as Record<string, unknown>), folders: ["Legal"] };
+      await db().update(schema.template).set({ definition: def }).where(eq(schema.template.id, tpl!.id));
+      await db().update(schema.templateRevision).set({ definition: def }).where(and(eq(schema.templateRevision.templateId, tpl!.id), eq(schema.templateRevision.version, tpl!.version)));
+      const p = await oc.projects.create({ name: "Folders", address: "1 F St", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [], templateId: tpl!.id });
+      const names = (await oc.files.folders({ projectId: p.id })).folders.map((x) => [x.name, x.gated]);
+      expect(names).toEqual([["Legal", false], ["Photos", false], ["Financial", true]]);
+    });
+
+    it("gated attachments can't be detached without financial access; approval re-checks the attachment", async () => {
+      const fin = await folderNamed(fc, projectId, "Financial");
+      const [t] = await db().insert(schema.task).values({ projectId, phaseKey: "pipeline", title: "Proof of funds", requiredAttachment: "Proof of funds", requiresApproval: true, approverRole: "Owner", assigneeId: member.id }).returning();
+      const g = await upload(fc, projectId, { folderId: fin.id, taskId: t!.id }, "POF.pdf");
+      await expect(mc.files.detach({ projectId, taskId: t!.id, fileId: g.fileId })).rejects.toMatchObject({ code: "NOT_FOUND" });
+      // The member sees "restricted" but not a missing attachment; their tick sends it for approval.
+      expect((await mc.files.forTask({ projectId, taskId: t!.id })).hidden).toBe(1);
+      expect((await mc.checklist.setDone({ projectId, taskId: t!.id, done: true, version: 1 })).status).toBe("awaiting_approval");
+      await fc.files.detach({ projectId, taskId: t!.id, fileId: g.fileId });
+      const [row] = await db().select().from(schema.task).where(eq(schema.task.id, t!.id));
+      await expect(oc.tasks.decide({ projectId, taskId: t!.id, version: row!.version, decision: "approved" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    });
+
+    it("two purges at once give the bytes back once", async () => {
+      const f = await folderNamed(mc, projectId, "Closeout");
+      const { fileId } = await upload(mc, projectId, { folderId: f.id }, "twice.pdf", 700);
+      await mc.files.remove({ projectId, fileId });
+      const meter = async () => Number((await db().select().from(schema.usageCounter).where(and(eq(schema.usageCounter.key, "blob.storage"), eq(schema.usageCounter.periodKey, "total"))))[0]?.value ?? 0);
+      const before = await meter();
+      await Promise.allSettled([ac.files.purge({ projectId, fileId }), ac.files.purge({ projectId, fileId })]);
+      expect(before - (await meter())).toBe(700);
+    });
+
+    it("outsiders don't get hero photos they can't open", async () => {
+      const b = await oc.photos.beginUpload({ projectId, contentType: "image/webp", fullBytes: 5, thumbBytes: 5, width: 2, height: 2 });
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(5), { contentType: "image/webp" });
+      await oc.photos.completeUpload({ projectId, uploadId: b.uploadId });
+      expect((await oc.projects.get({ projectId })).hero).not.toBeNull();
+      expect((await xc.projects.get({ projectId })).hero).toBeNull();
+      expect((await xc.projects.list()).projects.find((p) => p.id === projectId)!.hero).toBeNull();
+    });
   });
 });
