@@ -8,7 +8,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   return (
     <TRPCReactProvider>
       <ToastProvider>
-        <AppShell viewer={{ name: viewer.name, email: viewer.email, role: viewer.role, title: viewer.title }}>{children}</AppShell>
+        <AppShell viewer={{ id: viewer.id, name: viewer.name, email: viewer.email, role: viewer.role, title: viewer.title }}>{children}</AppShell>
       </ToastProvider>
     </TRPCReactProvider>
   );

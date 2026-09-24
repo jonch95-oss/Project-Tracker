@@ -8,6 +8,7 @@ import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Button, buttonClass, Field, Input, Select, Skeleton, StatusPill, Textarea, type Tone } from "@/components/ui/primitives";
 import { PUNCH_STATUSES } from "@/core/field";
 import { formatIsoDate } from "@/core/time";
+import { cameraOptions } from "@/lib/camera";
 import { photoUrl, uploadPhotos } from "@/lib/photo-upload";
 import { errorMessage, useTRPC, useTRPCClient, type RouterOutputs } from "@/lib/trpc";
 import { PersonSelect } from "./people";
@@ -145,7 +146,7 @@ export function PunchDialog({ projectId, draft, team, onClose }: { projectId: st
 
   async function takePhoto(files: File[]) {
     setPhotoBusy(true);
-    const r = await uploadPhotos(client, projectId, files.slice(0, 1));
+    const r = await uploadPhotos(client, projectId, files.slice(0, 1), await cameraOptions());
     setPhotoBusy(false);
     for (const e of r.errors) toast("error", e);
     if (r.ids[0]) setPhotoId(r.ids[0]);

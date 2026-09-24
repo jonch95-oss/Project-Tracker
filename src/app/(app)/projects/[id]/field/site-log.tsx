@@ -9,6 +9,7 @@ import { Button, buttonClass, Field, Input, Select, Skeleton, Textarea } from "@
 import { manpowerTotal, MAX_LOG_RANGE_DAYS } from "@/core/field";
 import { addDays, daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
+import { cameraOptions } from "@/lib/camera";
 import { photoUrl, uploadPhotos } from "@/lib/photo-upload";
 import { errorMessage, useTRPC, useTRPCClient, type RouterOutputs } from "@/lib/trpc";
 
@@ -88,7 +89,7 @@ function LogForm({ projectId, day, data }: { projectId: string; day: string; dat
     try {
       // Photos hang off the day's log: file it first if it's new.
       await submit(form, async (logId) => {
-        const r = await uploadPhotos(client, projectId, files, { siteLogId: logId }, (d, t) => setPhotoBusy(`${d} of ${t}`));
+        const r = await uploadPhotos(client, projectId, files, { siteLogId: logId, ...(await cameraOptions()) }, (d, t) => setPhotoBusy(`${d} of ${t}`));
         for (const e of r.errors) toast("error", e);
         if (r.ids.length) toast("success", r.ids.length === 1 ? "Photo added" : `${r.ids.length} photos added`);
       });

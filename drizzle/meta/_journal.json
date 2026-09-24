@@ -113,6 +113,13 @@
       "when": 1790269754328,
       "tag": "0015_calendar_email_import_m11",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790271284187,
+      "tag": "0016_iphone_photo_location_m12",
+      "breakpoints": true
     }
   ]
 }

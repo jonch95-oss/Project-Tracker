@@ -370,6 +370,10 @@ export const projectPhoto = pgTable(
     height: integer("height").notNull(),
     caption: text("caption"),
     takenAt: timestamp("taken_at", { withTimezone: true }),
+    /** Where it was taken, when the person chose to add their location (brief §12). */
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
+    locationAccuracyM: integer("location_accuracy_m"),
     /** Module D: a photo taken for a day's site log. */
     siteLogId: uuid("site_log_id").references((): AnyPgColumn => siteLog.id, {
       onDelete: "set null",

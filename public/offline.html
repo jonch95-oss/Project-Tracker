@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#F5F2EC" />
+    <title>Offline · Project Command</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #f5f2ec; --surface: #fbfaf7; --text: #1c1a17; --muted: #6b645a; --border: #e2ddd3; --primary: #1c1a17; --on-primary: #fbfaf7; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #141311; --surface: #1c1b18; --text: #f1ede6; --muted: #a39b8f; --border: #2e2c28; --primary: #f1ede6; --on-primary: #141311; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+      main { max-width: 420px; text-align: center; }
+      h1 { font: 400 32px/1.15 "Iowan Old Style", Georgia, serif; margin: 16px 0 8px; }
+      p { color: var(--muted); margin: 0 0 24px; }
+      button { height: 48px; padding: 0 24px; border: 0; border-radius: 10px; background: var(--primary); color: var(--on-primary); font: 500 15px/1 inherit; font-family: inherit; }
+      svg { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4.3-2.4M19 12.5a10 10 0 0 0-3.2-2.1M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 11 5.1M12 20h.01" /></svg>
+      <h1>You're offline</h1>
+      <p>This page hasn't been saved on this phone yet. Pages you've opened before (My Tasks, your projects) still work offline, and ticks and comments sync when you're back.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

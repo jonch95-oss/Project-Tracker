@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { authClient } from "./auth-client";
+import { clearQueue, readQueue } from "./offline-queue";
 import { useTRPC } from "./trpc";
 
 /**
@@ -15,24 +16,54 @@ export type PushSupport = "ok" | "install-first" | "unsupported";
 
 export function isIOS(): boolean {
   if (typeof navigator === "undefined") return false;
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
 }
 
 export function isStandalone(): boolean {
   if (typeof window === "undefined") return false;
-  return window.matchMedia?.("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
+  return (
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    (navigator as { standalone?: boolean }).standalone === true
+  );
 }
 
 export function pushSupport(): PushSupport {
   if (typeof window === "undefined") return "unsupported";
-  const capable = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const capable =
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window;
   if (isIOS() && !isStandalone()) return "install-first";
   return capable ? "ok" : "unsupported";
 }
 
+/** The service worker's saved copies of pages and data (see public/sw.js). */
+export const OFFLINE_CACHE_PREFIX = "pc-";
+
+/** Delete every saved copy (sign-out; a different person may use this phone next). */
+export async function clearOfflineCopies(): Promise<void> {
+  try {
+    if (typeof caches === "undefined") return;
+    for (const k of await caches.keys())
+      if (
+        k.startsWith(OFFLINE_CACHE_PREFIX) &&
+        !k.startsWith(`${OFFLINE_CACHE_PREFIX}static`)
+      )
+        await caches.delete(k);
+  } catch {
+    // Never block signing out.
+  }
+}
+
 export function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
-  return navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).catch(() => null);
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator))
+    return Promise.resolve(null);
+  return navigator.serviceWorker
+    .register("/sw.js", { scope: "/", updateViaCache: "none" })
+    .catch(() => null);
 }
 
 function keyBytes(base64url: string): Uint8Array<ArrayBuffer> {
@@ -68,23 +99,54 @@ export function pushOffHere(): boolean {
 /** A short name for the device list: "iPhone", "Mac · Chrome"… */
 export function deviceLabel(): string {
   const ua = navigator.userAgent;
-  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : "Computer";
+  const os = /iPhone/.test(ua)
+    ? "iPhone"
+    : /iPad/.test(ua) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+      ? "iPad"
+      : /Android/.test(ua)
+        ? "Android"
+        : /Mac/.test(ua)
+          ? "Mac"
+          : /Windows/.test(ua)
+            ? "Windows"
+            : "Computer";
   if (os === "iPhone" || os === "iPad") return os;
-  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /Firefox\//.test(ua)
+      ? "Firefox"
+      : /Chrome\//.test(ua)
+        ? "Chrome"
+        : /Safari\//.test(ua)
+          ? "Safari"
+          : "Browser";
   return `${os} · ${browser}`;
 }
 
 /** Ask permission (must follow a tap) and subscribe. Returns the subscription, or a reason it didn't happen. */
-export async function subscribeThisDevice(publicKey: string): Promise<{ sub: PushSubscriptionJSON } | { error: string }> {
+export async function subscribeThisDevice(
+  publicKey: string,
+): Promise<{ sub: PushSubscriptionJSON } | { error: string }> {
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
-    return { error: permission === "denied" ? "Notifications are blocked for this app. Turn them on in your device settings, then try again." : "Notifications weren't allowed." };
+    return {
+      error:
+        permission === "denied"
+          ? "Notifications are blocked for this app. Turn them on in your device settings, then try again."
+          : "Notifications weren't allowed.",
+    };
   }
   const reg = await registerServiceWorker();
   if (!reg) return { error: "This browser can't receive notifications." };
   await navigator.serviceWorker.ready;
   const existing = await reg.pushManager.getSubscription();
-  const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) }));
+  const sub =
+    existing ??
+    (await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: keyBytes(publicKey),
+    }));
   return { sub: sub.toJSON() };
 }
 
@@ -94,15 +156,28 @@ export function useSignOut() {
   const router = useRouter();
   const unsubscribe = useMutation(trpc.push.unsubscribe.mutationOptions());
   return useCallback(async () => {
+    const waiting = readQueue().filter((o) => o.state === "pending").length;
+    if (
+      waiting &&
+      !window.confirm(
+        `${waiting} offline change${waiting === 1 ? " hasn't" : "s haven't"} synced yet. Sign out anyway? ${waiting === 1 ? "It" : "They"} will be lost.`,
+      )
+    )
+      return;
     try {
       const sub = await currentSubscription();
       if (sub) {
-        await unsubscribe.mutateAsync({ endpoint: sub.endpoint }).catch(() => undefined);
+        await unsubscribe
+          .mutateAsync({ endpoint: sub.endpoint })
+          .catch(() => undefined);
         await sub.unsubscribe().catch(() => undefined);
       }
     } catch {
       // Push cleanup must never block signing out.
     }
+    // Nothing of this person's stays on the device: queued offline changes and saved copies of pages.
+    clearQueue();
+    await clearOfflineCopies();
     await authClient.signOut();
     router.replace("/login");
     router.refresh();

@@ -47,6 +47,23 @@ export const IconUpload = (p: IconProps) => (
     <path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
   </Icon>
 );
+export const IconCamera = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
+    <circle cx="12" cy="13" r="3.5" />
+  </Icon>
+);
+export const IconPin = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11z" />
+    <circle cx="12" cy="10" r="2.3" />
+  </Icon>
+);
+export const IconOffline = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4.3-2.4M19 12.5a10 10 0 0 0-3.2-2.1M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 11 5.1M12 20h.01" />
+  </Icon>
+);
 export const IconChart = (p: IconProps) => (
   <Icon {...p}>
     <path d="M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6M20 16V6" />
