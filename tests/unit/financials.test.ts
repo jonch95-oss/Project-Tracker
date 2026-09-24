@@ -69,7 +69,7 @@ describe("sales", () => {
 describe("headline", () => {
   it("from the budget and unit schedule when they exist", () => {
     const h = headline(
-      { purchasePriceCents: 2_000_000_00, totalBudgetCents: 1, projectedSelloutCents: 1, loanAmountCents: 4_000_000_00 },
+      { purchasePriceCents: 2_000_000_00, totalBudgetCents: 1, projectedSelloutCents: 1, loanAmountCents: 4_000_000_00, useBudgetDetail: true, useSalesDetail: true },
       { original: 0, approvedChanges: 0, revised: 6_000_000_00, committed: 3_000_000_00, invoiced: 1_000_000_00, paid: 800_000_00, forecast: 6_200_000_00, variance: -200_000_00 },
       { units: 4, sold: 0, inContract: 0, projectedSellout: 8_000_000_00, closedCents: 0, contractCents: 0 },
     );
@@ -115,5 +115,48 @@ describe("draws", () => {
     expect(nextDrawStatus("funded", { invoices: 2, waiversComplete: true, inspectorSigned: true })).toBeNull();
     expect(lienWaiversComplete([{ received: true }, { received: false }])).toBe(false);
     expect(lienWaiversComplete([])).toBe(true);
+  });
+});
+
+describe("Milestone 6 review regressions", () => {
+  it("a credit line stays a credit; spending against it counts from zero", () => {
+    const [credit] = lineTotals([{ id: "x", category: "hard", originalCents: -50_000_00 }], [], [], []);
+    expect(credit).toMatchObject({ revised: -50_000_00, forecast: -50_000_00, variance: 0 });
+    const [spent] = lineTotals([{ id: "x", category: "hard", originalCents: -50_000_00 }], [], [{ budgetLineId: "x", amountCents: 10_000_00, status: "approved" }], []);
+    expect(spent!.forecast).toBe(-40_000_00);
+  });
+
+  it("approved change orders against a contract change what's committed", () => {
+    const lines = [{ id: "a", category: "hard", originalCents: 100_000_00 }];
+    const commitments = [{ id: "gc", budgetLineId: "a", amountCents: 100_000_00, status: "executed" }];
+    const credit = lineTotals(lines, commitments, [], [{ budgetLineId: "a", commitmentId: "gc", amountCents: -20_000_00, status: "approved" }]);
+    expect(credit[0]).toMatchObject({ revised: 80_000_00, committed: 80_000_00, forecast: 80_000_00, variance: 0 });
+    const add = lineTotals(lines, commitments, [], [{ budgetLineId: "a", commitmentId: "gc", amountCents: 20_000_00, status: "approved" }]);
+    expect(add[0]).toMatchObject({ revised: 120_000_00, committed: 120_000_00 });
+    const pending = lineTotals(lines, commitments, [], [{ budgetLineId: "a", commitmentId: "gc", amountCents: 20_000_00, status: "pending" }]);
+    expect(pending[0]!.committed).toBe(100_000_00);
+  });
+
+  it("uncoded contracts and invoices are totalled in their own row", () => {
+    const t = lineTotals([{ id: "a", category: "hard", originalCents: 100_00 }], [{ budgetLineId: null, amountCents: 999_000_00, status: "executed" }], [], []);
+    expect(t.map((r) => r.id)).toEqual(["a", "uncoded"]);
+    expect(totalOf(t).committed).toBe(999_000_00);
+    expect(totalOf(t).forecast).toBe(100_00 + 999_000_00);
+    expect(lineTotals([{ id: "a", category: "hard", originalCents: 1 }], [], [], [])).toHaveLength(1);
+  });
+
+  it("a half-entered budget or unit list never replaces typed figures unless switched on", () => {
+    const partial = { original: 0, approvedChanges: 0, revised: 1_000_00, committed: 0, invoiced: 0, paid: 0, forecast: 1_000_00, variance: 0 };
+    const oneUnit = { units: 1, sold: 0, inContract: 0, projectedSellout: 1_000_000_00, closedCents: 0, contractCents: 0 };
+    const typed = { purchasePriceCents: null, totalBudgetCents: 20_000_000_00, projectedSelloutCents: 30_000_000_00, loanAmountCents: null };
+    expect(headline(typed, partial, oneUnit)).toMatchObject({ totalBudget: 20_000_000_00, projectedSellout: 30_000_000_00 });
+    expect(headline({ ...typed, useBudgetDetail: true, useSalesDetail: true }, partial, oneUnit)).toMatchObject({ totalBudget: 1_000_00, projectedSellout: 1_000_000_00 });
+    // Nothing typed: the detail is all there is.
+    expect(headline({ ...typed, totalBudgetCents: null, projectedSelloutCents: null }, partial, oneUnit)).toMatchObject({ totalBudget: 1_000_00, projectedSellout: 1_000_000_00 });
+  });
+
+  it("a loss beyond the equity shows 0.00x, not a negative multiple", () => {
+    const h = headline({ purchasePriceCents: null, totalBudgetCents: 1_000_00, projectedSelloutCents: 100_00, loanAmountCents: 500_00 }, null, null);
+    expect(h.equityMultipleMilli).toBe(0);
   });
 });

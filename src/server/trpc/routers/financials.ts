@@ -1,18 +1,22 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { BUDGET_CATEGORIES, categoryLabel, drawTotals, lienWaiversComplete, nextDrawStatus, perSf, UNIT_STATUSES, type DrawStatus } from "@/core/financials";
-import { formatMoney } from "@/core/money";
+import { BUDGET_CATEGORIES, categoryLabel, drawTotals, revisedCommitment, lienWaiversComplete, nextDrawStatus, perSf, UNIT_STATUSES, type DrawStatus } from "@/core/financials";
+import { formatMoney, sum } from "@/core/money";
 import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { recordAudit } from "../../services/audit";
 import { projectMoney } from "../../services/financials";
+import { notify } from "../../services/tasks";
 import { projectProcedure, router, type AuthedContext, type ProjectAccess } from "../init";
 
 type Ctx = AuthedContext & { project: ProjectAccess };
 
-const cents = z.number().int().min(-1_000_000_000_000_00).max(1_000_000_000_000_00);
-const positive = z.number().int().min(0).max(1_000_000_000_000_00);
+/** $10 billion per amount: far above any real figure, and thousands of rows still total safely. */
+const MAX_CENTS = 1_000_000_000_000;
+const cents = z.number().int().min(-MAX_CENTS).max(MAX_CENTS);
+const positive = z.number().int().min(0).max(MAX_CENTS);
+const version = z.number().int().min(1);
 const bps = z.number().int().min(0).max(10_000);
 const date = z.iso.date();
 const text = (max: number) => z.string().trim().max(max);
@@ -24,9 +28,20 @@ async function audit(tx: DbOrTx, ctx: Ctx, entityType: "budget_line" | "commitme
   await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action, entityType, entityId, projectId: ctx.project.projectId, summary, data, ip: ctx.ip });
 }
 
-/** Approvals of invoices and change orders (A): the owner, or someone who edits financials and may approve. */
+/** Approvals of invoices and change orders (A): the owner, or anyone who sees the financials and may approve on the project. */
 function canApproveMoney(ctx: Ctx): boolean {
-  return ctx.actor.role === "owner" || (ctx.project.can("financials.edit") && ctx.project.can("task.approve"));
+  return ctx.actor.role === "owner" || (ctx.project.can("financials.view") && ctx.project.can("task.approve"));
+}
+
+/** Tell the people who can approve money that something is waiting (no dollar figures in notifications, brief §9). */
+async function notifyMoneyApprovers(tx: DbOrTx, ctx: Ctx, title: string) {
+  const rows = await tx
+    .select({ id: schema.user.id, role: schema.user.role, fin: schema.projectMember.canViewFinancials, approve: schema.projectMember.canApprove })
+    .from(schema.user)
+    .leftJoin(schema.projectMember, and(eq(schema.projectMember.userId, schema.user.id), eq(schema.projectMember.projectId, ctx.project.projectId)))
+    .where(and(eq(schema.user.status, "active"), sql`(${schema.user.role} = 'owner' or ${schema.projectMember.userId} is not null)`));
+  const to = rows.filter((r) => r.role === "owner" || (r.fin && (r.approve || r.role === "admin")));
+  await notify(tx, ctx.viewer.id, to.map((r) => ({ userId: r.id, kind: "approval_requested" as const, title, projectId: ctx.project.projectId, href: `/projects/${ctx.project.projectId}?tab=financials` })));
 }
 
 async function lineOnProject(tx: DbOrTx, projectId: string, id: string | null | undefined) {
@@ -55,10 +70,38 @@ async function financialFile(tx: DbOrTx, projectId: string, fileId: string | nul
   return f.id;
 }
 
-async function nextNumber(tx: DbOrTx, table: typeof schema.changeOrder | typeof schema.draw, projectId: string): Promise<number> {
-  const [r] = await tx.select({ n: sql<number>`coalesce(max(${table.number}), 0)::int` }).from(table).where(eq(table.projectId, projectId));
-  return (r?.n ?? 0) + 1;
+/** The next change-order or draw number. It never goes backwards, even after a delete (the number may already be on paper). */
+async function nextNumber(tx: DbOrTx, table: typeof schema.changeOrder | typeof schema.draw, kind: "change_order" | "draw", projectId: string): Promise<number> {
+  const [max] = await tx.select({ n: sql<number>`coalesce(max(${table.number}), 0)::int` }).from(table).where(eq(table.projectId, projectId));
+  const [r] = await tx
+    .insert(schema.projectSequence)
+    .values({ projectId, kind, last: (max?.n ?? 0) + 1 })
+    .onConflictDoUpdate({ target: [schema.projectSequence.projectId, schema.projectSequence.kind], set: { last: sql`greatest(${schema.projectSequence.last}, ${max?.n ?? 0}) + 1` } })
+    .returning({ last: schema.projectSequence.last });
+  return r!.last;
 }
+
+/** A contract's budget line wins: an invoice or change order against it is coded to the same line. */
+function lineFor(input: string | null | undefined, commitment: { budgetLineId: string | null } | null): string | null {
+  if (commitment?.budgetLineId) {
+    if (input && input !== commitment.budgetLineId) throw new TRPCError({ code: "BAD_REQUEST", message: "That contract is coded to a different budget line. Leave the line on the contract's, or change the contract." });
+    return commitment.budgetLineId;
+  }
+  return input ?? null;
+}
+
+/** Two people adding the same unit at once: the database's unique index decides; say so plainly. */
+async function uniqueUnit<T>(unit: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const code = (e as { code?: string; cause?: { code?: string } }).cause?.code ?? (e as { code?: string }).code;
+    if (code === "23505") throw new TRPCError({ code: "CONFLICT", message: `There's already a unit ${unit}.` });
+    throw e;
+  }
+}
+
+const lockDelete = (what: string) => new TRPCError({ code: "CONFLICT", message: `This ${what} changed or was removed a moment ago. It has been refreshed.` });
 
 const lineInput = z.object({
   id: z.uuid().optional(),
@@ -141,11 +184,29 @@ export const financialsRouter = router({
     for (const i of invoices) if (i.commitmentId && (i.status === "approved" || i.status === "paid")) commitmentBilled.set(i.commitmentId, (commitmentBilled.get(i.commitmentId) ?? 0) + i.amountCents);
     return {
       headline: money.headline,
-      typed: { purchasePriceCents: head?.purchasePriceCents ?? null, totalBudgetCents: head?.totalBudgetCents ?? null, projectedSelloutCents: head?.projectedSelloutCents ?? null, loanAmountCents: head?.loanAmountCents ?? null },
-      sources: { budgetFromLines: !!money.budget && money.budget.revised !== 0, selloutFromUnits: !!money.sales },
+      typed: {
+        purchasePriceCents: head?.purchasePriceCents ?? null,
+        totalBudgetCents: head?.totalBudgetCents ?? null,
+        projectedSelloutCents: head?.projectedSelloutCents ?? null,
+        loanAmountCents: head?.loanAmountCents ?? null,
+        useBudgetDetail: head?.useBudgetDetail ?? false,
+        useSalesDetail: head?.useSalesDetail ?? false,
+        version: head?.version ?? 0,
+      },
+      sources: {
+        budgetFromLines: !!money.budget && ((head?.useBudgetDetail ?? false) || head?.totalBudgetCents == null),
+        selloutFromUnits: !!money.sales && money.sales.units > 0 && ((head?.useSalesDetail ?? false) || head?.projectedSelloutCents == null),
+      },
+      broken: money.broken,
       budget: money.budget,
       lines: money.lines.map((l) => ({ ...l, totals: money.totals.find((t) => t.id === l.id)! })),
-      commitments: commitments.map((x) => ({ ...x, lineName: x.budgetLineId ? (lineName.get(x.budgetLineId) ?? null) : null, billedCents: commitmentBilled.get(x.id) ?? 0 })),
+      uncoded: money.totals.find((t) => t.id === "uncoded") ?? null,
+      commitments: commitments.map((x) => ({
+        ...x,
+        lineName: x.budgetLineId ? (lineName.get(x.budgetLineId) ?? null) : null,
+        billedCents: commitmentBilled.get(x.id) ?? 0,
+        revisedCents: revisedCommitment(x, changes),
+      })),
       invoices: invoices.map((x) => ({ ...x, lineName: x.budgetLineId ? (lineName.get(x.budgetLineId) ?? null) : null })),
       changeOrders: changes.map((x) => ({ ...x, lineName: x.budgetLineId ? (lineName.get(x.budgetLineId) ?? null) : null })),
       draws: draws.map((d) => {
@@ -153,18 +214,35 @@ export const financialsRouter = router({
         return { ...d, invoiceIds: on.map((i) => i.id), totals: drawTotals(on.map((i) => ({ invoiceId: i.id, amountCents: i.amountCents, retainageBps: i.retainageBps }))) };
       }),
       units: units.map((u) => ({ ...u, askPerSf: perSf(u.askCents, u.sf), contractPerSf: perSf(u.contractCents, u.sf) })),
+      // Retainage withheld on submitted and funded draws, owed to vendors at completion.
+      retainageHeldCents: sum(
+        draws.filter((d) => d.status !== "draft").map((d) => drawTotals(invoices.filter((i) => i.drawId === d.id).map((i) => ({ invoiceId: i.id, amountCents: i.amountCents, retainageBps: i.retainageBps }))).retainage),
+      ),
       sales: money.sales,
       access: { canEdit: ctx.project.can("financials.edit"), canApprove: canApproveMoney(c), canExport: ctx.actor.role === "owner" },
     };
   }),
 
   saveHeadline: projectProcedure("financials.edit")
-    .input(z.object({ purchasePriceCents: positive.nullable(), totalBudgetCents: positive.nullable(), projectedSelloutCents: positive.nullable(), loanAmountCents: positive.nullable() }))
+    .input(
+      z.object({
+        version: z.number().int().min(0),
+        purchasePriceCents: positive.nullable(),
+        totalBudgetCents: positive.nullable(),
+        projectedSelloutCents: positive.nullable(),
+        loanAmountCents: positive.nullable(),
+        useBudgetDetail: z.boolean(),
+        useSalesDetail: z.boolean(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       await ctx.db.transaction(async (tx) => {
-        const { projectId, ...values } = input;
-        await tx.insert(schema.projectHeadline).values({ projectId, ...values }).onConflictDoUpdate({ target: schema.projectHeadline.projectId, set: { ...values, updatedAt: new Date() } });
+        const { projectId, version: expected, ...values } = input;
+        const [cur] = await tx.select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, projectId)).for("update");
+        if ((cur?.version ?? 0) !== expected) throw conflict("headline");
+        if (cur) await tx.update(schema.projectHeadline).set({ ...values, version: sql`${schema.projectHeadline.version} + 1`, updatedAt: new Date() }).where(eq(schema.projectHeadline.projectId, projectId));
+        else await tx.insert(schema.projectHeadline).values({ projectId, ...values });
         await audit(tx, c, "project_headline", projectId, `${ctx.viewer.name} updated the headline figures`, "update", values);
       });
       return { ok: true };
@@ -197,18 +275,20 @@ export const financialsRouter = router({
 
   /** A line with commitments, invoices or change orders on it can't be removed (they'd lose their coding). */
   deleteLine: projectProcedure("financials.edit")
-    .input(z.object({ id: z.uuid() }))
+    .input(z.object({ id: z.uuid(), version }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
-        const l = await lineOnProject(tx, input.projectId, input.id);
+        // Lock the line: anything being coded to it right now waits, then sees it gone.
+        const [l] = await tx.select().from(schema.budgetLine).where(and(eq(schema.budgetLine.id, input.id), eq(schema.budgetLine.projectId, input.projectId))).for("update");
+        if (!l || l.version !== input.version) throw lockDelete("budget line");
         const used = await tx.execute<{ n: number }>(sql`select (
           (select count(*) from ${schema.commitment} where budget_line_id = ${input.id}) +
           (select count(*) from ${schema.invoice} where budget_line_id = ${input.id}) +
           (select count(*) from ${schema.changeOrder} where budget_line_id = ${input.id}))::int as n`);
         if ((used.rows[0]?.n ?? 0) > 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Commitments, invoices or change orders are coded to this line. Re-code them first." });
         await tx.delete(schema.budgetLine).where(eq(schema.budgetLine.id, input.id));
-        await audit(tx, c, "budget_line", input.id, `${ctx.viewer.name} removed the budget line ${l!.name}`, "delete");
+        await audit(tx, c, "budget_line", input.id, `${ctx.viewer.name} removed the budget line ${l.name}`, "delete");
         return { ok: true };
       });
     }),
@@ -260,15 +340,16 @@ export const financialsRouter = router({
     }),
 
   deleteCommitment: projectProcedure("financials.edit")
-    .input(z.object({ id: z.uuid() }))
+    .input(z.object({ id: z.uuid(), version }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
-        const x = await commitmentOnProject(tx, input.projectId, input.id);
-        const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(schema.invoice).where(eq(schema.invoice.commitmentId, input.id));
-        if ((n?.n ?? 0) > 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Invoices are billed against this commitment. Close it instead." });
+        const [x] = await tx.select().from(schema.commitment).where(and(eq(schema.commitment.id, input.id), eq(schema.commitment.projectId, input.projectId))).for("update");
+        if (!x || x.version !== input.version) throw lockDelete("commitment");
+        const used = await tx.execute<{ n: number }>(sql`select ((select count(*) from ${schema.invoice} where commitment_id = ${input.id}) + (select count(*) from ${schema.changeOrder} where commitment_id = ${input.id}))::int as n`);
+        if ((used.rows[0]?.n ?? 0) > 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Invoices or change orders are written against this contract. Close it instead." });
         await tx.delete(schema.commitment).where(eq(schema.commitment.id, input.id));
-        await audit(tx, c, "commitment", input.id, `${ctx.viewer.name} removed the ${x!.vendorName} commitment`, "delete");
+        await audit(tx, c, "commitment", input.id, `${ctx.viewer.name} removed the ${x.vendorName} commitment`, "delete");
         return { ok: true };
       });
     }),
@@ -284,7 +365,7 @@ export const financialsRouter = router({
         await lineOnProject(tx, input.projectId, input.budgetLineId);
         const commitment = await commitmentOnProject(tx, input.projectId, input.commitmentId);
         const values = {
-          budgetLineId: input.budgetLineId ?? commitment?.budgetLineId ?? null,
+          budgetLineId: lineFor(input.budgetLineId, commitment),
           commitmentId: commitment?.id ?? null,
           vendorName: input.vendorName,
           number: input.number ?? null,
@@ -305,10 +386,12 @@ export const financialsRouter = router({
             .returning({ id: schema.invoice.id });
           if (!r.length) throw conflict("invoice");
           await audit(tx, c, "invoice", input.id, `${ctx.viewer.name} updated invoice ${values.number ?? ""} from ${values.vendorName}: ${formatMoney(values.amountCents)}`.replace("  ", " "));
+          if (cur.status === "rejected") await notifyMoneyApprovers(tx, c, `The invoice from ${values.vendorName} was corrected and needs approval`);
           return { id: input.id };
         }
         const [row] = await tx.insert(schema.invoice).values({ ...values, projectId: input.projectId, createdById: ctx.viewer.id }).returning({ id: schema.invoice.id });
         await audit(tx, c, "invoice", row!.id, `${ctx.viewer.name} logged a ${formatMoney(values.amountCents)} invoice from ${values.vendorName}`, "create");
+        await notifyMoneyApprovers(tx, c, `An invoice from ${values.vendorName} needs approval`);
         return { id: row!.id };
       });
     }),
@@ -346,6 +429,10 @@ export const financialsRouter = router({
         const paying = input.paidOn !== null;
         if (paying && inv.status !== "approved") throw new TRPCError({ code: "BAD_REQUEST", message: "Only approved invoices can be marked paid." });
         if (!paying && inv.status !== "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "It isn't marked paid." });
+        if (!paying && inv.drawId) {
+          const [d] = await tx.select({ status: schema.draw.status }).from(schema.draw).where(eq(schema.draw.id, inv.drawId));
+          if (d && d.status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is on a submitted draw." });
+        }
         const r = await tx
           .update(schema.invoice)
           .set({ status: paying ? "paid" : "approved", paidOn: input.paidOn, version: sql`${schema.invoice.version} + 1`, updatedAt: new Date() })
@@ -358,15 +445,41 @@ export const financialsRouter = router({
     }),
 
   deleteInvoice: projectProcedure("financials.edit")
-    .input(z.object({ id: z.uuid() }))
+    .input(z.object({ id: z.uuid(), version }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
-        const [inv] = await tx.select().from(schema.invoice).where(and(eq(schema.invoice.id, input.id), eq(schema.invoice.projectId, input.projectId)));
-        if (!inv) throw new TRPCError({ code: "NOT_FOUND" });
+        const [inv] = await tx.select().from(schema.invoice).where(and(eq(schema.invoice.id, input.id), eq(schema.invoice.projectId, input.projectId))).for("update");
+        if (!inv || inv.version !== input.version) throw lockDelete("invoice");
         if (inv.status === "approved" || inv.status === "paid" || inv.drawId) throw new TRPCError({ code: "BAD_REQUEST", message: "Approved, paid or drawn invoices can't be deleted." });
         await tx.delete(schema.invoice).where(eq(schema.invoice.id, inv.id));
         await audit(tx, c, "invoice", inv.id, `${ctx.viewer.name} deleted the ${formatMoney(inv.amountCents)} invoice from ${inv.vendorName}`, "delete");
+        return { ok: true };
+      });
+    }),
+
+  /**
+   * Send an approved, paid or rejected invoice back to "to approve" so it can
+   * be corrected (an approval can be wrong). Not once it's on a submitted draw.
+   */
+  reopenInvoice: projectProcedure("financials.view")
+    .input(z.object({ id: z.uuid(), version, note: text(1000).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const c = ctx as Ctx;
+      if (!canApproveMoney(c)) throw new TRPCError({ code: "FORBIDDEN", message: "Only someone who can approve financials can do this." });
+      return ctx.db.transaction(async (tx) => {
+        const [inv] = await tx.select().from(schema.invoice).where(and(eq(schema.invoice.id, input.id), eq(schema.invoice.projectId, input.projectId))).for("update");
+        if (!inv || inv.version !== input.version) throw lockDelete("invoice");
+        if (inv.status === "received") return { ok: true };
+        if (inv.drawId) {
+          const [d] = await tx.select({ status: schema.draw.status }).from(schema.draw).where(eq(schema.draw.id, inv.drawId));
+          if (d && d.status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is on a submitted draw; it can't be reopened." });
+        }
+        await tx
+          .update(schema.invoice)
+          .set({ status: "received", paidOn: null, drawId: null, decisionNote: input.note, decidedById: null, decidedAt: null, version: sql`${schema.invoice.version} + 1`, updatedAt: new Date() })
+          .where(eq(schema.invoice.id, inv.id));
+        await audit(tx, c, "invoice", inv.id, `${ctx.viewer.name} reopened the ${formatMoney(inv.amountCents)} invoice from ${inv.vendorName}: ${input.note}`, "update");
         return { ok: true };
       });
     }),
@@ -381,7 +494,7 @@ export const financialsRouter = router({
         await lineOnProject(tx, input.projectId, input.budgetLineId);
         const commitment = await commitmentOnProject(tx, input.projectId, input.commitmentId);
         const values = {
-          budgetLineId: input.budgetLineId ?? commitment?.budgetLineId ?? null,
+          budgetLineId: lineFor(input.budgetLineId, commitment),
           commitmentId: commitment?.id ?? null,
           description: input.description,
           amountCents: input.amountCents,
@@ -403,9 +516,10 @@ export const financialsRouter = router({
         }
         // Serialize numbering per project.
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"co:" + input.projectId}))`);
-        const number = await nextNumber(tx, schema.changeOrder, input.projectId);
+        const number = await nextNumber(tx, schema.changeOrder, "change_order", input.projectId);
         const [row] = await tx.insert(schema.changeOrder).values({ ...values, number, projectId: input.projectId, createdById: ctx.viewer.id }).returning({ id: schema.changeOrder.id });
         await audit(tx, c, "change_order", row!.id, `${ctx.viewer.name} raised CO #${number}: ${formatMoney(values.amountCents)}${values.scheduleDays ? `, ${values.scheduleDays} days` : ""}`, "create");
+        await notifyMoneyApprovers(tx, c, `Change order #${number} needs approval`);
         return { id: row!.id, number };
       });
     }),
@@ -434,12 +548,12 @@ export const financialsRouter = router({
     }),
 
   deleteChangeOrder: projectProcedure("financials.edit")
-    .input(z.object({ id: z.uuid() }))
+    .input(z.object({ id: z.uuid(), version }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
-        const [co] = await tx.select().from(schema.changeOrder).where(and(eq(schema.changeOrder.id, input.id), eq(schema.changeOrder.projectId, input.projectId)));
-        if (!co) throw new TRPCError({ code: "NOT_FOUND" });
+        const [co] = await tx.select().from(schema.changeOrder).where(and(eq(schema.changeOrder.id, input.id), eq(schema.changeOrder.projectId, input.projectId))).for("update");
+        if (!co || co.version !== input.version) throw lockDelete("change order");
         if (co.status === "approved") throw new TRPCError({ code: "BAD_REQUEST", message: "Approved change orders can't be deleted." });
         await tx.delete(schema.changeOrder).where(eq(schema.changeOrder.id, co.id));
         await audit(tx, c, "change_order", co.id, `${ctx.viewer.name} deleted CO #${co.number}`, "delete");
@@ -458,7 +572,7 @@ export const financialsRouter = router({
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"draw:" + input.projectId}))`);
         const open = await tx.select({ id: schema.draw.id }).from(schema.draw).where(and(eq(schema.draw.projectId, input.projectId), eq(schema.draw.status, "draft")));
         if (open.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Finish the draft draw first." });
-        const number = await nextNumber(tx, schema.draw, input.projectId);
+        const number = await nextNumber(tx, schema.draw, "draw", input.projectId);
         const [row] = await tx.insert(schema.draw).values({ projectId: input.projectId, number, periodEnd: input.periodEnd ?? todayET() }).returning({ id: schema.draw.id });
         await audit(tx, c, "draw", row!.id, `${ctx.viewer.name} started draw #${number}`, "create");
         return { id: row!.id, number };
@@ -491,26 +605,44 @@ export const financialsRouter = router({
         if (!d) throw new TRPCError({ code: "NOT_FOUND" });
         if (d.version !== input.version) throw conflict("draw");
         const set: Partial<typeof schema.draw.$inferInsert> = {};
-        let waivers = input.lienWaivers ?? d.lienWaivers;
+        const status = d.status as DrawStatus;
+        const key = (v: string) => v.trim().toLowerCase();
+        let waivers = d.lienWaivers;
         if (input.invoiceIds !== undefined) {
-          if (d.status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "A submitted draw's invoices are locked." });
+          if (status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "A submitted draw's invoices are locked." });
           const ids = [...new Set(input.invoiceIds)];
-          const rows = ids.length ? await tx.select().from(schema.invoice).where(and(eq(schema.invoice.projectId, input.projectId), inArray(schema.invoice.id, ids))) : [];
+          const rows = ids.length ? await tx.select().from(schema.invoice).where(and(eq(schema.invoice.projectId, input.projectId), inArray(schema.invoice.id, ids))).for("update") : [];
           if (rows.length !== ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Some of those invoices aren't on this project." });
           const bad = rows.find((i) => (i.status !== "approved" && i.status !== "paid") || (i.drawId && i.drawId !== d.id));
           if (bad) throw new TRPCError({ code: "BAD_REQUEST", message: `The ${bad.vendorName} invoice isn't approved or is already on another draw.` });
           await tx.update(schema.invoice).set({ drawId: null }).where(and(eq(schema.invoice.drawId, d.id)));
           if (ids.length) await tx.update(schema.invoice).set({ drawId: d.id }).where(inArray(schema.invoice.id, ids));
-          // One lien waiver per vendor on the draw; keep what's already been received.
-          const vendors = [...new Set(rows.map((r) => r.vendorName))].sort();
-          waivers = vendors.map((v) => ({ vendor: v, received: waivers.find((w) => w.vendor === v)?.received ?? false }));
+          // One lien waiver per vendor on the draw (names matched loosely); keep what's already been received.
+          const vendors = new Map<string, string>();
+          for (const r of rows) if (!vendors.has(key(r.vendorName))) vendors.set(key(r.vendorName), r.vendorName.trim());
+          waivers = [...vendors].sort((a, b) => a[1].localeCompare(b[1])).map(([k, v]) => ({ vendor: v, received: waivers.find((w) => key(w.vendor) === k)?.received ?? false }));
+          set.lienWaivers = waivers;
         }
-        if (input.lienWaivers !== undefined || input.invoiceIds !== undefined) set.lienWaivers = waivers;
-        if (input.inspectorName !== undefined) set.inspectorName = input.inspectorName ?? null;
-        if (input.inspectorSignedOn !== undefined) set.inspectorSignedOn = input.inspectorSignedOn ?? null;
-        if (input.periodEnd !== undefined) set.periodEnd = input.periodEnd ?? null;
+        if (input.lienWaivers !== undefined) {
+          // Only tick or untick the vendors already on the checklist; it can't be replaced or emptied.
+          if (status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "Lien waivers are locked once the draw is submitted." });
+          set.lienWaivers = waivers.map((w) => ({ ...w, received: input.lienWaivers!.find((x) => key(x.vendor) === key(w.vendor))?.received ?? w.received }));
+        }
+        const inspectorLocked = status === "inspector_approved" || status === "funded";
+        if ((input.inspectorName !== undefined && (input.inspectorName ?? null) !== d.inspectorName) || (input.inspectorSignedOn !== undefined && (input.inspectorSignedOn ?? null) !== d.inspectorSignedOn)) {
+          if (inspectorLocked) throw new TRPCError({ code: "BAD_REQUEST", message: "The inspector's sign-off is locked once recorded." });
+          if (input.inspectorName !== undefined) set.inspectorName = input.inspectorName ?? null;
+          if (input.inspectorSignedOn !== undefined) set.inspectorSignedOn = input.inspectorSignedOn ?? null;
+        }
+        if (input.periodEnd !== undefined && (input.periodEnd ?? null) !== d.periodEnd) {
+          if (status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "The period is locked once the draw is submitted." });
+          set.periodEnd = input.periodEnd ?? null;
+        }
         if (input.notes !== undefined) set.notes = input.notes ?? null;
-        if (input.fundedCents !== undefined) set.fundedCents = input.fundedCents ?? null;
+        if (input.fundedCents !== undefined && (input.fundedCents ?? null) !== d.fundedCents) {
+          if (status === "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "Record the funded amount after the draw is submitted." });
+          set.fundedCents = input.fundedCents ?? null;
+        }
         const [r] = await tx.update(schema.draw).set({ ...set, version: sql`${schema.draw.version} + 1`, updatedAt: new Date() }).where(eq(schema.draw.id, d.id)).returning({ version: schema.draw.version });
         await audit(tx, c, "draw", d.id, `${ctx.viewer.name} updated draw #${d.number}`, "update", { changed: Object.keys(set), invoices: input.invoiceIds?.length });
         return { version: r!.version };
@@ -542,12 +674,12 @@ export const financialsRouter = router({
     }),
 
   deleteDraw: projectProcedure("financials.edit")
-    .input(z.object({ id: z.uuid() }))
+    .input(z.object({ id: z.uuid(), version }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
-        const [d] = await tx.select().from(schema.draw).where(and(eq(schema.draw.id, input.id), eq(schema.draw.projectId, input.projectId)));
-        if (!d) throw new TRPCError({ code: "NOT_FOUND" });
+        const [d] = await tx.select().from(schema.draw).where(and(eq(schema.draw.id, input.id), eq(schema.draw.projectId, input.projectId))).for("update");
+        if (!d || d.version !== input.version) throw lockDelete("draw");
         if (d.status !== "draft") throw new TRPCError({ code: "BAD_REQUEST", message: "Only draft draws can be deleted." });
         await tx.update(schema.invoice).set({ drawId: null }).where(eq(schema.invoice.drawId, d.id));
         await tx.delete(schema.draw).where(eq(schema.draw.id, d.id));
@@ -563,7 +695,7 @@ export const financialsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       if ((input.status === "contract" || input.status === "closed") && input.contractCents == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter the contract price." });
-      return ctx.db.transaction(async (tx) => {
+      return uniqueUnit(input.unit, () => ctx.db.transaction(async (tx) => {
         const values = {
           unit: input.unit,
           floor: input.floor ?? null,
@@ -596,16 +728,16 @@ export const financialsRouter = router({
         const [row] = await tx.insert(schema.saleUnit).values({ ...values, projectId: input.projectId, sortOrder: (max?.m ?? -1) + 1 }).returning({ id: schema.saleUnit.id });
         await audit(tx, c, "sale", row!.id, `${ctx.viewer.name} added unit ${values.unit}`, "create");
         return { id: row!.id };
-      });
+      }));
     }),
 
   deleteUnit: projectProcedure("financials.edit")
-    .input(z.object({ id: z.uuid() }))
+    .input(z.object({ id: z.uuid(), version }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
-        const [u] = await tx.delete(schema.saleUnit).where(and(eq(schema.saleUnit.id, input.id), eq(schema.saleUnit.projectId, input.projectId))).returning();
-        if (!u) throw new TRPCError({ code: "NOT_FOUND" });
+        const [u] = await tx.delete(schema.saleUnit).where(and(eq(schema.saleUnit.id, input.id), eq(schema.saleUnit.projectId, input.projectId), eq(schema.saleUnit.version, input.version))).returning();
+        if (!u) throw lockDelete("unit");
         await audit(tx, c, "sale", u.id, `${ctx.viewer.name} removed unit ${u.unit}`, "delete");
         return { ok: true };
       });

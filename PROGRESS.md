@@ -1,5 +1,80 @@
 # Progress
 
+## Milestone 6 — Financials (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (each project's Financials tab, for people with financial access)
+
+### What shipped
+
+- **Headline:** purchase price, total project budget, spent to date, committed, forecast at completion, projected sellout, profit and margin, equity required (forecast less the loan) and a simple equity multiple.
+  - Total budget and sellout come from the budget lines and unit schedule once you switch them on in Edit figures. Until then the typed figures are used, so a half-entered budget never swings the numbers.
+  - Portfolio cards follow the same figures.
+- **Budget:** the seven categories (acquisition, closing costs, soft, hard, financing, contingency, sales & marketing) with line items. Each line shows original, approved changes, revised, committed, invoiced, paid and variance (over or under).
+  - A line's forecast is its revised budget plus any overrun by commitments or invoices.
+  - Anything not coded to a line is totalled in its own row, so the headline never drops it.
+- **Commitments:** contracts and POs by vendor, with retainage %. The contract value includes approved change orders written against it; billed and remaining are shown.
+- **Invoices:** log one against a contract (it takes the contract's line and retainage) or code it to a line.
+  - Upload the PDF; it lands in the restricted Financial folder, and linked documents can't be moved out or trashed.
+  - Approval (A) or rejection with a note. Approvers get an in-app notice (no dollar figures).
+  - Mark paid, or undo it.
+  - An approver can reopen a mistaken approval for correction, as long as it isn't on a submitted draw.
+- **Change orders:** amount (credits allowed) and schedule days, with approval (A). Approved change orders update the line's revised budget, and the contract's value too. Numbers are never reused.
+- **Draws:** a requisition built from approved invoices, with retainage held back per invoice.
+  - One lien waiver per vendor; they can be ticked but the list can't be replaced.
+  - Draft → submitted (all waivers in) → inspector signed off → funded.
+  - Fields lock as the draw moves on.
+  - Total retainage held is shown for release at the end.
+- **Sales tracker:** per unit sf, beds/baths, ask and contract price with $/sf, status (available, reserved, in contract, closed), buyer and dates. It rolls up into projected sellout.
+- **Excel export**, owner only: Summary, Budget, Commitments, Invoices, Change orders, Draws and Sales sheets.
+- All money maths lives in `src/core/financials.ts` and `src/core/money.ts`: integer cents, basis points, no floating-point money. The one exception is Excel cells, which hold dollars as Excel's own numbers.
+- Every change is audited under financial entity types, which the activity feed hides from people without financial access.
+
+### Review
+
+The independent review found 17 issues (5 P0, 5 P1, 7 P2); all fixed, with regression tests:
+- **P0:**
+  - credit lines no longer look over budget
+  - contract change orders now change what's committed
+  - uncoded contracts and invoices are counted
+  - a half-entered budget or unit list can't replace typed figures
+  - approved invoices can be reopened for correction
+- **P1:**
+  - decisions only from the saved record (invoices and change orders open read-only first)
+  - draw waivers can't be emptied or faked, and signed-off draws lock
+  - invoice PDFs can't leave the Financial folder
+  - amounts capped at $10B with per-project safety, so one bad project can't break the portfolio
+  - numbers never reused
+- **P2:**
+  - retainage parsed exactly
+  - version checks on the headline and every delete, with locked deletes
+  - contract/line coding enforced
+  - vendor names matched loosely for waivers
+  - retainage held tracked
+  - approvers notified
+  - members with approve rights and financial access can approve
+  - no negative equity multiples
+  - accessible tabs
+  - confirmation on every delete
+  - a Rejected filter
+  - inspector sign-off saves before advancing
+  - the old headline editing path removed
+
+### Test results
+
+- Unit: 210 tests, including the whole money engine and the review regressions
+- Integration: 1,562 tests, including:
+  - the permission matrix for every Financials procedure (view with financial access; edit and approve only for the owner and admins with access; export owner-only)
+  - the full budget → commitment → invoice → change order → draw flow to the cent
+- E2E: 25/25. New:
+  - owner: headline, budget, approve an invoice, build and submit a draw with lien waivers, Excel download
+  - admin: sees the numbers but has no export
+- Checked at 1440px and at iPhone size (393px) with no horizontal page scroll (wide tables scroll inside their card): Summary, Invoices, Sales
+
+### Known limitations
+
+- Retainage release is tracked as a total, not as its own requisition line.
+- Buyer upgrades and finish selections per unit come with the condo unit tracker (Module L, Milestone 10).
+
 ## Milestone 5 — Files (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (each project's Files tab; attachments in every task sheet)

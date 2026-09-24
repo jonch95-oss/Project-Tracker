@@ -48,6 +48,7 @@ async function main() {
   const { buildProjectChecklist, defaultTemplateFor, reschedule } = await import("../src/server/services/checklist");
   const { and, inArray, ne } = await import("drizzle-orm");
   const { addDays, todayET } = await import("../src/core/time");
+  const { roundDiv } = await import("../src/core/money");
   const today = todayET();
   const projects = [
     {
@@ -142,7 +143,7 @@ async function main() {
         { projectId: row!.id, budgetLineId: hard, commitmentId: gc!.id, vendorName: "Brick & Beam Builders", number: "Req 5", amountCents: 910_500_00, retainageBps: 1000, status: "received", invoiceDate: addDays(today, -2) },
       ]);
       await db.insert(schema.changeOrder).values({ projectId: row!.id, budgetLineId: hard, commitmentId: gc!.id, number: 1, description: "Rock removal at the rear footing", amountCents: 185_000_00, scheduleDays: 8, status: "approved", decidedAt: new Date() });
-      await db.insert(schema.projectHeadline).values({ projectId: row!.id, loanAmountCents: 12_500_000_00 }).onConflictDoUpdate({ target: schema.projectHeadline.projectId, set: { loanAmountCents: 12_500_000_00 } });
+      await db.insert(schema.projectHeadline).values({ projectId: row!.id, loanAmountCents: 12_500_000_00, useBudgetDetail: true, useSalesDetail: true }).onConflictDoUpdate({ target: schema.projectHeadline.projectId, set: { loanAmountCents: 12_500_000_00, useBudgetDetail: true, useSalesDetail: true } });
       // 18 units: A (2 bed), B (1 bed), C (3 bed) on floors 2–7; PH sold, a few in contract.
       const plan = { A: [1050, 2, 2, 1_850_000], B: [780, 1, 1, 1_290_000], C: [1400, 3, 2, 2_450_000] } as const;
       const status = (floor: number, line: string): "closed" | "contract" | "reserved" | "available" =>
@@ -150,7 +151,8 @@ async function main() {
       const units = [2, 3, 4, 5, 6, 7].flatMap((floor) =>
         (["A", "B", "C"] as const).map((line) => {
           const [sf, beds, baths, base] = plan[line];
-          const ask = Math.round((base * (1 + (floor - 2) * 0.03)) / 5000) * 5000;
+          // Integer math only: +3% a floor, rounded to $5,000.
+          const ask = roundDiv(base * (100 + (floor - 2) * 3), 100 * 5000) * 5000;
           const st = status(floor, line);
           return { unit: `${floor}${line}`, floor: String(floor), sf, beds, baths, askCents: ask * 100, contractCents: st === "contract" || st === "closed" ? (ask - 25_000) * 100 : null, status: st };
         }),

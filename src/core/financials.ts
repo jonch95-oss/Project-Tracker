@@ -14,7 +14,7 @@ export const BUDGET_CATEGORIES = [
   { key: "sales", label: "Sales & marketing" },
 ] as const;
 export type BudgetCategory = (typeof BUDGET_CATEGORIES)[number]["key"];
-export const categoryLabel = (k: string) => BUDGET_CATEGORIES.find((c) => c.key === k)?.label ?? k;
+export const categoryLabel = (k: string) => (k === "uncoded" ? "Not coded to a line" : (BUDGET_CATEGORIES.find((c) => c.key === k)?.label ?? k));
 
 export const INVOICE_STATUSES = ["received", "approved", "rejected", "paid"] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
@@ -38,6 +38,7 @@ export interface LineInput {
   originalCents: Cents;
 }
 export interface CommitmentInput {
+  id?: string;
   budgetLineId: string | null;
   amountCents: Cents;
   status: string;
@@ -49,6 +50,8 @@ export interface InvoiceInput {
 }
 export interface ChangeOrderInput {
   budgetLineId: string | null;
+  /** A change to a contract also changes what's committed. */
+  commitmentId?: string | null;
   amountCents: Cents;
   status: string;
 }
@@ -71,18 +74,44 @@ export interface LineTotals {
 
 const counts = (s: string) => s === "approved" || s === "paid";
 
-/** Roll commitments, invoices and approved change orders up into each budget line. */
+/** A contract's value today: its amount plus approved change orders written against it. */
+export function revisedCommitment(c: { id?: string; amountCents: Cents }, changes: readonly ChangeOrderInput[]): Cents {
+  return c.amountCents + sum(changes.filter((x) => c.id && x.commitmentId === c.id && x.status === "approved").map((x) => x.amountCents));
+}
+
+/** The pseudo-line that collects anything not coded to a budget line yet, so the headline never drops it. */
+export const UNCODED = "uncoded";
+
+/**
+ * What a line will cost: its revised budget, plus any overrun of what's been
+ * committed or invoiced beyond it. A credit line (negative budget) stays a
+ * credit unless money is spent against it.
+ */
+export function lineForecast(revised: Cents, committed: Cents, invoiced: Cents): Cents {
+  const spent = Math.max(committed, invoiced);
+  return revised + Math.max(0, spent - Math.max(revised, 0));
+}
+
+/**
+ * Roll commitments (with their approved change orders), invoices and approved
+ * change orders up into each budget line. Anything uncoded is gathered in an
+ * extra "uncoded" row (only when there is some), so totals always include it.
+ */
 export function lineTotals(lines: readonly LineInput[], commitments: readonly CommitmentInput[], invoices: readonly InvoiceInput[], changes: readonly ChangeOrderInput[]): LineTotals[] {
-  return lines.map((l) => {
-    assertCents(l.originalCents, "original budget");
-    const approvedChanges = sum(changes.filter((c) => c.budgetLineId === l.id && c.status === "approved").map((c) => c.amountCents));
-    const revised = l.originalCents + approvedChanges;
-    const committed = sum(commitments.filter((c) => c.budgetLineId === l.id && c.status !== "draft").map((c) => c.amountCents));
-    const invoiced = sum(invoices.filter((i) => i.budgetLineId === l.id && counts(i.status)).map((i) => i.amountCents));
-    const paid = sum(invoices.filter((i) => i.budgetLineId === l.id && i.status === "paid").map((i) => i.amountCents));
-    const forecast = Math.max(revised, committed, invoiced);
-    return { id: l.id, category: l.category, original: l.originalCents, approvedChanges, revised, committed, invoiced, paid, forecast, variance: subtract(revised, forecast) };
-  });
+  const row = (id: string | null, category: string, original: Cents): LineTotals => {
+    assertCents(original, "original budget");
+    const approvedChanges = sum(changes.filter((c) => c.budgetLineId === id && c.status === "approved").map((c) => c.amountCents));
+    const revised = original + approvedChanges;
+    const committed = sum(commitments.filter((c) => c.budgetLineId === id && c.status !== "draft").map((c) => revisedCommitment(c, changes)));
+    const invoiced = sum(invoices.filter((i) => i.budgetLineId === id && counts(i.status)).map((i) => i.amountCents));
+    const paid = sum(invoices.filter((i) => i.budgetLineId === id && i.status === "paid").map((i) => i.amountCents));
+    const forecast = lineForecast(revised, committed, invoiced);
+    return { id: id ?? UNCODED, category: id ? category : UNCODED, original, approvedChanges, revised, committed, invoiced, paid, forecast, variance: subtract(revised, forecast) };
+  };
+  const out = lines.map((l) => row(l.id, l.category, l.originalCents));
+  const uncoded = row(null, UNCODED, 0);
+  if (uncoded.revised || uncoded.committed || uncoded.invoiced || uncoded.paid) out.push(uncoded);
+  return out;
 }
 
 export type Totals = Omit<LineTotals, "id" | "category">;
@@ -148,6 +177,10 @@ export function salesSummary(units: readonly UnitInput[]): SalesSummary {
 /* ------------------------------------------------------------------ */
 
 export interface HeadlineInput {
+  /** Use the budget lines for the total budget and forecast (else the typed figure). */
+  useBudgetDetail?: boolean;
+  /** Use the unit schedule for projected sellout (else the typed figure). */
+  useSalesDetail?: boolean;
   purchasePriceCents: Cents | null;
   /** Entered by hand; used when there are no budget lines yet. */
   totalBudgetCents: Cents | null;
@@ -173,14 +206,17 @@ export interface Headline {
 }
 
 /**
- * The headline (brief §8). Budget figures come from the budget when there is
- * one (else what was typed), sellout from the unit schedule when there is one.
+ * The headline (brief §8). The budget total and forecast come from the budget
+ * lines once they're switched on as the source (or when nothing was typed);
+ * sellout likewise from the unit schedule. A half-entered budget or schedule
+ * never silently replaces the typed figures.
  */
 export function headline(h: HeadlineInput, budget: Totals | null, sales: SalesSummary | null): Headline {
-  const hasBudget = !!budget && budget.revised !== 0;
+  const hasBudget = !!budget && (h.useBudgetDetail || h.totalBudgetCents == null);
   const totalBudget = hasBudget ? budget!.revised : h.totalBudgetCents;
   const forecast = hasBudget ? budget!.forecast : h.totalBudgetCents;
-  const sellout = sales && sales.units > 0 ? sales.projectedSellout : h.projectedSelloutCents;
+  const hasSales = !!sales && sales.units > 0 && (h.useSalesDetail || h.projectedSelloutCents == null);
+  const sellout = hasSales ? sales!.projectedSellout : h.projectedSelloutCents;
   const profit = sellout != null && forecast != null ? subtract(sellout, forecast) : null;
   const equity = forecast != null ? Math.max(0, subtract(forecast, h.loanAmountCents ?? 0)) : null;
   return {
@@ -193,7 +229,8 @@ export function headline(h: HeadlineInput, budget: Totals | null, sales: SalesSu
     profit,
     marginBps: profit != null && sellout ? ratioBasisPoints(profit, sellout) : null,
     equityRequired: equity,
-    equityMultipleMilli: equity && profit != null ? equityMultipleMilli(equity + profit, equity) : null,
+    // A loss bigger than the equity returns nothing: 0.00x, never a negative multiple.
+    equityMultipleMilli: equity && profit != null ? equityMultipleMilli(Math.max(0, equity + profit), equity) : null,
   };
 }
 

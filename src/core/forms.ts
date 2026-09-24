@@ -69,3 +69,14 @@ export function centsToInput(cents: Cents | null | undefined): string {
   const frac = abs % 100;
   return `${sign}${whole.toLocaleString("en-US")}${frac ? `.${String(frac).padStart(2, "0")}` : ""}`;
 }
+
+/** A percentage such as "10" or "7.5" (up to two decimals, 0–100) as basis points. */
+export function optionalPercentBps(raw: string | null | undefined, field: string, label: string): number | null {
+  const s = (raw ?? "").trim().replace(/%$/, "").trim();
+  if (s === "") return null;
+  const m = /^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(s);
+  if (!m) throw new FieldError(field, `${label} must be a percentage like 10 or 7.5.`);
+  const bps = Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
+  if (bps > 10_000) throw new FieldError(field, `${label} can't be more than 100%.`);
+  return bps;
+}

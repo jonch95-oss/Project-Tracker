@@ -27,7 +27,6 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
       qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() }),
     ]);
   const update = useMutation(trpc.projects.update.mutationOptions());
-  const headline = useMutation(trpc.projects.setHeadline.mutationOptions());
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -52,10 +51,6 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
         status: v.status,
         facts: v.facts,
       });
-      const h = project.headline;
-      if (showHeadline && (!h || h.purchasePriceCents !== v.headline.purchasePriceCents || h.totalBudgetCents !== v.headline.totalBudgetCents || h.projectedSelloutCents !== v.headline.projectedSelloutCents)) {
-        await headline.mutateAsync({ projectId: project.id, ...v.headline });
-      }
       toast("success", "Project saved");
       onClose();
     } catch (err) {
@@ -76,7 +71,7 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" form="edit-project" disabled={!companies.data} loading={update.isPending || headline.isPending}>
+          <Button type="submit" form="edit-project" disabled={!companies.data} loading={update.isPending}>
             Save
           </Button>
         </>

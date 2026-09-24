@@ -32,7 +32,8 @@ const BBL_BOROUGH_MESSAGE =
 
 const count = z.number().int().min(0).max(100_000_000).nullable();
 const far = z.number().min(0).max(99).multipleOf(0.01).nullable();
-const cents = z.number().int().min(0).max(1e15).nullable();
+// Same cap as the Financials tab ($10 billion).
+const cents = z.number().int().min(0).max(1_000_000_000_000).nullable();
 
 const factsInput = z.object({
   description: z.string().trim().max(2000).nullable(),
@@ -527,30 +528,6 @@ export const projectsRouter = router({
     }),
 
   /** Headline numbers (gated): owner, or an admin with financial visibility. */
-  setHeadline: projectProcedure("financials.edit")
-    .input(headlineInput)
-    .mutation(async ({ ctx, input }) => {
-      const { projectId, ...values } = input;
-      await ctx.db.transaction(async (tx) => {
-        await tx
-          .insert(schema.projectHeadline)
-          .values({ projectId, ...values })
-          .onConflictDoUpdate({ target: schema.projectHeadline.projectId, set: { ...values, updatedAt: new Date() } });
-        await recordAudit(tx, {
-          actorId: ctx.viewer.id,
-          actorName: ctx.viewer.name,
-          action: "update",
-          entityType: "project_headline",
-          entityId: projectId,
-          projectId,
-          summary: `${ctx.viewer.name} updated the headline financials`,
-          data: values,
-          ip: ctx.ip,
-        });
-      });
-      return { ok: true };
-    }),
-
   /** Move the project to a phase (forwards or back). */
   setPhase: projectProcedure("project.edit")
     .input(z.object({ key: z.string().min(1).max(60), version: z.number().int().min(1) }))

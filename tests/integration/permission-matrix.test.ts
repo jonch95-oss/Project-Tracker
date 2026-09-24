@@ -182,10 +182,6 @@ const MATRIX: Record<string, Row | "public"> = {
       });
     },
   },
-  "projects.setHeadline": {
-    allowed: ["owner", "admin+fin"],
-    call: (c, f) => c.projects.setHeadline({ projectId: f.projectId, purchasePriceCents: 100_000_00, totalBudgetCents: null, projectedSelloutCents: null }),
-  },
   "projects.setPhase": {
     allowed: ["owner", "admin+fin", "admin"],
     call: async (c, f) => {
@@ -416,12 +412,12 @@ const MATRIX: Record<string, Row | "public"> = {
   "files.shareFolder": { allowed: EDITORS, call: async (c, f) => c.files.shareFolder({ projectId: f.projectId, folderId: await folderId(f.projectId), userId: f.externalId, on: true }) },
 
   "financials.overview": { allowed: FIN_VIEW, call: (c, f) => c.financials.overview({ projectId: f.projectId }) },
-  "financials.saveHeadline": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveHeadline({ projectId: f.projectId, purchasePriceCents: 1, totalBudgetCents: null, projectedSelloutCents: null, loanAmountCents: null }) },
+  "financials.saveHeadline": { allowed: FIN_EDIT, call: async (c, f) => c.financials.saveHeadline({ projectId: f.projectId, version: (await db().select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, f.projectId)))[0]?.version ?? 0, purchasePriceCents: 1, totalBudgetCents: null, projectedSelloutCents: null, loanAmountCents: null, useBudgetDetail: false, useSalesDetail: false }) },
   "financials.saveLine": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveLine({ projectId: f.projectId, category: "soft", name: `L ${uid()}`, originalCents: 100 }) },
-  "financials.deleteLine": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteLine({ projectId: f.projectId, id: (await fin("budgetLine", f.projectId)).id }) },
+  "financials.deleteLine": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteLine({ projectId: f.projectId, ...(await fin("budgetLine", f.projectId)) }) },
   "financials.startBudget": { allowed: FIN_EDIT, call: (c, f) => c.financials.startBudget({ projectId: f.projectId }) },
   "financials.saveCommitment": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveCommitment({ projectId: f.projectId, vendorName: "V", amountCents: 100 }) },
-  "financials.deleteCommitment": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteCommitment({ projectId: f.projectId, id: (await fin("commitment", f.projectId)).id }) },
+  "financials.deleteCommitment": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteCommitment({ projectId: f.projectId, ...(await fin("commitment", f.projectId)) }) },
   "financials.saveInvoice": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveInvoice({ projectId: f.projectId, vendorName: "V", amountCents: 100 }) },
   "financials.decideInvoice": {
     allowed: FIN_EDIT,
@@ -438,7 +434,14 @@ const MATRIX: Record<string, Row | "public"> = {
       return c.financials.markPaid({ projectId: f.projectId, id: inv.id, version: inv.version, paidOn: "2030-01-02" });
     },
   },
-  "financials.deleteInvoice": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteInvoice({ projectId: f.projectId, id: (await fin("invoice", f.projectId)).id }) },
+  "financials.reopenInvoice": {
+    allowed: FIN_VIEW.filter((x) => x === "owner" || x === "admin+fin"),
+    call: async (c, f) => {
+      const inv = await fin("invoice", f.projectId, { status: "approved" });
+      return c.financials.reopenInvoice({ projectId: f.projectId, id: inv.id, version: inv.version, note: "Wrong amount" });
+    },
+  },
+  "financials.deleteInvoice": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteInvoice({ projectId: f.projectId, ...(await fin("invoice", f.projectId)) }) },
   "financials.saveChangeOrder": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveChangeOrder({ projectId: f.projectId, description: "x", amountCents: 100 }) },
   "financials.decideChangeOrder": {
     allowed: FIN_EDIT,
@@ -448,7 +451,7 @@ const MATRIX: Record<string, Row | "public"> = {
       return c.financials.decideChangeOrder({ projectId: f.projectId, id: co.id, version: co.version, decision: "approved" });
     },
   },
-  "financials.deleteChangeOrder": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteChangeOrder({ projectId: f.projectId, id: (await fin("changeOrder", f.projectId)).id }) },
+  "financials.deleteChangeOrder": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteChangeOrder({ projectId: f.projectId, ...(await fin("changeOrder", f.projectId)) }) },
   "financials.createDraw": {
     allowed: FIN_EDIT,
     call: async (c, f) => {
@@ -464,9 +467,9 @@ const MATRIX: Record<string, Row | "public"> = {
       return c.financials.advanceDraw({ projectId: f.projectId, id: d.id, version: d.version });
     },
   },
-  "financials.deleteDraw": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteDraw({ projectId: f.projectId, id: (await fin("draw", f.projectId, { status: "draft" })).id }) },
+  "financials.deleteDraw": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteDraw({ projectId: f.projectId, ...(await fin("draw", f.projectId, { status: "draft" })) }) },
   "financials.saveUnit": { allowed: FIN_EDIT, call: (c, f) => c.financials.saveUnit({ projectId: f.projectId, unit: `U${uid()}`, status: "available" }) },
-  "financials.deleteUnit": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteUnit({ projectId: f.projectId, id: (await fin("saleUnit", f.projectId)).id }) },
+  "financials.deleteUnit": { allowed: FIN_EDIT, call: async (c, f) => c.financials.deleteUnit({ projectId: f.projectId, ...(await fin("saleUnit", f.projectId)) }) },
 
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],

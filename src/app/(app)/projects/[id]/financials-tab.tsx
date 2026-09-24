@@ -3,12 +3,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { IconPaperclip, IconPlus } from "@/components/ui/icons";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Button, Field, Input, Select, Skeleton, StatusPill, Textarea, type Tone } from "@/components/ui/primitives";
-import { BUDGET_CATEGORIES, byCategory, categoryLabel, DRAW_STATUS_LABEL, UNIT_STATUS_LABEL, UNIT_STATUSES, type DrawStatus, type UnitStatus } from "@/core/financials";
-import { centsToInput, FieldError, optionalInt, optionalMoney, optionalSignedMoney } from "@/core/forms";
-import { formatBasisPoints, formatMoney, formatMultiple } from "@/core/money";
+import { BUDGET_CATEGORIES, byCategory, categoryLabel, DRAW_STATUS_LABEL, UNCODED, UNIT_STATUS_LABEL, UNIT_STATUSES, type DrawStatus, type UnitStatus } from "@/core/financials";
+import { centsToInput, FieldError, optionalInt, optionalMoney, optionalPercentBps, optionalSignedMoney } from "@/core/forms";
+import { formatBasisPoints, formatMoney, formatMultiple, sum } from "@/core/money";
 import { formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { useFileUpload } from "@/lib/file-upload";
@@ -62,23 +63,13 @@ export function FinancialsTab({ projectId }: { projectId: string }) {
           </a>
         )}
       </div>
-      <div className="-mx-4 mb-6 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-        <div role="tablist" aria-label="Financial sections" className="inline-flex gap-1 rounded-control border border-control bg-surface p-0.5">
-          {SECTIONS.map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              role="tab"
-              aria-selected={section === s.key}
-              onClick={() => setSection(s.key)}
-              className={cn("h-9 whitespace-nowrap rounded-[calc(var(--radius-control)-2px)] px-3 text-[13px]", section === s.key ? "bg-primary font-medium text-on-primary" : "text-muted hover:text-text")}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div role="tabpanel" aria-label={SECTIONS.find((s) => s.key === section)!.label}>
+      {data.broken && (
+        <p role="alert" className="mb-4 rounded-panel bg-blocked-tint/60 px-4 py-3 text-[13px] text-blocked-text">
+          Some amounts on this project are too large to total. Check for a mistyped figure.
+        </p>
+      )}
+      <Tabs<Section> idBase="fin-tabs" label="Financial sections" items={SECTIONS} value={section} onChange={setSection} className="mb-6" />
+      <TabPanel idBase="fin-tabs" tab={section} className="focus-visible:outline-offset-8">
         {section === "summary" && <Summary projectId={projectId} data={data} onGo={setSection} />}
         {section === "budget" && <Budget projectId={projectId} data={data} />}
         {section === "commitments" && <Commitments projectId={projectId} data={data} />}
@@ -86,7 +77,7 @@ export function FinancialsTab({ projectId }: { projectId: string }) {
         {section === "changes" && <ChangeOrders projectId={projectId} data={data} />}
         {section === "draws" && <Draws projectId={projectId} data={data} />}
         {section === "sales" && <Sales projectId={projectId} data={data} />}
-      </div>
+      </TabPanel>
     </section>
   );
 }
@@ -100,17 +91,17 @@ function Summary({ projectId, data, onGo }: { projectId: string; data: Data; onG
   const [editing, setEditing] = useState(false);
   const figures: [string, ReactNode, string?][] = [
     ["Purchase price", $(h.purchasePrice)],
-    ["Total project budget", $(h.totalBudget), data.sources.budgetFromLines ? "from the budget" : "typed in"],
+    ["Total project budget", $(h.totalBudget), h.totalBudget == null ? undefined : data.sources.budgetFromLines ? "from the budget" : "typed in"],
     ["Spent to date", $(h.spentToDate)],
     ["Committed", $(h.committed)],
     ["Forecast at completion", $(h.forecastAtCompletion)],
-    ["Projected sellout", $(h.projectedSellout), data.sources.selloutFromUnits ? "from the unit schedule" : "typed in"],
+    ["Projected sellout", $(h.projectedSellout), h.projectedSellout == null ? undefined : data.sources.selloutFromUnits ? "from the unit schedule" : "typed in"],
     ["Profit", $(h.profit)],
     ["Margin", formatBasisPoints(h.marginBps)],
     ["Equity required", $(h.equityRequired)],
     ["Equity multiple", formatMultiple(h.equityMultipleMilli)],
   ];
-  const groups = byCategory(data.lines.map((l) => l.totals));
+  const groups = byCategory([...data.lines.map((l) => l.totals), ...(data.uncoded ? [data.uncoded] : [])]);
   return (
     <div className="flex flex-col gap-8">
       <div>
@@ -228,6 +219,7 @@ function FormDialog({
   deleteLabel?: string;
   error?: string | null;
 }) {
+  const [confirming, setConfirming] = useState(false);
   return (
     <Dialog
       open
@@ -237,7 +229,7 @@ function FormDialog({
       footer={
         <>
           {onDelete && (
-            <Button variant="danger" className="mr-auto" onClick={onDelete}>
+            <Button variant="danger" className="mr-auto" onClick={() => setConfirming(true)}>
               {deleteLabel}
             </Button>
           )}
@@ -265,6 +257,20 @@ function FormDialog({
         )}
         {children}
       </form>
+      {onDelete && (
+        <ConfirmDialog
+          open={confirming}
+          title={`${deleteLabel}?`}
+          body="This can't be undone. It's recorded in the activity log."
+          confirmLabel={deleteLabel}
+          danger
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            onDelete();
+          }}
+        />
+      )}
     </Dialog>
   );
 }
@@ -303,7 +309,7 @@ function LineSelect({ data, value, name = "budgetLineId", label = "Budget line" 
 }
 
 /** Pick or upload the PDF for an invoice, contract or change order. It lives in the gated Financial folder. */
-function PdfField({ projectId, value, onChange }: { projectId: string; value: string | null; onChange: (id: string | null) => void }) {
+function PdfField({ projectId, value, onChange, readOnly }: { projectId: string; value: string | null; onChange: (id: string | null) => void; readOnly?: boolean }) {
   const trpc = useTRPC();
   const toast = useToast();
   const folders = useQuery(trpc.files.folders.queryOptions({ projectId }));
@@ -320,11 +326,13 @@ function PdfField({ projectId, value, onChange }: { projectId: string; value: st
             <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
               <IconPaperclip size={16} /> View document
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => onChange(null)}>
-              Remove
-            </Button>
+            {!readOnly && (
+              <Button variant="ghost" size="sm" onClick={() => onChange(null)}>
+                Remove
+              </Button>
+            )}
           </>
-        ) : (
+        ) : readOnly ? null : (
           <Button variant="secondary" size="sm" disabled={!fin} loading={up.busy} onClick={() => input.current?.click()}>
             <IconPlus size={16} /> Upload PDF
           </Button>
@@ -347,7 +355,7 @@ function PdfField({ projectId, value, onChange }: { projectId: string; value: st
             }
           }}
         />
-        <span className="text-[12px] text-muted">Saved in the restricted Financial folder.</span>
+        {!readOnly && <span className="text-[12px] text-muted">Saved in the restricted Financial folder.</span>}
       </div>
       {up.items.some((i) => i.state === "error") && <p className="mt-1 text-[12px] text-blocked-text">{up.items.find((i) => i.error)?.error}</p>}
       {open && value && <FileSheet projectId={projectId} fileId={value} folders={folders.data?.folders ?? []} onClose={() => setOpen(false)} />}
@@ -395,6 +403,9 @@ function HeadlineDialog({ projectId, data, onClose }: { projectId: string; data:
             totalBudgetCents: optionalMoney(str(f, "tb"), "tb", "Total budget"),
             projectedSelloutCents: optionalMoney(str(f, "ps"), "ps", "Projected sellout"),
             loanAmountCents: optionalMoney(str(f, "loan"), "loan", "Loan amount"),
+            useBudgetDetail: f.get("useBudget") === "on",
+            useSalesDetail: f.get("useSales") === "on",
+            version: t.version,
           }),
           onClose,
         )
@@ -402,8 +413,22 @@ function HeadlineDialog({ projectId, data, onClose }: { projectId: string; data:
     >
       <MoneyField name="pp" label="Purchase price" value={t.purchasePriceCents} />
       <MoneyField name="loan" label="Loan amount (senior debt)" value={t.loanAmountCents} hint="Used for equity required and the equity multiple." />
-      <MoneyField name="tb" label="Total project budget" value={t.totalBudgetCents} hint={data.sources.budgetFromLines ? "The budget lines now set this; this figure is kept for reference." : "Until there's a budget."} />
-      <MoneyField name="ps" label="Projected sellout" value={t.projectedSelloutCents} hint={data.sources.selloutFromUnits ? "The unit schedule now sets this." : "Until there's a unit schedule."} />
+      <MoneyField name="tb" label="Total project budget" value={t.totalBudgetCents} hint="Used until the budget lines are switched on below." />
+      <MoneyField name="ps" label="Projected sellout" value={t.projectedSelloutCents} hint="Used until the unit schedule is switched on below." />
+      <label className="flex items-start gap-3 text-sm sm:col-span-2">
+        <input type="checkbox" name="useBudget" defaultChecked={t.useBudgetDetail} className="mt-0.5 size-4 accent-[var(--accent)]" />
+        <span>
+          Use the budget lines for the total budget and forecast
+          <span className="block text-[12px] text-muted">Switch on once the budget is complete, so a half-entered budget never replaces the typed figure.</span>
+        </span>
+      </label>
+      <label className="flex items-start gap-3 text-sm sm:col-span-2">
+        <input type="checkbox" name="useSales" defaultChecked={t.useSalesDetail} className="mt-0.5 size-4 accent-[var(--accent)]" />
+        <span>
+          Use the unit schedule for projected sellout
+          <span className="block text-[12px] text-muted">Switch on once every unit is entered.</span>
+        </span>
+      </label>
     </FormDialog>
   );
 }
@@ -435,14 +460,14 @@ function Budget({ projectId, data }: { projectId: string; data: Data }) {
       />
     );
   }
-  const groups = byCategory(data.lines.map((l) => l.totals));
+  const groups = byCategory([...data.lines.map((l) => l.totals), ...(data.uncoded ? [data.uncoded] : [])]);
   return (
     <div className="flex flex-col gap-6">
       {groups.map((g) => (
         <div key={g.category}>
           <div className="mb-2 flex items-center justify-between gap-3">
             <h3 className="text-[15px] font-medium">{categoryLabel(g.category)}</h3>
-            {data.access.canEdit && (
+            {data.access.canEdit && g.category !== UNCODED && (
               <Button variant="ghost" size="sm" onClick={() => setEditing({ category: g.category })}>
                 <IconPlus size={16} /> Line
               </Button>
@@ -451,15 +476,15 @@ function Budget({ projectId, data }: { projectId: string; data: Data }) {
           <MoneyTable
             head={["Line", "Original", "Changes", "Revised", "Committed", "Invoiced", "Paid", "Variance"]}
             rows={g.lines.map((t) => {
-              const l = data.lines.find((x) => x.id === t.id)!;
-              return [l.name, $(t.original), t.approvedChanges ? $(t.approvedChanges) : "—", $(t.revised), $(t.committed), $(t.invoiced), $(t.paid), <Variance key="v" cents={t.variance} />];
+              const l = data.lines.find((x) => x.id === t.id);
+              return [l?.name ?? "Contracts and invoices without a line", $(t.original), t.approvedChanges ? $(t.approvedChanges) : "—", $(t.revised), $(t.committed), $(t.invoiced), $(t.paid), <Variance key="v" cents={t.variance} />];
             })}
             foot={["Subtotal", $(g.totals.original), g.totals.approvedChanges ? $(g.totals.approvedChanges) : "—", $(g.totals.revised), $(g.totals.committed), $(g.totals.invoiced), $(g.totals.paid), <Variance key="v" cents={g.totals.variance} />]}
-            onRow={data.access.canEdit ? (i) => setEditing(data.lines.find((x) => x.id === g.lines[i]!.id)!) : undefined}
+            onRow={data.access.canEdit && g.category !== UNCODED ? (i) => setEditing(data.lines.find((x) => x.id === g.lines[i]!.id)!) : undefined}
           />
         </div>
       ))}
-      {data.access.canEdit && groups.length < BUDGET_CATEGORIES.length && (
+      {data.access.canEdit && groups.filter((g) => g.category !== UNCODED).length < BUDGET_CATEGORIES.length && (
         <Select aria-label="Add a line in another category" value="" onChange={(e) => e.target.value && setEditing({ category: e.target.value })} className="max-w-xs">
           <option value="">Add a line in another category…</option>
           {BUDGET_CATEGORIES.filter((c) => !groups.some((g) => g.category === c.key)).map((c) => (
@@ -481,7 +506,6 @@ function LineDialog({ projectId, line, category, onClose }: { projectId: string;
   const save = useMutation(trpc.financials.saveLine.mutationOptions({ onSettled: invalidate }));
   const del = useMutation(trpc.financials.deleteLine.mutationOptions({ onSuccess: onClose, onError: (e) => toast("error", errorMessage(e)), onSettled: invalidate }));
   const { error, run } = useSaver(save.mutate);
-  const [confirm, setConfirm] = useState(false);
   return (
     <>
       <FormDialog
@@ -489,7 +513,8 @@ function LineDialog({ projectId, line, category, onClose }: { projectId: string;
         onClose={onClose}
         busy={save.isPending}
         error={error}
-        onDelete={line ? () => setConfirm(true) : undefined}
+        onDelete={line ? () => del.mutate({ projectId, id: line.id, version: line.version }) : undefined}
+        deleteLabel="Remove line"
         onSubmit={(f) =>
           run(
             () => ({
@@ -522,7 +547,6 @@ function LineDialog({ projectId, line, category, onClose }: { projectId: string;
           <Textarea id="fin-notes" name="notes" rows={2} maxLength={1000} defaultValue={line?.notes ?? ""} />
         </Field>
       </FormDialog>
-      <ConfirmDialog open={confirm} title="Remove this line?" body="Only lines with nothing coded to them can be removed." confirmLabel="Remove line" danger busy={del.isPending} onCancel={() => setConfirm(false)} onConfirm={() => del.mutate({ projectId, id: line!.id })} />
     </>
   );
 }
@@ -542,7 +566,7 @@ function Commitments({ projectId, data }: { projectId: string; data: Data }) {
         <p className="text-sm text-muted">No contracts or purchase orders yet.</p>
       ) : (
         <MoneyTable
-          head={["Vendor", "Line", "Status", "Amount", "Billed", "Remaining"]}
+          head={["Vendor", "Line", "Status", "Contract (with COs)", "Billed", "Remaining"]}
           rows={data.commitments.map((c) => [
             <span key="v">
               {c.vendorName}
@@ -552,9 +576,16 @@ function Commitments({ projectId, data }: { projectId: string; data: Data }) {
               {c.lineName ?? "Not coded"}
             </span>,
             c.status,
-            $(c.amountCents),
+            c.revisedCents !== c.amountCents ? (
+              <span key="a">
+                {$(c.revisedCents)}
+                <span className="block text-[11px] text-muted">orig. {$(c.amountCents)}</span>
+              </span>
+            ) : (
+              $(c.amountCents)
+            ),
             $(c.billedCents),
-            $(c.amountCents - c.billedCents),
+            $(c.revisedCents - c.billedCents),
           ])}
           onRow={data.access.canEdit ? (i) => setEditing(data.commitments[i]!) : undefined}
         />
@@ -578,7 +609,8 @@ function CommitmentDialog({ projectId, data, c, onClose }: { projectId: string; 
       onClose={onClose}
       busy={save.isPending}
       error={error}
-      onDelete={c ? () => del.mutate({ projectId, id: c.id }) : undefined}
+      onDelete={c ? () => del.mutate({ projectId, id: c.id, version: c.version }) : undefined}
+      deleteLabel="Delete commitment"
       onSubmit={(f) =>
         run(
           () => ({
@@ -591,7 +623,7 @@ function CommitmentDialog({ projectId, data, c, onClose }: { projectId: string; 
             amountCents: optionalMoney(str(f, "amount"), "amount", "Amount") ?? 0,
             status: str(f, "status") as "draft" | "executed" | "closed",
             signedOn: str(f, "signed") || null,
-            retainageBps: Math.round(Number(str(f, "ret") || "0") * 100),
+            retainageBps: optionalPercentBps(str(f, "ret"), "ret", "Retainage") ?? 0,
             fileId,
           }),
           onClose,
@@ -650,7 +682,7 @@ const INVOICE_LABEL: Record<string, string> = { received: "To approve", approved
 
 function Invoices({ projectId, data }: { projectId: string; data: Data }) {
   const [editing, setEditing] = useState<Invoice | "new" | null>(null);
-  const [filter, setFilter] = useState<"all" | "received" | "approved" | "paid">("all");
+  const [filter, setFilter] = useState<"all" | "received" | "approved" | "paid" | "rejected">("all");
   const shown = data.invoices.filter((i) => filter === "all" || i.status === filter);
   return (
     <div>
@@ -665,6 +697,7 @@ function Invoices({ projectId, data }: { projectId: string; data: Data }) {
             <option value="received">To approve</option>
             <option value="approved">Approved, unpaid</option>
             <option value="paid">Paid</option>
+            <option value="rejected">Rejected</option>
           </Select>
         }
       />
@@ -705,16 +738,21 @@ function InvoiceDialog({ projectId, data, inv, onClose }: { projectId: string; d
   const save = useMutation(trpc.financials.saveInvoice.mutationOptions({ onSettled: invalidate }));
   const decide = useMutation(trpc.financials.decideInvoice.mutationOptions({ onSuccess: onClose, onError, onSettled: invalidate }));
   const paid = useMutation(trpc.financials.markPaid.mutationOptions({ onSuccess: onClose, onError, onSettled: invalidate }));
+  const reopen = useMutation(trpc.financials.reopenInvoice.mutationOptions({ onSuccess: onClose, onError, onSettled: invalidate }));
   const del = useMutation(trpc.financials.deleteInvoice.mutationOptions({ onSuccess: onClose, onError, onSettled: invalidate }));
   const { error, run } = useSaver(save.mutate);
   const [fileId, setFileId] = useState<string | null>(inv?.fileId ?? null);
   const [rejecting, setRejecting] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reopenNote, setReopenNote] = useState("");
+  // Existing invoices open read-only: decisions act on what's saved, never on unsaved edits.
+  const [mode, setMode] = useState<"view" | "edit">(inv ? "view" : "edit");
   const locked = !!inv && (inv.status === "approved" || inv.status === "paid");
   const editable = data.access.canEdit && !locked;
-  const decision = inv && inv.status === "received" && data.access.canApprove;
+  const drawStatus = inv?.drawId ? data.draws.find((x) => x.id === inv.drawId)?.status : undefined;
+  const onSubmittedDraw = !!drawStatus && drawStatus !== "draft";
 
-  if (!editable && inv) {
-    // Read-only (locked or no edit rights): the facts and the next step.
+  if (inv && mode === "view") {
     return (
       <Dialog open onClose={onClose} title={`${inv.vendorName}${inv.number ? ` #${inv.number}` : ""}`} description={`${$(inv.amountCents, false)} · ${INVOICE_LABEL[inv.status]}`}>
         <dl className="grid grid-cols-2 gap-4 text-sm">
@@ -722,37 +760,68 @@ function InvoiceDialog({ projectId, data, inv, onClose }: { projectId: string; d
           <Fact k="Invoice date" v={d(inv.invoiceDate)} />
           <Fact k="Retainage" v={formatBasisPoints(inv.retainageBps, 0)} />
           <Fact k="Paid on" v={d(inv.paidOn)} />
+          {inv.drawId && <Fact k="Draw" v={`#${data.draws.find((x) => x.id === inv.drawId)?.number ?? "?"}`} />}
           {inv.decisionNote && <Fact k="Note" v={inv.decisionNote} />}
         </dl>
-        {fileId && (
+        {inv.fileId && (
           <div className="mt-4">
-            <PdfField projectId={projectId} value={fileId} onChange={() => undefined} />
+            <PdfField projectId={projectId} value={inv.fileId} onChange={() => undefined} readOnly />
           </div>
         )}
-        <div className="mt-6 flex flex-wrap gap-2">
-          {decision && <DecisionButtons busy={decide.isPending} rejecting={rejecting} setRejecting={setRejecting} onDecide={(decision, note) => decide.mutate({ projectId, id: inv.id, version: inv.version, decision, note })} />}
-          {data.access.canEdit && inv.status === "approved" && (
-            <Button loading={paid.isPending} onClick={() => paid.mutate({ projectId, id: inv.id, version: inv.version, paidOn: todayET() })}>
-              Mark paid today
-            </Button>
-          )}
-          {data.access.canEdit && inv.status === "paid" && !inv.drawId && (
-            <Button variant="ghost" loading={paid.isPending} onClick={() => paid.mutate({ projectId, id: inv.id, version: inv.version, paidOn: null })}>
-              Undo paid
-            </Button>
-          )}
-        </div>
+        {reopening ? (
+          <div className="mt-6 flex flex-col gap-2">
+            <label htmlFor="fin-reopen" className="text-[13px] font-medium">
+              Why reopen it?
+            </label>
+            <Textarea id="fin-reopen" rows={2} value={reopenNote} onChange={(e) => setReopenNote(e.target.value)} maxLength={1000} autoFocus />
+            <div className="flex gap-2">
+              <Button size="sm" disabled={!reopenNote.trim()} loading={reopen.isPending} onClick={() => reopen.mutate({ projectId, id: inv.id, version: inv.version, note: reopenNote.trim() })}>
+                Reopen for correction
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setReopening(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-6 flex flex-wrap gap-2">
+            {inv.status === "received" && data.access.canApprove && (
+              <DecisionButtons busy={decide.isPending} rejecting={rejecting} setRejecting={setRejecting} onDecide={(decision, note) => decide.mutate({ projectId, id: inv.id, version: inv.version, decision, note })} />
+            )}
+            {!rejecting && editable && (
+              <Button variant="secondary" onClick={() => setMode("edit")}>
+                Edit
+              </Button>
+            )}
+            {!rejecting && data.access.canEdit && inv.status === "approved" && (
+              <Button loading={paid.isPending} onClick={() => paid.mutate({ projectId, id: inv.id, version: inv.version, paidOn: todayET() })}>
+                Mark paid today
+              </Button>
+            )}
+            {!rejecting && data.access.canEdit && inv.status === "paid" && !onSubmittedDraw && (
+              <Button variant="ghost" loading={paid.isPending} onClick={() => paid.mutate({ projectId, id: inv.id, version: inv.version, paidOn: null })}>
+                Undo paid
+              </Button>
+            )}
+            {!rejecting && locked && data.access.canApprove && !onSubmittedDraw && (
+              <Button variant="ghost" onClick={() => setReopening(true)}>
+                Reopen for correction
+              </Button>
+            )}
+          </div>
+        )}
       </Dialog>
     );
   }
 
   return (
     <FormDialog
-      title={inv ? `${inv.vendorName} invoice` : "Log an invoice"}
+      title={inv ? `Edit ${inv.vendorName} invoice` : "Log an invoice"}
       onClose={onClose}
       busy={save.isPending}
       error={error}
-      onDelete={inv && !inv.drawId ? () => del.mutate({ projectId, id: inv.id }) : undefined}
+      onDelete={inv && !inv.drawId ? () => del.mutate({ projectId, id: inv.id, version: inv.version }) : undefined}
+      deleteLabel="Delete invoice"
       onSubmit={(f) =>
         run(
           () => ({
@@ -765,6 +834,7 @@ function InvoiceDialog({ projectId, data, inv, onClose }: { projectId: string; d
             amountCents: optionalMoney(str(f, "amount"), "amount", "Amount") ?? 0,
             budgetLineId: str(f, "budgetLineId") || null,
             commitmentId: str(f, "commitmentId") || null,
+            retainageBps: optionalPercentBps(str(f, "ret"), "ret", "Retainage") ?? undefined,
             note: str(f, "note") || null,
             fileId,
           }),
@@ -788,26 +858,24 @@ function InvoiceDialog({ projectId, data, inv, onClose }: { projectId: string; d
       <Field label="Invoice date" htmlFor="fin-date">
         <Input id="fin-date" name="date" type="date" defaultValue={inv?.invoiceDate ?? todayET()} className="num" />
       </Field>
-      <Field label="Against contract" htmlFor="fin-commitmentId" hint="Takes its budget line and retainage.">
+      <Field label="Against contract" htmlFor="fin-commitmentId" hint="Takes the contract's budget line and retainage.">
         <Select id="fin-commitmentId" name="commitmentId" defaultValue={inv?.commitmentId ?? ""}>
           <option value="">None</option>
           {data.commitments.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.vendorName} · {$(c.amountCents)}
+              {c.vendorName} · {$(c.revisedCents)}
             </option>
           ))}
         </Select>
       </Field>
       <LineSelect data={data} value={inv?.budgetLineId} />
-      <Field label="Note" htmlFor="fin-note" className="sm:col-span-2">
-        <Textarea id="fin-note" name="note" rows={2} maxLength={1000} defaultValue={inv?.note ?? ""} />
+      <Field label="Retainage %" htmlFor="fin-ret" hint="Blank uses the contract's.">
+        <Input id="fin-ret" name="ret" inputMode="decimal" defaultValue={inv && inv.retainageBps ? String(inv.retainageBps / 100) : ""} className="num" />
+      </Field>
+      <Field label="Note" htmlFor="fin-note">
+        <Input id="fin-note" name="note" maxLength={1000} defaultValue={inv?.note ?? ""} />
       </Field>
       <PdfField projectId={projectId} value={fileId} onChange={setFileId} />
-      {decision && (
-        <div className="flex flex-wrap gap-2 border-t border-border pt-4 sm:col-span-2">
-          <DecisionButtons busy={decide.isPending} rejecting={rejecting} setRejecting={setRejecting} onDecide={(decision, note) => decide.mutate({ projectId, id: inv!.id, version: inv!.version, decision, note })} />
-        </div>
-      )}
     </FormDialog>
   );
 }
@@ -866,7 +934,7 @@ function ChangeOrders({ projectId, data }: { projectId: string; data: Data }) {
   return (
     <div>
       <Toolbar
-        count={`${approved.length} approved · net ${$(approved.reduce((s, c) => s + c.amountCents, 0))} · ${approved.reduce((s, c) => s + c.scheduleDays, 0)} days`}
+        count={`${approved.length} approved · net ${$(sum(approved.map((c) => c.amountCents)))} · ${approved.reduce((n, c) => n + c.scheduleDays, 0)} days`}
         canAdd={data.access.canEdit}
         addLabel="Change order"
         onAdd={() => setEditing("new")}
@@ -909,31 +977,43 @@ function ChangeOrderDialog({ projectId, data, co, onClose }: { projectId: string
   const { error, run } = useSaver(save.mutate);
   const [fileId, setFileId] = useState<string | null>(co?.fileId ?? null);
   const [rejecting, setRejecting] = useState(false);
-  const locked = co?.status === "approved";
-  if (locked || (!data.access.canEdit && co)) {
+  const [mode, setMode] = useState<"view" | "edit">(co ? "view" : "edit");
+  const editable = data.access.canEdit && co?.status !== "approved";
+  if (co && mode === "view") {
     return (
-      <Dialog open onClose={onClose} title={`CO #${co!.number}`} description={`${$(co!.amountCents)} · ${co!.status}`}>
-        <p className="text-[15px]">{co!.description}</p>
+      <Dialog open onClose={onClose} title={`CO #${co.number}`} description={`${$(co.amountCents)} · ${co.status === "pending" ? "to approve" : co.status}`}>
+        <p className="text-[15px]">{co.description}</p>
         <dl className="mt-4 grid grid-cols-2 gap-4 text-sm">
-          <Fact k="Budget line" v={co!.lineName ?? "Not coded"} />
-          <Fact k="Schedule impact" v={`${co!.scheduleDays} days`} />
-          {co!.decisionNote && <Fact k="Note" v={co!.decisionNote} />}
+          <Fact k="Budget line" v={co.lineName ?? "Not coded"} />
+          <Fact k="Schedule impact" v={`${co.scheduleDays} days`} />
+          {co.decisionNote && <Fact k="Note" v={co.decisionNote} />}
         </dl>
-        {co!.status === "pending" && data.access.canApprove && (
-          <div className="mt-6 flex flex-wrap gap-2">
-            <DecisionButtons busy={decide.isPending} rejecting={rejecting} setRejecting={setRejecting} onDecide={(decision, note) => decide.mutate({ projectId, id: co!.id, version: co!.version, decision, note })} />
+        {co.fileId && (
+          <div className="mt-4">
+            <PdfField projectId={projectId} value={co.fileId} onChange={() => undefined} readOnly />
           </div>
         )}
+        <div className="mt-6 flex flex-wrap gap-2">
+          {co.status === "pending" && data.access.canApprove && (
+            <DecisionButtons busy={decide.isPending} rejecting={rejecting} setRejecting={setRejecting} onDecide={(decision, note) => decide.mutate({ projectId, id: co.id, version: co.version, decision, note })} />
+          )}
+          {!rejecting && editable && (
+            <Button variant="secondary" onClick={() => setMode("edit")}>
+              Edit
+            </Button>
+          )}
+        </div>
       </Dialog>
     );
   }
   return (
     <FormDialog
-      title={co ? `CO #${co.number}` : "New change order"}
+      title={co ? `Edit CO #${co.number}` : "New change order"}
       onClose={onClose}
       busy={save.isPending}
       error={error}
-      onDelete={co ? () => del.mutate({ projectId, id: co.id }) : undefined}
+      onDelete={co ? () => del.mutate({ projectId, id: co.id, version: co.version }) : undefined}
+      deleteLabel="Delete change order"
       onSubmit={(f) =>
         run(
           () => ({
@@ -951,6 +1031,7 @@ function ChangeOrderDialog({ projectId, data, co, onClose }: { projectId: string
         )
       }
     >
+      {co?.status === "rejected" && <p className="rounded-panel bg-sunken px-3 py-2 text-[13px] sm:col-span-2">Rejected: {co.decisionNote}. Saving sends it back for approval.</p>}
       <Field label="What changed" htmlFor="fin-desc" className="sm:col-span-2">
         <Textarea id="fin-desc" name="desc" rows={2} required maxLength={1000} defaultValue={co?.description ?? ""} />
       </Field>
@@ -958,7 +1039,7 @@ function ChangeOrderDialog({ projectId, data, co, onClose }: { projectId: string
       <Field label="Schedule impact (days)" htmlFor="fin-days">
         <Input id="fin-days" name="days" inputMode="numeric" defaultValue={String(co?.scheduleDays ?? 0)} className="num" />
       </Field>
-      <Field label="Contract" htmlFor="fin-commitmentId">
+      <Field label="Contract" htmlFor="fin-commitmentId" hint="A change to a contract also changes what's committed.">
         <Select id="fin-commitmentId" name="commitmentId" defaultValue={co?.commitmentId ?? ""}>
           <option value="">None</option>
           {data.commitments.map((c) => (
@@ -970,11 +1051,6 @@ function ChangeOrderDialog({ projectId, data, co, onClose }: { projectId: string
       </Field>
       <LineSelect data={data} value={co?.budgetLineId} />
       <PdfField projectId={projectId} value={fileId} onChange={setFileId} />
-      {co?.status === "pending" && data.access.canApprove && (
-        <div className="flex flex-wrap gap-2 border-t border-border pt-4 sm:col-span-2">
-          <DecisionButtons busy={decide.isPending} rejecting={rejecting} setRejecting={setRejecting} onDecide={(decision, note) => decide.mutate({ projectId, id: co.id, version: co.version, decision, note })} />
-        </div>
-      )}
     </FormDialog>
   );
 }
@@ -1002,7 +1078,7 @@ function Draws({ projectId, data }: { projectId: string; data: Data }) {
   const hasDraft = data.draws.some((x) => x.status === "draft");
   return (
     <div>
-      <Toolbar count={`${data.draws.length} draw${data.draws.length === 1 ? "" : "s"} · funded ${$(data.draws.filter((x) => x.status === "funded").reduce((s, x) => s + (x.fundedCents ?? x.totals.net), 0))}`} canAdd={data.access.canEdit && !hasDraft} addLabel="New draw" onAdd={() => create.mutate({ projectId })} />
+      <Toolbar count={`${data.draws.length} draw${data.draws.length === 1 ? "" : "s"} · funded ${$(sum(data.draws.filter((x) => x.status === "funded").map((x) => x.fundedCents ?? x.totals.net)))} · retainage held ${$(data.retainageHeldCents)}`} canAdd={data.access.canEdit && !hasDraft} addLabel="New draw" onAdd={() => create.mutate({ projectId })} />
       {data.draws.length === 0 ? (
         <p className="text-sm text-muted">No draws yet. A draw requisitions approved invoices, holds back retainage, and tracks lien waivers and the lender inspector.</p>
       ) : (
@@ -1034,8 +1110,10 @@ function DrawEditor({ projectId, data, draw }: { projectId: string; data: Data; 
   const update = useMutation(trpc.financials.updateDraw.mutationOptions({ onSuccess: (r) => setSeen((v) => Math.max(v, r.version)), onError, onSettled: invalidate }));
   const advance = useMutation(trpc.financials.advanceDraw.mutationOptions({ onSuccess: (r) => toast("success", DRAW_STATUS_LABEL[r.status as DrawStatus]), onError, onSettled: invalidate }));
   const del = useMutation(trpc.financials.deleteDraw.mutationOptions({ onError, onSettled: invalidate }));
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const edit = data.access.canEdit;
   const draft = draw.status === "draft";
+  const inspectorLocked = draw.status === "inspector_approved" || draw.status === "funded";
   const eligible = data.invoices.filter((i) => (i.status === "approved" || i.status === "paid") && (!i.drawId || i.drawId === draw.id));
   // Show a tick at once; the draw refreshes (and re-syncs) when the server answers.
   const version = Math.max(draw.version, seen);
@@ -1093,7 +1171,7 @@ function DrawEditor({ projectId, data, draw }: { projectId: string; data: Data; 
                 <label className="flex min-h-10 items-center gap-3 text-sm">
                   <input
                     type="checkbox"
-                    disabled={!edit || draw.status === "funded" || update.isPending}
+                    disabled={!edit || !draft || update.isPending}
                     checked={w.received}
                     onChange={(e) => setWaiver(idx, e.target.checked)}
                     className="size-4 accent-[var(--accent)]"
@@ -1112,43 +1190,56 @@ function DrawEditor({ projectId, data, draw }: { projectId: string; data: Data; 
           onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
-            let funded: number | null;
+            const advancing = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("data-advance") === "1";
+            let funded: number | null | undefined;
             try {
-              funded = optionalMoney(str(f, "funded"), "funded", "Funded amount");
+              funded = draft ? undefined : optionalMoney(str(f, "funded"), "funded", "Funded amount");
             } catch (err) {
               toast("error", (err as Error).message);
               return;
             }
-            update.mutate({ projectId, id: draw.id, version, inspectorName: str(f, "insp") || null, inspectorSignedOn: str(f, "inspOn") || null, periodEnd: str(f, "period") || null, fundedCents: funded }, { onSuccess: () => toast("success", "Draw saved") });
+            // Save what's typed first, then (for the next-step button) move the draw along with the new version.
+            update.mutate(
+              {
+                projectId,
+                id: draw.id,
+                version,
+                ...(inspectorLocked ? {} : { inspectorName: str(f, "insp") || null, inspectorSignedOn: str(f, "inspOn") || null }),
+                ...(draft ? { periodEnd: str(f, "period") || null } : {}),
+                ...(funded !== undefined ? { fundedCents: funded } : {}),
+              },
+              { onSuccess: (r) => (advancing ? advance.mutate({ projectId, id: draw.id, version: r.version }) : toast("success", "Draw saved")) },
+            );
           }}
         >
           <Field label="Period ending" htmlFor={`dr-period-${draw.id}`}>
-            <Input id={`dr-period-${draw.id}`} name="period" type="date" defaultValue={draw.periodEnd ?? ""} className="num" />
+            <Input id={`dr-period-${draw.id}`} name="period" type="date" disabled={!draft} defaultValue={draw.periodEnd ?? ""} className="num" />
           </Field>
           <Field label="Lender inspector" htmlFor={`dr-insp-${draw.id}`}>
-            <Input id={`dr-insp-${draw.id}`} name="insp" maxLength={160} defaultValue={draw.inspectorName ?? ""} />
+            <Input id={`dr-insp-${draw.id}`} name="insp" maxLength={160} disabled={inspectorLocked} defaultValue={draw.inspectorName ?? ""} />
           </Field>
           <Field label="Inspector signed off" htmlFor={`dr-insp-on-${draw.id}`}>
-            <Input id={`dr-insp-on-${draw.id}`} name="inspOn" type="date" defaultValue={draw.inspectorSignedOn ?? ""} className="num" />
+            <Input id={`dr-insp-on-${draw.id}`} name="inspOn" type="date" disabled={inspectorLocked} defaultValue={draw.inspectorSignedOn ?? ""} className="num" />
           </Field>
-          {draw.status !== "draft" && <MoneyField name="funded" label="Amount funded" value={draw.fundedCents} />}
-          <div className="flex items-end gap-2 sm:col-span-3">
-            <Button type="submit" variant="secondary" size="sm" loading={update.isPending}>
+          {!draft && <MoneyField name="funded" label="Amount funded" value={draw.fundedCents} />}
+          <div className="flex flex-wrap items-end gap-2 sm:col-span-3">
+            <Button type="submit" variant="secondary" size="sm" loading={update.isPending && !advance.isPending}>
               Save
             </Button>
             {next && (
-              <Button size="sm" loading={advance.isPending} disabled={update.isPending} onClick={() => advance.mutate({ projectId, id: draw.id, version })}>
+              <Button type="submit" data-advance="1" size="sm" loading={advance.isPending} disabled={update.isPending}>
                 {next}
               </Button>
             )}
             {draft && (
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => del.mutate({ projectId, id: draw.id })}>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setConfirmDelete(true)}>
                 Delete draft
               </Button>
             )}
           </div>
         </form>
       )}
+      <ConfirmDialog open={confirmDelete} title={`Delete draft draw #${draw.number}?`} body="Its invoices go back to being available. The draw number isn't reused." confirmLabel="Delete draft" danger busy={del.isPending} onCancel={() => setConfirmDelete(false)} onConfirm={() => del.mutate({ projectId, id: draw.id, version }, { onSuccess: () => setConfirmDelete(false) })} />
     </div>
   );
 }
@@ -1232,7 +1323,8 @@ function UnitDialog({ projectId, unit: u, onClose }: { projectId: string; unit: 
       onClose={onClose}
       busy={save.isPending}
       error={error}
-      onDelete={u ? () => del.mutate({ projectId, id: u.id }) : undefined}
+      onDelete={u ? () => del.mutate({ projectId, id: u.id, version: u.version }) : undefined}
+      deleteLabel="Delete unit"
       onSubmit={(f) =>
         run(
           () => ({

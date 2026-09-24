@@ -59,6 +59,15 @@ function canManageFile(ctx: Ctx, a: FileAccess): boolean {
   return a.viaFolder && (ctx.project.can("checklist.edit") || a.file.createdById === ctx.viewer.id);
 }
 
+/** Is this file the document of an invoice, contract or change order? (It must stay in the gated folder.) */
+async function usedByFinancials(tx: DbOrTx, fileId: string): Promise<boolean> {
+  const r = await tx.execute<{ n: number }>(sql`select (
+    (select count(*) from ${schema.invoice} where file_id = ${fileId}) +
+    (select count(*) from ${schema.commitment} where file_id = ${fileId}) +
+    (select count(*) from ${schema.changeOrder} where file_id = ${fileId}))::int as n`);
+  return (r.rows[0]?.n ?? 0) > 0;
+}
+
 /** Audit entity type: anything in the gated folder is hidden from people without financial visibility. */
 const entityFor = (folder: Pick<FolderRow, "gated">) => (folder.gated ? "financial_file" : "file");
 
@@ -351,6 +360,7 @@ export const filesRouter = router({
         const scope = await folderScope(tx, ctx.project, ctx.viewer.id);
         const to = await loadFolder(tx, input.projectId, input.folderId);
         if (!scope.canSee(to)) throw new TRPCError({ code: "NOT_FOUND", message: "Folder not found" });
+        if (a.folder.gated && !to.gated && (await usedByFinancials(tx, a.file.id))) throw new TRPCError({ code: "BAD_REQUEST", message: "This is the document for an invoice, contract or change order, so it stays in the Financial folder." });
         const r = await tx.update(schema.file).set({ folderId: to.id, updatedAt: new Date(), version: sql`${schema.file.version} + 1` }).where(and(eq(schema.file.id, a.file.id), eq(schema.file.version, input.version))).returning({ version: schema.file.version });
         if (!r.length) throw new TRPCError({ code: "CONFLICT", message: "Someone else changed this file a moment ago. It has been refreshed; try again." });
         // A move across the gate is logged as financial so its name never shows to people without access.
@@ -367,6 +377,7 @@ export const filesRouter = router({
       return ctx.db.transaction(async (tx) => {
         const a = await visibleFile(c, tx, input.fileId);
         if (!canManageFile(c, a)) throw new TRPCError({ code: "FORBIDDEN" });
+        if (await usedByFinancials(tx, a.file.id)) throw new TRPCError({ code: "BAD_REQUEST", message: "This is the document for an invoice, contract or change order. Remove it there first." });
         await tx.update(schema.file).set({ deletedAt: new Date(), deletedById: ctx.viewer.id, version: sql`${schema.file.version} + 1` }).where(and(eq(schema.file.id, a.file.id), isNull(schema.file.deletedAt)));
         await audit(tx, c, a.folder, `${ctx.viewer.name} moved ${a.file.name} to the trash`, a.file.id, "delete");
         return { ok: true };

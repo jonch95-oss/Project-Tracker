@@ -117,7 +117,7 @@ describe("projects", () => {
   it("headline financials reach only people with the flag: list, get and activity", async () => {
     const c = await callerFor(owner.id);
     const { id } = await createProject(owner.id, "Money");
-    await c.projects.setHeadline({ projectId: id, purchasePriceCents: 2_500_000_00, totalBudgetCents: 4_000_000_00, projectedSelloutCents: 7_000_000_00 });
+    await c.financials.saveHeadline({ projectId: id, version: 0, purchasePriceCents: 2_500_000_00, totalBudgetCents: 4_000_000_00, projectedSelloutCents: 7_000_000_00, loanAmountCents: null, useBudgetDetail: false, useSalesDetail: false });
     const fin = await createUser("member");
     const noFin = await createUser("member");
     const ext = await createUser("external");
@@ -137,7 +137,7 @@ describe("projects", () => {
     expect(feed.items.length).toBeGreaterThan(0);
     expect(feed.items.some((e) => e.entityType === "project_headline")).toBe(false);
     expect(JSON.stringify(feed)).not.toMatch(/250000000|2,500,000/);
-    await expect(asNo.projects.setHeadline({ projectId: id, purchasePriceCents: 1, totalBudgetCents: null, projectedSelloutCents: null })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(asNo.financials.saveHeadline({ projectId: id, version: 1, purchasePriceCents: 1, totalBudgetCents: null, projectedSelloutCents: null, loanAmountCents: null, useBudgetDetail: false, useSalesDetail: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     // Outside collaborators: no headline, no activity feed, and no view of who else is on projects.
     const asExt = await callerFor(ext.id);

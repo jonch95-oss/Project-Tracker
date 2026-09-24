@@ -266,6 +266,10 @@ export const projectHeadline = pgTable("project_headline", {
   projectedSelloutCents: bigint("projected_sellout_cents", { mode: "number" }),
   /** Senior debt, for equity required and the equity multiple (brief §8). */
   loanAmountCents: bigint("loan_amount_cents", { mode: "number" }),
+  /** Take the total budget from the budget lines / sellout from the unit schedule (else the typed figures). */
+  useBudgetDetail: boolean("use_budget_detail").notNull().default(false),
+  useSalesDetail: boolean("use_sales_detail").notNull().default(false),
+  version: integer("version").notNull().default(1),
   updatedAt: updatedAt(),
 });
 
@@ -833,4 +837,17 @@ export const saleUnit = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("sale_unit_project_unit_idx").on(t.projectId, sql`lower(${t.unit})`)],
+);
+
+/** Per-project numbering that never goes backwards (change orders, draws), even after a delete. */
+export const projectSequence = pgTable(
+  "project_sequence",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    last: integer("last").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.kind] })],
 );

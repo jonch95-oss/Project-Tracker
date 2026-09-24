@@ -6,7 +6,12 @@ import { recordAudit } from "@/server/services/audit";
 import { authedContextFrom } from "@/server/request-context";
 import { createCaller } from "@/server/trpc/root";
 
-/** Cents to a number of dollars for a spreadsheet cell (display only; all math stays in cents). */
+/**
+ * Cents to dollars for a spreadsheet cell. The one deliberate exception to "no
+ * floating-point money": Excel stores every number as a double, so the cell
+ * gets cents/100 (exact to the cent for any real amount). Nothing is computed
+ * from these values here; all totals come from src/core in integer cents.
+ */
 const usd = (cents: number | null | undefined) => (cents == null ? null : cents / 100);
 const MONEY = '"$"#,##0.00;[Red]-"$"#,##0.00';
 
