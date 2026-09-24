@@ -8,13 +8,14 @@ import {
   IconPaperclip,
   IconPlus,
 } from "@/components/ui/icons";
+import { LocationToggle } from "@/components/location-toggle";
 import { Dialog, useToast } from "@/components/ui/overlay";
 import { Button, Field, Select, Skeleton } from "@/components/ui/primitives";
 import { formatFileSize } from "@/core/files";
 import { cn } from "@/lib/cn";
 import { cameraOptions } from "@/lib/camera";
 import { largeFiles, useFileUpload } from "@/lib/file-upload";
-import { compressPhoto, PhotoError } from "@/lib/photo-upload";
+import { compressPhoto, photoFileTime, PhotoError } from "@/lib/photo-upload";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import {
   FileIcon,
@@ -99,12 +100,8 @@ export function TaskAttachments({
     if (!file) return;
     setShooting(true);
     try {
-      const c = await compressPhoto(file, await cameraOptions());
-      const when = (c.takenAt ?? new Date())
-        .toISOString()
-        .slice(0, 16)
-        .replace("T", " ")
-        .replace(":", "-");
+      const c = await compressPhoto(file, await cameraOptions([file]));
+      const when = photoFileTime(c.takenAt ?? new Date());
       const named = new File(
         [c.full],
         `Photo ${when}.${c.contentType === "image/webp" ? "webp" : "jpg"}`,
@@ -161,6 +158,7 @@ export function TaskAttachments({
             >
               <IconCamera size={16} /> Take photo
             </Button>
+            <LocationToggle />
             <input
               ref={camera}
               type="file"

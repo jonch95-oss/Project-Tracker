@@ -75,7 +75,8 @@ export const photosRouter = router({
         desc(schema.projectPhoto.id),
       )
       .limit(500);
-    return rows;
+    // Where a photo was taken is for the project team, not outside collaborators or investors.
+    return ctx.project.can("task.viewAll") ? rows : rows.map((r) => ({ ...r, latitude: null, longitude: null }));
   }),
 
   /**

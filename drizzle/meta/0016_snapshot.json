@@ -1,5 +1,5 @@
 {
-  "id": "aef81bef-7916-4b23-bc7f-b43ded4aa6fc",
+  "id": "d56d4789-c581-49fc-ab03-ae028d048960",
   "prevId": "0fd44218-4a64-46cf-bf3d-54ee7c58bd7d",
   "version": "7",
   "dialect": "postgresql",
@@ -9066,6 +9066,12 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -9104,6 +9110,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "task_comment_client_idx": {
+          "name": "task_comment_client_idx",
+          "columns": [
+            {
+              "expression": "author_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "client_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"task_comment\".\"client_id\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}

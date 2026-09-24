@@ -58,7 +58,7 @@ test.describe("files", () => {
     await expect(page.getByText(/Attach Site photos first/)).toBeVisible();
     const td = page.getByRole("dialog", { name: /Site visit with photos/ });
     await expect(td.getByText(/Needs Site photos before it can be checked off/)).toBeVisible();
-    await td.locator('#task-attachments input[type="file"]').setInputFiles(fixture("site.png"));
+    await td.locator('#task-attachments input[type="file"]:not([capture])').setInputFiles(fixture("site.png"));
     await expect(page.getByText("Attached", { exact: true })).toBeVisible();
     await expect(td.getByRole("button", { name: /^site\.png/ })).toBeVisible();
     await td.getByRole("button", { name: "Mark done" }).click();

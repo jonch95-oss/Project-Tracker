@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconPlus } from "@/components/ui/icons";
+import { LocationToggle } from "@/components/location-toggle";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Button, buttonClass, Field, Input, Select, Skeleton, StatusPill, Textarea, type Tone } from "@/components/ui/primitives";
 import { PUNCH_STATUSES } from "@/core/field";
@@ -146,7 +147,7 @@ export function PunchDialog({ projectId, draft, team, onClose }: { projectId: st
 
   async function takePhoto(files: File[]) {
     setPhotoBusy(true);
-    const r = await uploadPhotos(client, projectId, files.slice(0, 1), await cameraOptions());
+    const r = await uploadPhotos(client, projectId, files.slice(0, 1), await cameraOptions(files.slice(0, 1)));
     setPhotoBusy(false);
     for (const e of r.errors) toast("error", e);
     if (r.ids[0]) setPhotoId(r.ids[0]);
@@ -251,6 +252,7 @@ export function PunchDialog({ projectId, draft, team, onClose }: { projectId: st
             <Button type="button" variant="secondary" size="sm" loading={photoBusy} onClick={() => camera.current?.click()}>
               {photoId ? "Retake photo" : "Add photo"}
             </Button>
+            <LocationToggle />
           </div>
         )}
       </form>

@@ -1,31 +1,16 @@
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  createTRPCClient,
-  httpBatchLink,
-  httpLink,
-  loggerLink,
-  splitLink,
-  type TRPCLink,
-} from "@trpc/client";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTRPCClient, httpBatchLink, loggerLink, type TRPCLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
 import { createTRPCContext } from "@trpc/tanstack-react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import superjson from "superjson";
 import type { AppRouter } from "@/server/trpc/root";
-import {
-  enqueue,
-  isNetworkError,
-  isQueueable,
-  overlayQueued,
-  queuedResult,
-  setTaskTitleLookup,
-} from "./offline-queue";
+import { enqueue, isNetworkError, isQueueable, keyParts, newClientId, overlayQueued, queuedResult, setTaskTitleLookup, subscribeQueue } from "./offline-queue";
 
-export const { TRPCProvider, useTRPC, useTRPCClient } =
-  createTRPCContext<AppRouter>();
+export const { TRPCProvider, useTRPC, useTRPCClient } = createTRPCContext<AppRouter>();
 export type RouterOutputs = inferRouterOutputs<AppRouter>;
 
 /**
@@ -37,39 +22,30 @@ function offlineLink(): TRPCLink<AppRouter> {
   return () =>
     ({ op, next }) =>
       observable((observer) => {
-        const bypass = (op.context as { offlineBypass?: boolean } | undefined)
-          ?.offlineBypass;
+        const bypass = (op.context as { offlineBypass?: boolean } | undefined)?.offlineBypass;
         if (op.type === "mutation" && isQueueable(op.path) && !bypass) {
           const path = op.path;
+          // Every comment carries its own id, so sending it again (after a lost answer, or from a second tab) can't post it twice.
+          const input = path === "tasks.addComment" && op.input && typeof op.input === "object" && !("clientId" in op.input) ? { ...(op.input as object), clientId: newClientId() } : op.input;
           const queue = () => {
-            enqueue(path, op.input);
-            observer.next({
-              result: { type: "data", data: queuedResult(path, op.input) },
-            } as never);
+            enqueue(path, input);
+            observer.next({ result: { type: "data", data: queuedResult(path, input) } } as never);
             observer.complete();
           };
           if (typeof navigator !== "undefined" && navigator.onLine === false) {
             queue();
             return;
           }
-          const sub = next(op).subscribe({
+          const sub = next({ ...op, input }).subscribe({
             next: (v) => observer.next(v),
-            error: (err) =>
-              isNetworkError(err) ? queue() : observer.error(err),
+            error: (err) => (isNetworkError(err) ? queue() : observer.error(err)),
             complete: () => observer.complete(),
           });
           return () => sub.unsubscribe();
         }
         const sub = next(op).subscribe({
           next: (v) => {
-            if (op.type === "query" && v.result.type === "data")
-              observer.next({
-                ...v,
-                result: {
-                  ...v.result,
-                  data: overlayQueued(op.path, op.input, v.result.data),
-                },
-              } as never);
+            if (op.type === "query" && v.result.type === "data") observer.next({ ...v, result: { ...v.result, data: overlayQueued(op.path, op.input, v.result.data) } } as never);
             else observer.next(v);
           },
           error: (err) => observer.error(err),
@@ -114,15 +90,10 @@ function makeQueryClient() {
         networkMode: "always",
       },
       queries: {
-        // Try once even offline: the service worker may have a saved copy.
-        networkMode: "offlineFirst",
+        // Offline, reads wait (the copy saved on the phone stays on screen) and run when the connection is back.
         staleTime: 30_000,
         // Neon's free plan can take a few seconds to wake; retry once.
-        retry: (count, err) =>
-          count < 1 &&
-          !/UNAUTHORIZED|FORBIDDEN|NOT_FOUND/.test(
-            String((err as { data?: { code?: string } })?.data?.code),
-          ),
+        retry: (count, err) => count < 1 && !/UNAUTHORIZED|FORBIDDEN|NOT_FOUND/.test(String((err as { data?: { code?: string } })?.data?.code)),
         refetchOnWindowFocus: true,
       },
     },
@@ -131,26 +102,31 @@ function makeQueryClient() {
 
 export function TRPCReactProvider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => {
+    // Start from the phone's real connection state (React Query otherwise assumes online until an event).
+    if (typeof navigator !== "undefined") onlineManager.setOnline(navigator.onLine);
     const qc = makeQueryClient();
     setTaskTitleLookup((id) => findTaskTitle(qc, id));
     return qc;
   });
+  // A change queued offline shows at once on everything already loaded (reads are paused while offline).
+  useEffect(
+    () =>
+      subscribeQueue(() => {
+        for (const q of queryClient.getQueryCache().getAll()) {
+          if (q.state.status !== "success") continue;
+          const { path, input } = keyParts(q.queryKey);
+          const next = overlayQueued(path, input, q.state.data);
+          if (next !== q.state.data) queryClient.setQueryData(q.queryKey, next);
+        }
+      }),
+    [queryClient],
+  );
   const [trpcClient] = useState(() =>
     createTRPCClient<AppRouter>({
       links: [
-        loggerLink({
-          enabled: (op) =>
-            process.env.NODE_ENV === "development" &&
-            op.direction === "down" &&
-            op.result instanceof Error,
-        }),
+        loggerLink({ enabled: (op) => process.env.NODE_ENV === "development" && op.direction === "down" && op.result instanceof Error }),
         offlineLink(),
-        // Reads go one per request (GET), so the service worker can keep a saved copy of each for offline use.
-        splitLink({
-          condition: (op) => op.type === "query",
-          true: httpLink({ url: "/api/trpc", transformer: superjson }),
-          false: httpBatchLink({ url: "/api/trpc", transformer: superjson }),
-        }),
+        httpBatchLink({ url: "/api/trpc", transformer: superjson }),
       ],
     }),
   );
@@ -166,27 +142,15 @@ export function TRPCReactProvider({ children }: { children: ReactNode }) {
 /** Human message for a failed tRPC call. */
 export function errorMessage(err: unknown): string {
   if (!err) return "Something went wrong.";
-  if (isNetworkError(err))
-    return "You're offline. Try again when you have a connection.";
-  const e = err as {
-    message?: string;
-    data?: {
-      code?: string;
-      zodError?: { fieldErrors?: Record<string, string[]> };
-    };
-  };
+  if (isNetworkError(err)) return "You're offline. Try again when you have a connection.";
+  const e = err as { message?: string; data?: { code?: string; zodError?: { fieldErrors?: Record<string, string[]> } } };
   const fieldErrors = e.data?.zodError?.fieldErrors;
   if (fieldErrors) {
     const first = Object.values(fieldErrors).flat()[0];
     if (first) return first;
   }
-  if (e.data?.code === "FORBIDDEN")
-    return e.message && e.message !== "FORBIDDEN"
-      ? e.message
-      : "You don't have permission to do that.";
-  if (e.data?.code === "UNAUTHORIZED")
-    return "Your session has ended. Please sign in again.";
-  if (e.data?.code === "INTERNAL_SERVER_ERROR")
-    return "Something went wrong on our side. It has been logged.";
+  if (e.data?.code === "FORBIDDEN") return e.message && e.message !== "FORBIDDEN" ? e.message : "You don't have permission to do that.";
+  if (e.data?.code === "UNAUTHORIZED") return "Your session has ended. Please sign in again.";
+  if (e.data?.code === "INTERNAL_SERVER_ERROR") return "Something went wrong on our side. It has been logged.";
   return e.message ?? "Something went wrong.";
 }

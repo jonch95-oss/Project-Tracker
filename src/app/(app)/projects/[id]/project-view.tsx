@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { HeadlineFigures, ProjectImage, pct } from "@/components/project/visuals";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
@@ -38,7 +38,6 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
   const project = useQuery(trpc.projects.get.queryOptions({ projectId }));
   // The tab lives in the URL so it survives reloads and can be linked to.
   const params = useSearchParams();
-  const router = useRouter();
   const pathname = usePathname();
   const [editing, setEditing] = useState(false);
   const requested = params.get("tab");
@@ -84,7 +83,8 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
   ];
   const tab: TabKey = tabs.some((t) => t.key === requested) ? (requested as TabKey) : "overview";
   const setTab = (next: TabKey, phase?: string, task?: string) =>
-    router.replace(next === "overview" ? pathname : `${pathname}?tab=${next}${phase ? `&phase=${encodeURIComponent(phase)}` : ""}${task ? `&task=${encodeURIComponent(task)}` : ""}`, { scroll: false });
+    // Only the browser's address changes (the server doesn't read these): instant, no server call, and it works offline.
+    window.history.replaceState(null, "", next === "overview" ? pathname : `${pathname}?tab=${next}${phase ? `&phase=${encodeURIComponent(phase)}` : ""}${task ? `&task=${encodeURIComponent(task)}` : ""}`);
   const openChecklist = (phase: string) => {
     setTab("checklist", phase);
     requestAnimationFrame(() => document.getElementById(`phase-${phase}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));

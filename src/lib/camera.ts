@@ -49,13 +49,20 @@ export function currentLocation(
   });
 }
 
-/** Options for a photo just taken with the camera: stamped, and located when the person turned that on. */
-export async function cameraOptions(): Promise<{
-  camera: true;
-  location: PhotoLocation | null;
-}> {
-  return {
-    camera: true,
-    location: locationOn() ? await currentLocation() : null,
-  };
+/** A file counts as just taken with the camera only if it was made in the last couple of minutes (not picked from the library). */
+const FRESH_MS = 2 * 60 * 1000;
+
+export function freshShot(files: readonly File[], now = Date.now()): boolean {
+  return files.length > 0 && files.every((f) => Math.abs(now - f.lastModified) < FRESH_MS);
+}
+
+/**
+ * Options for photos from a "Take photo" button: stamped with the time and,
+ * if the person turned location on, located. A photo picked from the library
+ * instead (desktop, or iPhone's library option) keeps its own EXIF time and
+ * gets neither.
+ */
+export async function cameraOptions(files: readonly File[]): Promise<{ camera: boolean; location: PhotoLocation | null }> {
+  if (!freshShot(files)) return { camera: false, location: null };
+  return { camera: true, location: locationOn() ? await currentLocation() : null };
 }

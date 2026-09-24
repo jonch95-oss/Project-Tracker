@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { signIn } from "./helpers";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { Client } from "pg";
 
 test.use({ viewport: { width: 393, height: 852 } });
 
@@ -55,7 +57,8 @@ test("iPhone: take a photo straight into the project's photos", async ({ page })
   await page.getByRole("heading", { name: "Sterling Place Townhouse" }).click();
   await expect(page.getByRole("button", { name: "Take photo" })).toBeVisible();
   const before = await page.getByRole("button", { name: /^Open photo/ }).count();
-  await page.getByLabel("Take a photo").setInputFiles(path.join(__dirname, "fixtures", "site.png"));
+  // A photo made just now (as the camera does), so it's stamped and timed as taken now.
+  await page.getByLabel("Take a photo").setInputFiles({ name: "IMG_0001.png", mimeType: "image/png", buffer: readFileSync(path.join(__dirname, "fixtures", "site.png")) });
   await expect(page.getByText("Photo added")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: /^Open photo/ })).toHaveCount(before + 1);
   // Taken just now, so it carries today's capture time.
@@ -63,9 +66,19 @@ test("iPhone: take a photo straight into the project's photos", async ({ page })
 });
 
 test("iPhone: approve a request from My Tasks", async ({ page }) => {
+  // Its own request, so the seeded one stays for the desktop approval test.
+  const title = `iPhone approval ${Date.now()}`;
+  const db = new Client({ connectionString: process.env.E2E_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/pc_e2e_test" });
+  await db.connect();
+  await db.query(
+    `insert into task (project_id, phase_key, title, status, requires_approval, approver_role, approver_id, approval_requested_at, due_on)
+     select p.id, 'construction', $1, 'awaiting_approval', true, 'Owner', u.id, now(), current_date from project p, "user" u where p.name = 'Sterling Place Townhouse' and u.email = 'jon@demo.test'`,
+    [title],
+  );
+  await db.end();
   await signIn(page, "jon@demo.test");
   await page.goto("/tasks");
-  const approve = page.getByRole("button", { name: "Approve" }).first();
+  const approve = page.getByRole("listitem").filter({ hasText: title }).getByRole("button", { name: "Approve" });
   await expect(approve).toBeVisible();
   await approve.click();
   await expect(page.getByText("Approved")).toBeVisible();

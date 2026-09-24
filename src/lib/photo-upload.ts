@@ -82,12 +82,15 @@ export interface PhotoLocation {
   accuracyM: number | null;
 }
 
-/** The text burned into a camera photo: when (New York time) and, if on, where. */
-export function stampText(at: Date, location?: PhotoLocation | null): string {
-  const when = formatDateTimeET(at);
-  return location
-    ? `${when} · ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`
-    : when;
+/** "2026-09-24 18-05" in New York time, for naming a photo file. */
+export function photoFileTime(at: Date): string {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(at).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}-${p.minute}`;
+}
+
+/** The date stamp burned into a camera photo (New York time). Where it was taken is kept with the photo, not printed on it. */
+export function stampText(at: Date): string {
+  return formatDateTimeET(at);
 }
 
 export async function compressPhoto(
@@ -116,7 +119,7 @@ export async function compressPhoto(
         : null;
     const takenAt = exif ?? (opts.camera ? new Date() : null);
     const stamp = opts.camera
-      ? stampText(takenAt ?? new Date(), opts.location)
+      ? stampText(takenAt ?? new Date())
       : null;
     let type: PhotoContentType = "image/webp";
     let fullBlob = await encode(bitmap, full.width, full.height, type, stamp);

@@ -332,16 +332,25 @@ export const tasksRouter = router({
     }),
 
   addComment: projectProcedure()
-    .input(z.object({ taskId: z.uuid(), body: z.string().trim().min(1).max(4000) }))
+    .input(z.object({ taskId: z.uuid(), body: z.string().trim().min(1).max(4000), clientId: z.string().min(8).max(64).regex(/^[A-Za-z0-9-]+$/).optional() }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
-      return ctx.db.transaction(async (tx) => {
+      // Sent before (a lost answer, an offline sync, a second tab): the comment is already there.
+      const already = async () => {
+        if (!input.clientId) return null;
+        const [row] = await ctx.db.select({ id: schema.taskComment.id }).from(schema.taskComment).where(and(eq(schema.taskComment.authorId, ctx.viewer.id), eq(schema.taskComment.clientId, input.clientId)));
+        return row ? { id: row.id } : null;
+      };
+      const seen = await already();
+      if (seen) return seen;
+      return ctx.db
+        .transaction(async (tx) => {
         const t = await visibleTask(c, tx, input.taskId);
         const people = await projectPeople(tx, input.projectId);
         const watchers = (await tx.select({ userId: schema.taskWatcher.userId }).from(schema.taskWatcher).where(eq(schema.taskWatcher.taskId, t.id))).map((w) => w.userId);
         const readers = taskReaders(people, t, watchers);
         const mentions = mentionedIds(input.body, readers);
-        const [row] = await tx.insert(schema.taskComment).values({ taskId: t.id, projectId: input.projectId, authorId: ctx.viewer.id, body: input.body, mentions }).returning({ id: schema.taskComment.id });
+        const [row] = await tx.insert(schema.taskComment).values({ taskId: t.id, projectId: input.projectId, authorId: ctx.viewer.id, body: input.body, mentions, clientId: input.clientId ?? null }).returning({ id: schema.taskComment.id });
         await audit(tx, c, `${ctx.viewer.name} commented on "${t.title}"`, t.id, { commentId: row!.id }, "create");
         const text = commentPlainText(input.body);
         const href = taskHref(input.projectId, t.id);
@@ -349,6 +358,12 @@ export const tasksRouter = router({
         const audience = (await taskAudience(tx, t)).filter((u) => !mentions.includes(u));
         await notify(tx, ctx.viewer.id, audience.map((userId) => ({ userId, kind: "comment" as const, title: `${ctx.viewer.name} commented on “${t.title}”`, body: text, projectId: input.projectId, taskId: t.id, href })));
         return { id: row!.id };
+      }).catch(async (e: unknown) => {
+        // Two sends of the same comment at once: the other one saved it.
+        const dup = (e as { code?: string; cause?: { code?: string } }).code === "23505" || (e as { cause?: { code?: string } }).cause?.code === "23505";
+        const row = dup ? await already() : null;
+        if (row) return row;
+        throw e;
       });
     }),
 

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ErrorState } from "@/components/ui/architecture";
 import { IconArrowLeft, IconChevronRight, IconPlus } from "@/components/ui/icons";
+import { LocationToggle } from "@/components/location-toggle";
 import { useToast } from "@/components/ui/overlay";
 import { Button, buttonClass, Field, Input, Select, Skeleton, Textarea } from "@/components/ui/primitives";
 import { manpowerTotal, MAX_LOG_RANGE_DAYS } from "@/core/field";
@@ -89,7 +90,7 @@ function LogForm({ projectId, day, data }: { projectId: string; day: string; dat
     try {
       // Photos hang off the day's log: file it first if it's new.
       await submit(form, async (logId) => {
-        const r = await uploadPhotos(client, projectId, files, { siteLogId: logId, ...(await cameraOptions()) }, (d, t) => setPhotoBusy(`${d} of ${t}`));
+        const r = await uploadPhotos(client, projectId, files, { siteLogId: logId, ...(await cameraOptions(files)) }, (d, t) => setPhotoBusy(`${d} of ${t}`));
         for (const e of r.errors) toast("error", e);
         if (r.ids.length) toast("success", r.ids.length === 1 ? "Photo added" : `${r.ids.length} photos added`);
       });
@@ -248,6 +249,7 @@ function LogForm({ projectId, day, data }: { projectId: string; day: string; dat
         <Button type="button" variant="secondary" loading={!!photoBusy} onClick={() => camera.current?.click()}>
           {photoBusy ? `Uploading ${photoBusy}` : "Take or add photos"}
         </Button>
+        <LocationToggle />
       </div>
 
       <div className="sticky bottom-[calc(72px+env(safe-area-inset-bottom))] z-10 -mx-4 flex gap-3 border-t border-border bg-bg/95 px-4 py-3 backdrop-blur lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0">

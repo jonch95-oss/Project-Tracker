@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { authClient } from "./auth-client";
+import { clearSnapshots, tellWorker } from "./offline-cache";
 import { clearQueue, readQueue } from "./offline-queue";
 import { useTRPC } from "./trpc";
 
@@ -40,21 +41,17 @@ export function pushSupport(): PushSupport {
   return capable ? "ok" : "unsupported";
 }
 
-/** The service worker's saved copies of pages and data (see public/sw.js). */
-export const OFFLINE_CACHE_PREFIX = "pc-";
-
-/** Delete every saved copy (sign-out; a different person may use this phone next). */
-export async function clearOfflineCopies(): Promise<void> {
+/**
+ * Delete the pages the service worker saved (sign-out, the sign-in page).
+ * With `data`, also this phone's saved answers for every person (sign-out).
+ */
+export async function clearOfflineCopies(opts: { data?: boolean } = {}): Promise<void> {
   try {
-    if (typeof caches === "undefined") return;
-    for (const k of await caches.keys())
-      if (
-        k.startsWith(OFFLINE_CACHE_PREFIX) &&
-        !k.startsWith(`${OFFLINE_CACHE_PREFIX}static`)
-      )
-        await caches.delete(k);
+    tellWorker(null);
+    if (typeof caches !== "undefined") for (const k of await caches.keys()) if (k.startsWith("pc-") && !k.startsWith("pc-static")) await caches.delete(k);
+    if (opts.data) await clearSnapshots();
   } catch {
-    // Never block signing out.
+    // Never block signing in or out.
   }
 }
 
@@ -177,7 +174,7 @@ export function useSignOut() {
     }
     // Nothing of this person's stays on the device: queued offline changes and saved copies of pages.
     clearQueue();
-    await clearOfflineCopies();
+    await clearOfflineCopies({ data: true });
     await authClient.signOut();
     router.replace("/login");
     router.refresh();

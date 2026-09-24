@@ -618,11 +618,13 @@ export const taskComment = pgTable(
     /** Text with @[Name](userId) mention tokens. */
     body: text("body").notNull(),
     mentions: jsonb("mentions").$type<string[]>().notNull().default([]),
+    /** The phone's own id for the comment (brief §12), so a resend after a lost answer or an offline sync can't post it twice. */
+    clientId: text("client_id"),
     createdAt: createdAt(),
     editedAt: timestamp("edited_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (t) => [index("task_comment_task_idx").on(t.taskId, t.createdAt)],
+  (t) => [index("task_comment_task_idx").on(t.taskId, t.createdAt), uniqueIndex("task_comment_client_idx").on(t.authorId, t.clientId).where(sql`${t.clientId} is not null`)],
 );
 
 /** Watchers get updates on a task. Watching also shares the task with an outside collaborator (brief §4). */

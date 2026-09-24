@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState } from "react";
 import { ErrorState } from "@/components/ui/architecture";
 import {
   IconCamera,
@@ -13,7 +13,8 @@ import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Button, Skeleton, StatusPill } from "@/components/ui/primitives";
 import { formatDateTimeET } from "@/core/time";
 import { cn } from "@/lib/cn";
-import { cameraOptions, locationOn, setLocationOn } from "@/lib/camera";
+import { LocationToggle } from "@/components/location-toggle";
+import { cameraOptions } from "@/lib/camera";
 import {
   compressPhoto,
   PhotoError,
@@ -23,7 +24,6 @@ import {
 } from "@/lib/photo-upload";
 import { errorMessage, useTRPC, useTRPCClient } from "@/lib/trpc";
 
-const noSubscribe = () => () => {};
 
 interface Props {
   projectId: string;
@@ -50,14 +50,6 @@ export function PhotoGallery({
   const photos = useQuery(trpc.photos.list.queryOptions({ projectId }));
   const input = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
-  // The saved per-device choice (read after hydration), until the person flips it here.
-  const storedLocation = useSyncExternalStore(
-    noSubscribe,
-    locationOn,
-    () => false,
-  );
-  const [locationChoice, setWithLocation] = useState<boolean | null>(null);
-  const withLocation = locationChoice ?? storedLocation;
   const [progress, setProgress] = useState<{
     done: number;
     total: number;
@@ -182,22 +174,11 @@ export function PhotoGallery({
               onChange={(e) => {
                 const files = [...(e.target.files ?? [])];
                 e.target.value = "";
-                void cameraOptions().then((o) => uploadFiles(files, o));
+                void cameraOptions(files).then((o) => uploadFiles(files, o));
               }}
             />
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex h-10 cursor-pointer items-center gap-2 rounded-control px-2 text-[13px] text-muted">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-[var(--primary)]"
-                  checked={withLocation}
-                  onChange={(e) => {
-                    setWithLocation(e.target.checked);
-                    setLocationOn(e.target.checked);
-                  }}
-                />
-                <IconPin size={16} /> Add location
-              </label>
+              <LocationToggle />
               <Button
                 variant="secondary"
                 onClick={() => camera.current?.click()}

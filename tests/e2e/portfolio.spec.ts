@@ -113,7 +113,7 @@ test.describe("portfolio", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Putnam Avenue Assignment" })).toBeVisible();
 
     // Photo: compressed in the browser, uploaded, becomes the hero.
-    await page.locator('input[type="file"]').setInputFiles({ name: "site.png", mimeType: "image/png", buffer: png(640, 480) });
+    await page.getByLabel("Choose photos to upload").setInputFiles({ name: "site.png", mimeType: "image/png", buffer: png(640, 480) });
     await expect(page.getByText("Photo added")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Hero", { exact: true })).toBeVisible();
     await expect(page.locator('img[src*="/api/media/photos/"]').first()).toBeVisible();

@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { DrawingsView } from "./drawings";
 import { MeetingsView } from "./meetings";
@@ -19,7 +19,6 @@ export type FieldView = "log" | "schedule" | "rfis" | "submittals" | "drawings" 
  */
 export function FieldTab({ projectId, internal, onOpenTask }: { projectId: string; internal: boolean; onOpenTask: (taskId: string) => void }) {
   const params = useSearchParams();
-  const router = useRouter();
   const pathname = usePathname();
   const items: { key: FieldView; label: string }[] = internal
     ? [
@@ -41,7 +40,8 @@ export function FieldTab({ projectId, internal, onOpenTask }: { projectId: strin
   const view: FieldView = items.some((i) => i.key === requested) ? (requested as FieldView) : items[0]!.key;
   const go = (v: FieldView, extra: Record<string, string> = {}) => {
     const q = new URLSearchParams({ tab: "field", view: v, ...extra });
-    router.replace(`${pathname}?${q}`, { scroll: false });
+    // Only the browser's address changes: no server call, and it works offline.
+    window.history.replaceState(null, "", `${pathname}?${q}`);
   };
   return (
     <div>

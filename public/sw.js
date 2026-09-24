@@ -1,40 +1,32 @@
 /*
  * Project Command service worker.
  * - Web push (brief §9).
- * - Offline reading for the iPhone app (brief §12): pages and data are
- *   fetched from the network first; a saved copy is shown only when there's
- *   no connection. Saved copies are private to this device and are deleted
- *   on sign-out (and when the session has ended).
+ * - Opening the iPhone app with no connection (brief §12): the app's page
+ *   shells and its script and style files are saved as they're used, and a
+ *   saved page is shown only when the network fails (never instead of a live
+ *   answer). The data itself is kept by the app per person (see
+ *   src/lib/offline-cache.ts), not here.
+ * - Saved pages belong to the person signed in: they're deleted on sign-out,
+ *   when a different person signs in, and when the session has ended.
  */
 
-const STATIC = "pc-static-v1";
-const PAGES = "pc-pages-v1";
-const RSC = "pc-rsc-v1";
-const DATA = "pc-data-v1";
-const PRIVATE = [PAGES, RSC, DATA];
+const STATIC = "pc-static-v2";
+const PAGES = "pc-pages-v2";
+const META = "pc-meta";
+const PRIVATE = [PAGES];
 const OFFLINE_PAGE = "/offline.html";
-/** Wait this long for the network before showing a saved copy (it keeps loading in the background). */
-const NETWORK_WAIT_MS = 4000;
-/** Never saved: sign-in, files, exports, uploads and anything that isn't a plain read. */
-const NEVER = [
-  /^\/api\/(?!trpc\/)/,
-  /^\/_next\/webpack-hmr/,
-  /^\/__nextjs/,
-  /^\/sw\.js$/,
-  /^\/login/,
-  /^\/setup/,
-  /^\/invite/,
-  /^\/reset-password/,
-  /^\/forgot-password/,
-];
+/** A page opened inside the app is saved again as a whole page at most this often. */
+const PAGE_RESAVE_MS = 30 * 60 * 1000;
+const MAX_PAGES = 60;
+const MAX_STATIC = 500;
+/** Never touched: APIs (the app keeps its own data), sign-in pages, dev tooling. */
+const NEVER = [/^\/api\//, /^\/_next\/webpack-hmr/, /^\/__nextjs/, /^\/sw\.js$/, /^\/login/, /^\/setup/, /^\/invite/, /^\/reset-password/, /^\/forgot-password/];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const c = await caches.open(STATIC);
-      await c
-        .add(new Request(OFFLINE_PAGE, { cache: "reload" }))
-        .catch(() => undefined);
+      await c.add(new Request(OFFLINE_PAGE, { cache: "reload" })).catch(() => undefined);
       await self.skipWaiting();
     })(),
   );
@@ -43,9 +35,8 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      const keep = new Set([STATIC, ...PRIVATE]);
-      for (const k of await caches.keys())
-        if (k.startsWith("pc-") && !keep.has(k)) await caches.delete(k);
+      const keep = new Set([STATIC, PAGES, META]);
+      for (const k of await caches.keys()) if (k.startsWith("pc-") && !keep.has(k)) await caches.delete(k);
       await self.clients.claim();
     })(),
   );
@@ -55,98 +46,35 @@ async function clearPrivate() {
   for (const k of PRIVATE) await caches.delete(k);
 }
 
-/** The page asks: forget everything saved (sign-out). */
+/**
+ * The page tells us who is signed in. A different person than last time:
+ * everything saved for the previous one goes. `null` (the sign-in page, a
+ * sign-out) clears too.
+ */
+async function setViewer(id) {
+  const meta = await caches.open(META);
+  const prev = await meta.match("/__viewer");
+  const prevId = prev ? await prev.text() : null;
+  if (id === null || prevId !== id) await clearPrivate();
+  if (id === null) await meta.delete("/__viewer");
+  else await meta.put("/__viewer", new Response(id));
+}
+
 self.addEventListener("message", (event) => {
-  if (event.data && event.data.type === "clear-offline")
-    event.waitUntil(clearPrivate());
+  const d = event.data || {};
+  if (d.type === "clear-offline") event.waitUntil(setViewer(null));
+  if (d.type === "viewer" && typeof d.id === "string") event.waitUntil(setViewer(d.id));
 });
 
-function isRsc(request, url) {
-  return request.headers.get("RSC") === "1" || url.searchParams.has("_rsc");
+/** Keep a cache to its newest `max` entries (keys come back oldest first). */
+async function trim(cache, max) {
+  const keys = await cache.keys();
+  for (let i = 0; i < keys.length - max; i++) await cache.delete(keys[i]);
 }
 
-/** RSC requests carry a cache-busting `_rsc` parameter; save them by page. */
-function rscKey(url) {
-  const u = new URL(url.href);
-  u.searchParams.delete("_rsc");
-  return u.href;
-}
-
-/** Network first; on no connection (or a very slow one) a saved copy; save good answers for next time. */
-async function networkFirst(event, cacheName, key, fallback) {
-  const cache = await caches.open(cacheName);
-  const network = fetch(event.request).then(async (res) => {
-    // The session ended: nothing saved may be shown any more.
-    if (
-      res.status === 401 ||
-      (res.redirected && new URL(res.url).pathname.startsWith("/login"))
-    ) {
-      await clearPrivate();
-      return res;
-    }
-    if (res.ok && res.type === "basic") {
-      await cache.put(key, res.clone());
-      if (cacheName === PAGES)
-        await saveAssetsOf(await res.clone().text()).catch(() => undefined);
-    }
-    return res;
-  });
-  event.waitUntil(network.catch(() => undefined));
-  let timer;
-  const slow = new Promise((resolve) => {
-    timer = setTimeout(resolve, NETWORK_WAIT_MS);
-  });
-  try {
-    const first = await Promise.race([network, slow.then(() => null)]);
-    if (first) return first;
-    const saved = await cache.match(key, { ignoreVary: true });
-    return saved || (await network);
-  } catch {
-    const saved = await cache.match(key, { ignoreVary: true });
-    if (saved) return saved;
-    if (fallback) {
-      const page = await caches.match(fallback);
-      if (page) return page;
-    }
-    return Response.error();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** How often a page opened inside the app is saved again as a whole page (for opening it cold, offline). */
-const PAGE_RESAVE_MS = 10 * 60 * 1000;
-
-/**
- * A page opened by tapping inside the app loads as data (RSC), not as a whole
- * page. Save the whole page too, in the background, so it opens offline from
- * the Home Screen later. At most once per page every ten minutes.
- */
-async function savePageFor(pageUrl) {
-  const cache = await caches.open(PAGES);
-  const saved = await cache.match(pageUrl, { ignoreVary: true });
-  const at = saved ? Date.parse(saved.headers.get("date") || "") : NaN;
-  if (saved && Number.isFinite(at) && Date.now() - at < PAGE_RESAVE_MS) return;
-  const res = await fetch(pageUrl, {
-    credentials: "same-origin",
-    headers: { Accept: "text/html" },
-  });
-  if (
-    res.status === 401 ||
-    (res.redirected && new URL(res.url).pathname.startsWith("/login"))
-  ) {
-    await clearPrivate();
-    return;
-  }
-  if (
-    res.ok &&
-    res.type === "basic" &&
-    (res.headers.get("content-type") || "").includes("text/html")
-  ) {
-    const html = await res.clone().text();
-    await cache.put(pageUrl, res);
-    await saveAssetsOf(html);
-  }
+/** Pages are saved by path: every `?tab=` of a project opens from one copy. */
+function pageKey(url) {
+  return url.origin + url.pathname;
 }
 
 /** Save the scripts and styles a whole page needs, so it can start offline (in-app visits load a different set). */
@@ -162,15 +90,70 @@ async function saveAssetsOf(html) {
     const r = await fetch(u).catch(() => null);
     if (r && r.ok && r.type === "basic") await cache.put(u, r);
   }
+  await trim(cache, MAX_STATIC);
 }
 
-async function cacheFirst(event) {
+/** A page response to keep: a real, complete HTML page for a signed-in person. */
+function keepable(res) {
+  return res.ok && res.type === "basic" && !res.redirected && (res.headers.get("content-type") || "").includes("text/html");
+}
+
+async function storePage(key, res) {
+  const html = await res.clone().text();
+  const cache = await caches.open(PAGES);
+  await cache.put(key, res);
+  await trim(cache, MAX_PAGES);
+  await saveAssetsOf(html);
+}
+
+/**
+ * The session ended: nothing saved may be shown any more. (A redirect to sign
+ * in can't be read here, since page loads don't follow redirects in the worker;
+ * the sign-in page itself tells us to clear instead.)
+ */
+function sessionEnded(res) {
+  return res.status === 401 || (res.redirected && new URL(res.url).pathname.startsWith("/login"));
+}
+
+/** A page: the live answer whenever there is one (streamed straight through); a saved copy only when the network fails. */
+async function page(event, url) {
+  try {
+    const res = await fetch(event.request);
+    if (sessionEnded(res)) event.waitUntil(clearPrivate());
+    else if (keepable(res)) event.waitUntil(storePage(pageKey(url), res.clone()).catch(() => undefined));
+    return res;
+  } catch {
+    const saved = await caches.open(PAGES).then((c) => c.match(pageKey(url)));
+    if (saved) return saved;
+    const offline = await caches.match(OFFLINE_PAGE);
+    return offline || Response.error();
+  }
+}
+
+/**
+ * A page opened by tapping inside the app loads as data (RSC), not as a whole
+ * page. Save the whole page too, in the background, so it opens offline from
+ * the Home Screen later (at most once per page every half hour).
+ */
+async function savePageFor(url) {
+  const key = pageKey(url);
+  const saved = await caches.open(PAGES).then((c) => c.match(key));
+  const at = saved ? Date.parse(saved.headers.get("date") || "") : NaN;
+  if (saved && Number.isFinite(at) && Date.now() - at < PAGE_RESAVE_MS) return;
+  const res = await fetch(url.href, { credentials: "same-origin", headers: { Accept: "text/html" }, redirect: "manual" });
+  if (sessionEnded(res)) return clearPrivate();
+  if (keepable(res)) await storePage(key, res);
+}
+
+async function cacheFirst(request) {
   const cache = await caches.open(STATIC);
-  const hit = await cache.match(event.request);
+  const hit = await cache.match(request);
   if (hit) return hit;
-  const res = await fetch(event.request);
-  if (res.ok && res.type === "basic")
-    await cache.put(event.request, res.clone());
+  const res = await fetch(request);
+  if (res.ok && res.type === "basic") {
+    await cache.put(request, res.clone());
+    await trim(cache, MAX_STATIC);
+  }
   return res;
 }
 
@@ -180,31 +163,22 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (NEVER.some((r) => r.test(url.pathname))) return;
-  if (
-    url.pathname.startsWith("/_next/static/") ||
-    /^\/(icon|apple-icon)[^/]*\.png$/.test(url.pathname) ||
-    url.pathname === "/manifest.webmanifest"
-  ) {
-    event.respondWith(cacheFirst(event));
+  // Build files never change (their names carry a hash): saved copies are always right.
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(cacheFirst(request));
     return;
   }
-  if (url.pathname.startsWith("/api/trpc/")) {
-    event.respondWith(networkFirst(event, DATA, request.url, null));
+  const rsc = request.headers.get("RSC") === "1" || url.searchParams.has("_rsc");
+  if (rsc) {
+    // Leave in-app navigation to the network; offline, Next falls back to a whole-page load (served below).
+    if (!request.headers.get("Next-Router-Prefetch") && navigator.onLine) {
+      const pageUrl = new URL(url.href);
+      pageUrl.searchParams.delete("_rsc");
+      event.waitUntil(savePageFor(pageUrl).catch(() => undefined));
+    }
     return;
   }
-  if (url.pathname.startsWith("/api/")) return;
-  if (isRsc(request, url)) {
-    // Link prefetches can be partial pages: never save them in place of a real visit.
-    if (request.headers.get("Next-Router-Prefetch")) return;
-    event.respondWith(networkFirst(event, RSC, rscKey(url), null));
-    // Keep a whole-page copy for opening it offline later.
-    if (navigator.onLine)
-      event.waitUntil(savePageFor(rscKey(url)).catch(() => undefined));
-    return;
-  }
-  if (request.mode === "navigate") {
-    event.respondWith(networkFirst(event, PAGES, url.href, OFFLINE_PAGE));
-  }
+  if (request.mode === "navigate") event.respondWith(page(event, url));
 });
 
 self.addEventListener("push", (event) => {

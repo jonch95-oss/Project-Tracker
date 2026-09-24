@@ -1,5 +1,84 @@
 # Progress
 
+## Milestone 12 — iPhone home-screen app (built; real-iPhone check pending)
+
+**Live:** https://ariel-dev-projects.vercel.app (install it from Safari: Share → Add to Home Screen; the guide is at /install)
+
+### What shipped
+
+- **Camera capture (brief §12).**
+  - **Where:** "Take photo" opens the camera straight into project photos, task attachments, the daily site log and punch items.
+  - **On the phone:** each photo is compressed (long edge 2560px) and stamped with the date and time in New York.
+  - **Location:** optional, one switch per phone ("Add location") next to every camera button. The coordinates are saved with the photo, not printed on it. Only the project team sees them; outside collaborators and investors don't.
+  - **Library photos:** a photo picked from the library instead (or on a computer) keeps its own EXIF time and is never stamped or located as if it were taken just now.
+- **Offline reading.**
+  - **What's kept:** the screens a person has opened (My Tasks, projects, checklists, tasks, photos, the field modules) are saved on the phone under their own user id and shown when the app starts with no connection.
+  - **What's never kept:** money, capital, audit and admin screens.
+  - **Pages:** the service worker saves the app's page shells and script files so the app can start offline. It never shows a saved copy while there's a connection.
+  - **Cleared:** everything saved is deleted on sign-out, and anything left by a previous person is wiped as soon as someone else signs in on the same phone.
+- **Offline check-offs and comments.**
+  - **Straight away:** ticking a task or posting a comment with no signal saves it on the phone and shows it at once, including after the app is closed.
+  - **Syncing:** it's sent when the connection comes back, the app returns to the foreground, or every 30 seconds, one sync at a time across open tabs.
+  - **Conflicts:** a tick on a task someone changed in the meantime is held as a conflict ("Tick it anyway" or Discard). A tick that needs a file first is held with that reason.
+  - **Temporary errors:** a waking server or an ended session keeps the change queued; nothing is dropped silently.
+  - **No duplicates:** each comment carries its own id, so a resend can't post it twice.
+- **Faster tabs.** Switching project and Construction tabs now changes only the address in the browser, with no server call, so tabs switch instantly and work offline.
+- **Install guide (/install).** Each step has a picture, followed by three real screenshots and an "on site with no signal" note. It's linked on the invitation page and inside the WhatsApp invitation text. Face ID sign-in (passkeys) and push links that open the task were already in place.
+
+### Review
+
+The independent review found 1 P0, 5 P1 and 8 P2 issues. All are fixed. The offline design was reworked rather than patched.
+
+The P0:
+
+- **Saved data could survive a session that ended without a sign-out,** and could then be shown to the next person on the same phone. Now:
+  - Saved data is kept per person, and wiped when someone else signs in.
+  - The sign-in page clears saved pages.
+  - Data is no longer cached in the service worker at all.
+
+The P1s:
+
+- **Stale copies while online:** a 4-second race could show a saved copy on a slow connection, and removed access didn't evict it. The network race is gone, and saved answers are always refetched when online.
+- **Slower pages:** the worker held responses until they were fully saved, which stopped pages streaming in. Responses now go straight through, and saving happens in the background.
+- **Refused ticks reported as synced:** a tick the server turned down was still reported as synced. It's now held with the reason.
+- **Temporary errors lost changes:** a temporary error permanently failed a queued change, and a failed comment's text was lost. These stay queued now, with Retry and "Copy text".
+- **Duplicate comments:** a second tab, or a resend after a dropped connection, could post a comment twice. There's now a cross-tab lock and a unique id per comment.
+
+The P2s fixed:
+
+- A held tick no longer shows as done.
+- A conflict no longer turns into "task gone" when the phone is offline.
+- One saved page per path (no stale partial payloads).
+- Separate reads are batched again (fewer server calls).
+- Caches are capped.
+- Coordinates are hidden from outsiders and no longer printed on photos.
+- Library photos aren't stamped as new.
+- Photo file names use New York time.
+- A test covers sign-out leaving nothing behind.
+
+Also fixed along the way: CI had been failing since Milestone 10 because the new `src/core` modules had pulled unit-test coverage under the 95% bar. That's back over the line (98%) with new unit tests.
+
+### Test results
+
+- **Unit and integration:** 3,703 passing. New tests cover the offline queue (9), photo location and comment de-duplication, and every `src/core` module again above 95% coverage.
+- **Browser (Playwright):** 48 passing against a production build. New tests:
+  - camera photo
+  - approve on iPhone
+  - offline tick, reopen offline, then sync
+  - offline comment plus a conflict resolved with "Tick it anyway"
+  - sign-out leaves no pages, data or queue behind
+- **CI:** the iPhone WebKit project now runs the offline tests as well.
+- **Screens:** checked at 390px and desktop (install guide, the offline bar, Photos, task attachments).
+
+### Needs a real iPhone (can't be done from here)
+
+Home-screen push, the camera, Face ID and offline start need a real device. The steps are in the message to Jon; results go here.
+
+### Known limitations
+
+- **First visit only online:** a page opens offline only after it has been visited once online, since it's saved as it's used.
+- **Tick results offline:** an offline tick on an approval task shows as sent for approval (or as done, for the approver); the server decides when it syncs.
+
 ## Milestone 11 — Calendar feed, email into a project, analytics, import (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (Settings → Calendar feed; Analytics and Import in the sidebar for the owner and admins; each project's Activity tab)

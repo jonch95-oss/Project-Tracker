@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { IconFaceId } from "@/components/ui/icons";
 import { Button, Field, Input } from "@/components/ui/primitives";
 import { authClient } from "@/lib/auth-client";
+import { clearOfflineCopies } from "@/lib/push";
 import { hasPasskeySupport, useClientFlag } from "@/lib/use-client-flag";
 
 type Step = "password" | "totp" | "backup";
@@ -20,6 +21,10 @@ export function LoginForm({ next, justReset }: { next: string; justReset: boolea
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const passkeySupported = useClientFlag(hasPasskeySupport);
+  // Whoever signs in next, pages saved on this phone for the last session aren't shown to them.
+  useEffect(() => {
+    void clearOfflineCopies();
+  }, []);
 
   function done() {
     router.replace(next);
