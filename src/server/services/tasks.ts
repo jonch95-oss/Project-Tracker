@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, ne, notInArray, sql } from "drizzle-orm";
+import { OUTSIDE_ROLES } from "@/core/permissions";
 import { addBusinessDays } from "@/core/calendar";
 import { KEY_DATE_REMINDERS, keyDateLabel } from "@/core/key-dates";
 import { nextOccurrence, type RecurrenceFreq } from "@/core/tasks";
@@ -316,7 +317,7 @@ export async function keyDateReminderJob(now = new Date()): Promise<{ reminded: 
       .select({ projectId: schema.projectMember.projectId, userId: schema.projectMember.userId })
       .from(schema.projectMember)
       .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-      .where(and(inArray(schema.projectMember.projectId, projectIds), ne(schema.user.role, "external")));
+      .where(and(inArray(schema.projectMember.projectId, projectIds), notInArray(schema.user.role, [...OUTSIDE_ROLES])));
     let reminded = 0;
     for (const d of dates) {
       const n = daysBetween(today, d.date);

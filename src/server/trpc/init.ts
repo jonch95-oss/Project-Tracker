@@ -154,8 +154,16 @@ export function requireProject(access: ProjectAccess, action: ProjectAction): vo
  * Procedure for anything scoped to one project. The input must carry
  * `projectId`; the middleware checks view access and exposes `ctx.project`.
  */
+/**
+ * Module J: the only project procedures an investor or lender can call: their
+ * portal, the photos, and reading the folders shared with them. Everything
+ * else is refused here, whatever a router's own checks would allow.
+ */
+export const INVESTOR_PROCEDURES = new Set(["portal.project", "portal.highlights", "photos.list", "files.folders", "files.list", "files.get", "files.canRead", "files.watchFolder"]);
+
 export function projectProcedure(action: ProjectAction = "project.view") {
-  return protectedProcedure.input(z.object({ projectId: z.uuid() })).use(async ({ ctx, input, next }) => {
+  return protectedProcedure.input(z.object({ projectId: z.uuid() })).use(async ({ ctx, input, next, path }) => {
+    if (ctx.actor.role === "investor" && !INVESTOR_PROCEDURES.has(path)) throw new TRPCError({ code: "FORBIDDEN", message: "Investors see the project through their portal." });
     const access = await projectAccess(ctx, input.projectId);
     requireProject(access, action);
     return next({ ctx: { ...ctx, project: access } });

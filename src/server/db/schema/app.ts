@@ -35,7 +35,7 @@ export const invitation = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     email: text("email").notNull(),
     name: text("name").notNull(),
-    role: text("role", { enum: ["owner", "admin", "member", "external"] }).notNull(),
+    role: text("role", { enum: ["owner", "admin", "member", "external", "investor"] }).notNull(),
     title: text("title"),
     company: text("company"),
     tokenHash: text("token_hash").notNull().unique(),
@@ -72,8 +72,10 @@ export const project = pgTable(
       .references(() => company.id),
     status: text("status", { enum: ["active", "on_hold", "closed"] }).notNull().default("active"),
     description: text("description"),
-    // Key facts (manual now; filled from PLUTO by BBL auto-fill in Milestone 10).
+    // Key facts: typed, or filled from PLUTO by BBL auto-fill (Module A).
     lotAreaSqft: integer("lot_area_sqft"),
+    lotFrontFt: numeric("lot_front_ft", { precision: 8, scale: 2, mode: "number" }),
+    lotDepthFt: numeric("lot_depth_ft", { precision: 8, scale: 2, mode: "number" }),
     zoning: text("zoning"),
     residFar: numeric("resid_far", { precision: 6, scale: 2, mode: "number" }),
     builtFar: numeric("built_far", { precision: 6, scale: 2, mode: "number" }),
@@ -332,10 +334,9 @@ export const pendingUpload = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id")
-      .notNull()
-      .references(() => project.id, { onDelete: "cascade" }),
-    purpose: text("purpose", { enum: ["photo", "file"] }).notNull(),
+    /** Null for uploads that belong to no project (directory documents). */
+    projectId: uuid("project_id").references(() => project.id, { onDelete: "cascade" }),
+    purpose: text("purpose", { enum: ["photo", "file", "directory"] }).notNull(),
     /** Pathnames the client may write, with their byte limits and content types. */
     objects: jsonb("objects").$type<{ role: string; pathname: string; maxBytes: number; contentType: string }[]>().notNull(),
     meta: jsonb("meta"),
@@ -402,6 +403,8 @@ export const task = pgTable(
     description: text("description"),
     role: text("role").notNull().default("PM"),
     assigneeId: text("assignee_id").references(() => user.id, { onDelete: "set null" }),
+    /** Module C: the directory company doing this work, when it isn't a person with an account. */
+    vendorId: uuid("vendor_id").references((): AnyPgColumn => vendor.id, { onDelete: "set null" }),
     status: text("status", { enum: TASK_STATUSES }).notNull().default("not_started"),
     blockedReason: text("blocked_reason"),
     waitingOn: text("waiting_on"),
@@ -902,12 +905,48 @@ export const saleUnit = pgTable(
     buyerName: text("buyer_name"),
     contractOn: text("contract_on"),
     closingOn: text("closing_on"),
+    /** Module L: the unit schedule (the same rows as the sales tracker). */
+    exposure: text("exposure"),
+    outdoorSf: integer("outdoor_sf"),
+    outdoorType: text("outdoor_type"),
     sortOrder: integer("sort_order").notNull().default(0),
     version: integer("version").notNull().default(1),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("sale_unit_project_unit_idx").on(t.projectId, sql`lower(${t.unit})`)],
+);
+
+/**
+ * Module L: a buyer's upgrade or finish selection for a unit, with a
+ * sign-off deadline. Each one drives a task for the GC: waiting on the
+ * buyer's sign-off, then live work once signed.
+ */
+export const unitSelection = pgTable(
+  "unit_selection",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => saleUnit.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    choice: text("choice").notNull(),
+    /** Extra the buyer pays (financial access only); null for a standard finish. */
+    upgradeCents: money("upgrade_cents"),
+    signOffBy: text("sign_off_by"),
+    signedOffOn: text("signed_off_on"),
+    signedOffName: text("signed_off_name"),
+    notes: text("notes"),
+    taskId: uuid("task_id").references((): AnyPgColumn => task.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("unit_selection_unit_idx").on(t.unitId), index("unit_selection_project_idx").on(t.projectId, t.signOffBy)],
 );
 
 /** Per-project numbering that never goes backwards (change orders, draws), even after a delete. */
@@ -1352,4 +1391,212 @@ export const meetingItem = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("meeting_item_meeting_idx").on(t.meetingId, t.sortOrder), index("meeting_item_task_idx").on(t.taskId)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Module C: vendor and contact directory                              */
+/* ------------------------------------------------------------------ */
+
+export const VENDOR_KINDS = ["contractor", "consultant", "supplier", "lender", "broker", "legal", "other"] as const;
+
+/** A company in the directory: a GC, a sub, an architect, a lender. */
+export const vendor = pgTable(
+  "vendor",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    /** Normalized name (vendorKey): links commitments, invoices and COIs typed by name. */
+    key: text("key").notNull(),
+    kind: text("kind", { enum: VENDOR_KINDS }).notNull().default("contractor"),
+    trade: text("trade"),
+    phone: text("phone"),
+    email: text("email"),
+    website: text("website"),
+    address: text("address"),
+    /** Internal only: 1–5. */
+    rating: integer("rating"),
+    notes: text("notes"),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    version: integer("version").notNull().default(1),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("vendor_key_idx").on(t.key)],
+);
+
+/** A person: at a directory company, or on their own. External users are invited from here. */
+export const contact = pgTable(
+  "contact",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vendorId: uuid("vendor_id").references(() => vendor.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    title: text("title"),
+    email: text("email"),
+    phone: text("phone"),
+    notes: text("notes"),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("contact_vendor_idx").on(t.vendorId), index("contact_email_idx").on(sql`lower(${t.email})`)],
+);
+
+export const VENDOR_DOC_KINDS = ["license", "coi", "w9", "other"] as const;
+
+/**
+ * A vendor's license, COI, W-9 or other paper, with its number and expiry,
+ * and the file itself when one was uploaded (stored under directory/).
+ */
+export const vendorDocument = pgTable(
+  "vendor_document",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendor.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: VENDOR_DOC_KINDS }).notNull(),
+    /** Licenses: gc_license, dob_registration, master_plumber, master_electrician, other. COIs: the expiry tracker's vendor_coi_* keys. */
+    category: text("category").notNull(),
+    label: text("label"),
+    number: text("number"),
+    expiresOn: text("expires_on"),
+    objectKey: text("object_key"),
+    originalName: text("original_name"),
+    contentType: text("content_type"),
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    /** The last reminder sent ("30", "14", "7" or "expired:YYYY-MM-DD") and the expiry date it was for. */
+    remindedMark: text("reminded_mark"),
+    remindedFor: text("reminded_for"),
+    uploadedById: text("uploaded_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("vendor_document_vendor_idx").on(t.vendorId), index("vendor_document_expiry_idx").on(t.expiresOn)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Module J: investors, capital and the waterfall                      */
+/* ------------------------------------------------------------------ */
+
+export const INVESTOR_KINDS = ["equity", "jv_partner", "lender"] as const;
+
+/** An equity investor, JV partner or lender. Linked to a portal login when they have one. */
+export const investor = pgTable(
+  "investor",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    kind: text("kind", { enum: INVESTOR_KINDS }).notNull().default("equity"),
+    contactName: text("contact_name"),
+    email: text("email"),
+    /** The portal login (a user with the investor role) that sees this account. */
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    notes: text("notes"),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("investor_user_idx").on(t.userId)],
+);
+
+/** An investor's commitment to one project. */
+export const capitalCommitment = pgTable(
+  "capital_commitment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    investorId: uuid("investor_id")
+      .notNull()
+      .references(() => investor.id, { onDelete: "restrict" }),
+    committedCents: money("committed_cents").notNull(),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("capital_commitment_idx").on(t.projectId, t.investorId)],
+);
+
+/** The project's waterfall tiers (see core/waterfall). */
+export const capitalTerms = pgTable("capital_terms", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => project.id, { onDelete: "cascade" }),
+  tiers: jsonb("tiers").$type<import("../../../core/waterfall").Tier[]>().notNull(),
+  version: integer("version").notNull().default(1),
+  updatedAt: updatedAt(),
+});
+
+/** A capital call: the notice, the due date, and what each investor owes and has paid. */
+export const capitalCall = pgTable(
+  "capital_call",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    noticeOn: text("notice_on").notNull(),
+    dueOn: text("due_on").notNull(),
+    note: text("note"),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("capital_call_number_idx").on(t.projectId, t.number)],
+);
+
+export const capitalCallItem = pgTable(
+  "capital_call_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    callId: uuid("call_id")
+      .notNull()
+      .references(() => capitalCall.id, { onDelete: "cascade" }),
+    investorId: uuid("investor_id")
+      .notNull()
+      .references(() => investor.id, { onDelete: "restrict" }),
+    amountCents: money("amount_cents").notNull(),
+    receivedCents: money("received_cents").notNull().default(0),
+    receivedOn: text("received_on"),
+    version: integer("version").notNull().default(1),
+  },
+  (t) => [uniqueIndex("capital_call_item_idx").on(t.callId, t.investorId)],
+);
+
+/** A distribution, split by the waterfall when it was recorded. */
+export const distribution = pgTable(
+  "distribution",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    paidOn: text("paid_on").notNull(),
+    totalCents: money("total_cents").notNull(),
+    /** The sponsor's promote from this distribution. */
+    gpCents: money("gp_cents").notNull().default(0),
+    note: text("note"),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("distribution_number_idx").on(t.projectId, t.number)],
+);
+
+export const distributionItem = pgTable(
+  "distribution_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    distributionId: uuid("distribution_id")
+      .notNull()
+      .references(() => distribution.id, { onDelete: "cascade" }),
+    investorId: uuid("investor_id")
+      .notNull()
+      .references(() => investor.id, { onDelete: "restrict" }),
+    rocCents: money("roc_cents").notNull().default(0),
+    prefCents: money("pref_cents").notNull().default(0),
+    profitCents: money("profit_cents").notNull().default(0),
+  },
+  (t) => [uniqueIndex("distribution_item_idx").on(t.distributionId, t.investorId)],
 );

@@ -20,6 +20,7 @@ import { ChecklistTab } from "./checklist-tab";
 import { FilesTab } from "./files-tab";
 import { RecordsTab } from "./records-tab";
 import { FieldTab } from "./field/field-tab";
+import { UnitsTab } from "./units-tab";
 import { FinancialsTab } from "./financials-tab";
 import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
@@ -28,7 +29,9 @@ import { PhotoGallery } from "./photos";
 import { TeamTab } from "./team-tab";
 
 type Project = RouterOutputs["projects"]["get"];
-type TabKey = "overview" | "checklist" | "team" | "dates" | "financials" | "files" | "field" | "records" | "activity";
+const UNIT_TYPES = new Set(["ground_up_condo", "condo_conversion", "gut_renovation"]);
+
+type TabKey = "overview" | "checklist" | "team" | "dates" | "financials" | "files" | "field" | "units" | "records" | "activity";
 
 export function ProjectView({ projectId, viewerId }: { projectId: string; viewerId: string }) {
   const trpc = useTRPC();
@@ -74,6 +77,8 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
     ...(p.access.canViewFinancials ? [{ key: "financials" as const, label: "Financials" }] : []),
     { key: "files", label: "Files" },
     { key: "field", label: "Construction" },
+    // Module L: condo projects keep a unit schedule (other types can still open it by link).
+    ...(p.access.canSeeAllTasks && (UNIT_TYPES.has(p.type) || requested === "units") ? [{ key: "units" as const, label: "Units" }] : []),
     ...(p.access.canSeeAllTasks ? [{ key: "records" as const, label: "Public Records" }] : []),
     ...(p.access.canViewActivity ? [{ key: "activity" as const, label: "Activity" }] : []),
   ];
@@ -147,6 +152,8 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
           <ActivityTab projectId={projectId} />
         ) : tab === "field" ? (
           <FieldTab projectId={projectId} internal={p.access.canSeeAllTasks} onOpenTask={(id) => setTab("checklist", undefined, id)} />
+        ) : tab === "units" ? (
+          <UnitsTab projectId={projectId} onOpenTask={(id) => setTab("checklist", undefined, id)} />
         ) : tab === "records" ? (
           <RecordsTab projectId={projectId} onOpenTask={(id) => setTab("checklist", undefined, id)} />
         ) : null}
@@ -181,6 +188,7 @@ function Overview({ project: p, viewerId, onOpenTask, onOpenDates }: { project: 
           </h2>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 rounded-card border border-border bg-surface p-6 sm:grid-cols-4">
             <Fact label="Lot area" value={n(p.lotAreaSqft, " sf")} />
+            <Fact label="Lot size" value={p.lotFrontFt && p.lotDepthFt ? `${f2(p.lotFrontFt)} × ${f2(p.lotDepthFt)} ft` : null} />
             <Fact label="Zoning" value={p.zoning} />
             <Fact label="Residential FAR" value={f2(p.residFar)} />
             <Fact label="Built FAR" value={f2(p.builtFar)} />

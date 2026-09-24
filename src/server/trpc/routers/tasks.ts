@@ -6,7 +6,7 @@ import { addBusinessDays } from "@/core/calendar";
 import { KEY_DATE_KINDS, keyDateLabel, upcomingKeyDates } from "@/core/key-dates";
 import { expiryLabel, FINANCIAL_EXPIRY } from "@/core/expiries";
 import { commentPlainText, mentionedIds } from "@/core/mentions";
-import { canGlobal, canProject, type Membership } from "@/core/permissions";
+import { canGlobal, canProject, type Membership, isInternalRole } from "@/core/permissions";
 import { canSetStatus, MY_TASK_SECTIONS, myTaskSection, shiftDate, TASK_STATUS_LABEL, type MyTaskSection, type TaskStatus } from "@/core/tasks";
 import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
@@ -70,7 +70,7 @@ export async function projectPeople(conn: DbOrTx, projectId: string): Promise<Pr
   const owners = await conn.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role }).from(schema.user).where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active")));
   const out = new Map<string, ProjectPerson>();
   for (const o of owners) out.set(o.id, { ...o, projectRole: "Owner", external: false });
-  for (const m of members) if (!out.has(m.id)) out.set(m.id, { ...m, external: m.role === "external" });
+  for (const m of members) if (!out.has(m.id)) out.set(m.id, { ...m, external: !isInternalRole(m.role) });
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 

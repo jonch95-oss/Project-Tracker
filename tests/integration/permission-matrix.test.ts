@@ -6,11 +6,12 @@
  * a matrix row, so new endpoints cannot ship unchecked.
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { db, schema } from "@/server/db";
 import { storage } from "@/server/storage";
 import { appRouter } from "@/server/trpc/root";
+import { setLotLookupForTests } from "@/server/services/pluto";
 import { addMember, callerFor, companyId, createProject, createUser, deactivate } from "../support/fixtures";
 
 type Scenario =
@@ -25,6 +26,9 @@ type Scenario =
   | "external+fin"
   | "external"
   | "external-unassigned"
+  | "investor+fin"
+  | "investor"
+  | "investor-unassigned"
   | "deactivated";
 
 const SCENARIOS: Scenario[] = [
@@ -39,6 +43,9 @@ const SCENARIOS: Scenario[] = [
   "external+fin",
   "external",
   "external-unassigned",
+  "investor+fin",
+  "investor",
+  "investor-unassigned",
   "deactivated",
 ];
 
@@ -53,6 +60,28 @@ const TEMPLATE_EDITORS: Scenario[] = ["owner", "admin+fin", "admin", "admin-unas
 const FIN_VIEW: Scenario[] = ["owner", "admin+fin", "member+fin", "external+fin"];
 /** Edit and approve financials: the owner and admins with financial access. */
 const FIN_EDIT: Scenario[] = ["owner", "admin+fin"];
+/** The directory: internal staff read it; owners and admins keep it. */
+const DIR_VIEW: Scenario[] = ["owner", "admin+fin", "admin", "admin-unassigned", "member+fin", "member", "member-unassigned"];
+const DIR_EDIT: Scenario[] = ["owner", "admin+fin", "admin", "admin-unassigned"];
+/** The investor portal: the internal team (to see what investors see) and the investors on the project. */
+const PORTAL: Scenario[] = [...INTERNAL_ASSIGNED, "investor+fin", "investor"];
+
+async function vendorFixture(): Promise<string> {
+  const [v] = await db().insert(schema.vendor).values({ name: `Matrix Vendor ${uid()}`, key: `matrix vendor ${uid()}` }).returning({ id: schema.vendor.id });
+  return v!.id;
+}
+
+async function unitFixture(projectId: string): Promise<{ unitId: string; selectionId: string; version: number }> {
+  const [u] = await db().insert(schema.saleUnit).values({ projectId, unit: `M${uid()}` }).returning({ id: schema.saleUnit.id });
+  const [sel] = await db().insert(schema.unitSelection).values({ projectId, unitId: u!.id, category: "Kitchen", choice: "Matrix" }).returning();
+  return { unitId: u!.id, selectionId: sel!.id, version: sel!.version };
+}
+
+async function investorFixture(projectId: string): Promise<string> {
+  const [inv] = await db().insert(schema.investor).values({ name: `Matrix Investor ${uid()}` }).returning({ id: schema.investor.id });
+  await db().insert(schema.capitalCommitment).values({ projectId, investorId: inv!.id, committedCents: 100_000_00 });
+  return inv!.id;
+}
 
 async function taskVersion(id: string): Promise<number> {
   const [t] = await db().select({ version: schema.task.version }).from(schema.task).where(eq(schema.task.id, id));
@@ -205,7 +234,7 @@ const MATRIX: Record<string, Row | "public"> = {
     call: (c, f) => c.projects.activity({ projectId: f.projectId }),
   },
 
-  "photos.list": { allowed: ASSIGNED, call: (c, f) => c.photos.list({ projectId: f.projectId }) },
+  "photos.list": { allowed: [...ASSIGNED, "investor+fin", "investor"], call: (c, f) => c.photos.list({ projectId: f.projectId }) },
   "photos.beginUpload": {
     allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
     call: (c, f) => c.photos.beginUpload({ projectId: f.projectId, contentType: "image/webp", fullBytes: 10, thumbBytes: 5, width: 4, height: 3 }),
@@ -558,7 +587,7 @@ const MATRIX: Record<string, Row | "public"> = {
   "push.test": { allowed: ACTIVE, call: (c) => c.push.test().catch((e: { code?: string }) => { if (e.code !== "PRECONDITION_FAILED") throw e; }) },
   "push.removeDevice": { allowed: ACTIVE, call: (c) => c.push.removeDevice({ id: "00000000-0000-4000-8000-000000000000" }) },
 
-  "files.folders": { allowed: ASSIGNED, call: (c, f) => c.files.folders({ projectId: f.projectId }) },
+  "files.folders": { allowed: [...ASSIGNED, "investor+fin", "investor"], call: (c, f) => c.files.folders({ projectId: f.projectId }) },
   "files.list": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.list({ projectId: f.projectId, folderId: await folderId(f.projectId) }) },
   "files.canRead": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.canRead({ projectId: f.projectId, fileId: await freshFile(f.projectId) }) },
   "files.get": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.get({ projectId: f.projectId, fileId: await freshFile(f.projectId) }) },
@@ -692,6 +721,127 @@ const MATRIX: Record<string, Row | "public"> = {
   "audit.list": { allowed: OWNER_ONLY, call: (c) => c.audit.list({ limit: 5 }) },
   "audit.verify": { allowed: OWNER_ONLY, call: (c) => c.audit.verify() },
   "system.overview": { allowed: OWNER_ONLY, call: (c) => c.system.overview() },
+
+  "projects.lookupLot": { allowed: TEMPLATE_EDITORS, call: (c) => c.projects.lookupLot({ bbl: "3017590013", borough: "Brooklyn" }) },
+
+  "units.list": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.units.list({ projectId: f.projectId }) },
+  "units.saveUnit": { allowed: EDITORS, call: (c, f) => c.units.saveUnit({ projectId: f.projectId, unit: `N${uid()}`, sf: 900 }) },
+  "units.saveSelection": { allowed: EDITORS, call: async (c, f) => c.units.saveSelection({ projectId: f.projectId, unitId: (await unitFixture(f.projectId)).unitId, category: "Bath", choice: "Matrix tile" }) },
+  "units.signOff": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const u = await unitFixture(f.projectId);
+      return c.units.signOff({ projectId: f.projectId, id: u.selectionId, version: u.version, signedOffOn: "2026-01-02", signedOffName: "Buyer" });
+    },
+  },
+  "units.deleteSelection": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const u = await unitFixture(f.projectId);
+      return c.units.deleteSelection({ projectId: f.projectId, id: u.selectionId, version: u.version });
+    },
+  },
+
+  "directory.list": { allowed: DIR_VIEW, call: (c) => c.directory.list() },
+  "directory.options": { allowed: DIR_VIEW, call: (c) => c.directory.options() },
+  "directory.get": { allowed: DIR_VIEW, call: async (c) => c.directory.get({ id: await vendorFixture() }) },
+  "directory.saveVendor": { allowed: DIR_EDIT, call: (c) => c.directory.saveVendor({ name: `Matrix Co ${uid()}`, kind: "contractor" }) },
+  "directory.setArchived": { allowed: DIR_EDIT, call: async (c) => c.directory.setArchived({ id: await vendorFixture(), archived: true }) },
+  "directory.saveContact": { allowed: DIR_EDIT, call: async (c) => c.directory.saveContact({ vendorId: await vendorFixture(), name: "Matrix Person" }) },
+  "directory.deleteContact": {
+    allowed: DIR_EDIT,
+    call: async (c) => {
+      const [p] = await db().insert(schema.contact).values({ name: "Delete me" }).returning({ id: schema.contact.id });
+      return c.directory.deleteContact({ id: p!.id });
+    },
+  },
+  "directory.saveDocument": { allowed: DIR_EDIT, call: async (c) => c.directory.saveDocument({ vendorId: await vendorFixture(), kind: "license", category: "gc_license", expiresOn: "2030-01-01" }) },
+  "directory.deleteDocument": {
+    allowed: DIR_EDIT,
+    call: async (c) => {
+      const [d] = await db().insert(schema.vendorDocument).values({ vendorId: await vendorFixture(), kind: "other", category: "other" }).returning({ id: schema.vendorDocument.id });
+      return c.directory.deleteDocument({ id: d!.id });
+    },
+  },
+  "directory.beginDocUpload": {
+    allowed: DIR_EDIT,
+    call: async (c) => {
+      const [d] = await db().insert(schema.vendorDocument).values({ vendorId: await vendorFixture(), kind: "w9", category: "w9" }).returning({ id: schema.vendorDocument.id });
+      return c.directory.beginDocUpload({ documentId: d!.id, name: "w9.pdf", contentType: "application/pdf", sizeBytes: 10 });
+    },
+  },
+  "directory.completeDocUpload": {
+    allowed: DIR_EDIT,
+    call: async (c, f, me) => {
+      const [d] = await db().insert(schema.vendorDocument).values({ vendorId: await vendorFixture(), kind: "w9", category: "w9" }).returning({ id: schema.vendorDocument.id });
+      // Each caller completes an upload it began itself (a stranger's upload id reads as expired).
+      const b = await c.directory.beginDocUpload({ documentId: d!.id, name: "w9.pdf", contentType: "application/pdf", sizeBytes: 10 });
+      void me;
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(10), { contentType: "application/pdf" });
+      return c.directory.completeDocUpload({ uploadId: b.uploadId });
+    },
+  },
+
+  "capital.overview": { allowed: FIN_VIEW, call: (c, f) => c.capital.overview({ projectId: f.projectId }) },
+  "capital.saveTerms": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const [t] = await db().select({ version: schema.capitalTerms.version }).from(schema.capitalTerms).where(eq(schema.capitalTerms.projectId, f.projectId));
+      return c.capital.saveTerms({ projectId: f.projectId, version: t?.version ?? 0, tiers: [{ kind: "return_of_capital" }, { kind: "split", lpBps: 8000, untilMultipleMilli: null }] });
+    },
+  },
+  "capital.saveInvestor": { allowed: FIN_EDIT, call: (c, f) => c.capital.saveInvestor({ projectId: f.projectId, name: `Matrix LP ${uid()}`, kind: "equity", committedCents: 50_000_00 }) },
+  "capital.removeInvestor": { allowed: FIN_EDIT, call: async (c, f) => c.capital.removeInvestor({ projectId: f.projectId, investorId: await investorFixture(f.projectId) }) },
+  "capital.createCall": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      await investorFixture(f.projectId);
+      return c.capital.createCall({ projectId: f.projectId, noticeOn: "2026-01-02", dueOn: "2026-01-20", totalCents: 10_000_00 });
+    },
+  },
+  "capital.recordReceipt": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const inv = await investorFixture(f.projectId);
+      const [call] = await db().insert(schema.capitalCall).values({ projectId: f.projectId, number: Math.floor(Math.random() * 1e9), noticeOn: "2026-01-02", dueOn: "2026-01-20" }).returning();
+      const [item] = await db().insert(schema.capitalCallItem).values({ callId: call!.id, investorId: inv, amountCents: 100 }).returning();
+      return c.capital.recordReceipt({ projectId: f.projectId, itemId: item!.id, version: item!.version, receivedCents: 100, receivedOn: "2026-01-05" });
+    },
+  },
+  "capital.deleteCall": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const [call] = await db().insert(schema.capitalCall).values({ projectId: f.projectId, number: Math.floor(Math.random() * 1e9), noticeOn: "2026-01-02", dueOn: "2026-01-20" }).returning();
+      return c.capital.deleteCall({ projectId: f.projectId, id: call!.id });
+    },
+  },
+  "capital.previewDistribution": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      await investorFixture(f.projectId);
+      return c.capital.previewDistribution({ projectId: f.projectId, amountCents: 1_000_00, paidOn: "2099-01-01" });
+    },
+  },
+  "capital.recordDistribution": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      await investorFixture(f.projectId);
+      return c.capital.recordDistribution({ projectId: f.projectId, amountCents: 1_000_00, paidOn: "2099-12-31" });
+    },
+  },
+  "capital.deleteDistribution": {
+    allowed: FIN_EDIT,
+    call: async (c, f) => {
+      const [latest] = await db().select({ n: schema.distribution.number }).from(schema.distribution).where(eq(schema.distribution.projectId, f.projectId)).orderBy(desc(schema.distribution.number)).limit(1);
+      const [d] = await db().insert(schema.distribution).values({ projectId: f.projectId, number: (latest?.n ?? 0) + 1, paidOn: "2099-12-31", totalCents: 100 }).returning();
+      return c.capital.deleteDistribution({ projectId: f.projectId, id: d!.id });
+    },
+  },
+
+  "portal.list": { allowed: ACTIVE.filter((s) => !s.startsWith("external")), call: (c) => c.portal.list() },
+  "portal.project": { allowed: PORTAL, call: (c, f) => c.portal.project({ projectId: f.projectId }) },
+  "portal.highlights": { allowed: PORTAL, call: (c, f) => c.portal.highlights({ projectId: f.projectId, from: "2026-01-01", to: "2026-03-31" }) },
+
 };
 
 const DENIED_CODES = new Set(["UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND"]);
@@ -701,6 +851,7 @@ describe("permission matrix", () => {
   const fixture = {} as Fixture;
 
   beforeAll(async () => {
+    setLotLookupForTests(async () => null);
     const owner = await createUser("owner");
     users.owner = owner.id;
     users.anon = null;
@@ -720,7 +871,7 @@ describe("permission matrix", () => {
     };
     await addMember(fixture.projectId, fixture.otherUserId);
 
-    for (const role of ["admin", "member", "external"] as const) {
+    for (const role of ["admin", "member", "external", "investor"] as const) {
       const withFin = await createUser(role);
       await addMember(p.id, withFin.id, { canViewFinancials: true });
       users[`${role}+fin`] = withFin.id;

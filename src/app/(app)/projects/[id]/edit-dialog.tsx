@@ -100,6 +100,8 @@ export function EditProjectDialog({ project, open, onClose }: { project: Project
             facts: {
               description: project.description,
               lotAreaSqft: project.lotAreaSqft,
+              lotFrontFt: project.lotFrontFt,
+              lotDepthFt: project.lotDepthFt,
               zoning: project.zoning,
               residFar: project.residFar,
               builtFar: project.builtFar,

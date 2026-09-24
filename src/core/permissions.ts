@@ -4,8 +4,14 @@
  * decision; nothing here does I/O.
  */
 
-export const GLOBAL_ROLES = ["owner", "admin", "member", "external"] as const;
+export const GLOBAL_ROLES = ["owner", "admin", "member", "external", "investor"] as const;
 export type GlobalRole = (typeof GLOBAL_ROLES)[number];
+
+/** People outside the company: collaborators on the work, and read-only investors and lenders (Module J). */
+export const OUTSIDE_ROLES = ["external", "investor"] as const satisfies readonly GlobalRole[];
+export function isInternalRole(role: GlobalRole): boolean {
+  return role === "owner" || role === "admin" || role === "member";
+}
 
 export const USER_STATUSES = ["active", "deactivated"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
@@ -35,7 +41,9 @@ export type GlobalAction =
   | "audit.view"
   | "system.view"
   | "export.excel"
-  | "projects.viewAll";
+  | "projects.viewAll"
+  | "directory.view" // the vendor and contact directory (internal staff)
+  | "directory.edit";
 
 /** Actions evaluated against one project and the actor's membership on it. */
 export type ProjectAction =
@@ -62,6 +70,8 @@ const GLOBAL_RULES: Record<GlobalAction, readonly GlobalRole[]> = {
   "system.view": ["owner"],
   "export.excel": ["owner"],
   "projects.viewAll": ["owner"],
+  "directory.view": ["owner", "admin", "member"],
+  "directory.edit": ["owner", "admin"],
 };
 
 export function isActive(actor: Actor | null | undefined): actor is Actor {
@@ -92,6 +102,8 @@ export function canProject(
   if (!isActive(actor)) return false;
   if (actor.role === "owner") return true;
   if (!membership) return false;
+  // Investors and lenders (Module J) read their portal and nothing else; their capital account follows the financials flag, checked there.
+  if (actor.role === "investor") return action === "project.view";
 
   switch (action) {
     case "project.view":
@@ -105,17 +117,17 @@ export function canProject(
       return actor.role === "admin";
     case "task.viewAll":
     case "folder.viewAll":
-      return actor.role !== "external";
+      return isInternalRole(actor.role);
     case "project.delete":
       return false;
     case "photos.upload":
       // Outside parties see only folders shared with them (brief §4): they
       // add photos when the Photos folder is shared (checked in the router).
-      return actor.role !== "external";
+      return isInternalRole(actor.role);
     case "photos.manage":
       return actor.role === "admin";
     case "activity.view":
-      return actor.role !== "external";
+      return isInternalRole(actor.role);
     case "checklist.edit":
       if (actor.role === "admin") return true;
       if (actor.role === "member") return membership.canEditChecklist;
@@ -178,6 +190,7 @@ export function defaultFlags(role: GlobalRole): MembershipFlags {
     case "member":
       return { canViewFinancials: false, canEditChecklist: false, canApprove: false };
     case "external":
+    case "investor":
       return { canViewFinancials: false, canEditChecklist: false, canApprove: false };
   }
 }

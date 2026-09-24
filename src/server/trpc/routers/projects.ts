@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or,
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { FINANCIAL_ENTITY_TYPES, isFinancialEntity } from "@/core/audit";
-import { canGlobal, canGrantFlags, canProject, canRemoveMember, defaultFlags, PROJECT_ROLES, type Membership } from "@/core/permissions";
+import { canGlobal, canGrantFlags, canProject, canRemoveMember, defaultFlags, PROJECT_ROLES, type Membership, isInternalRole } from "@/core/permissions";
 import { setCurrentPhase, setPhaseSkipped, type PhaseState } from "@/core/phases";
 import { isToggleKey } from "@/core/toggles";
 import { PROJECT_STATUSES } from "@/core/portfolio";
@@ -14,7 +14,8 @@ import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { expiredCoiFlags, expiredCounts } from "../../services/expiries";
-import { resetProjectRecords } from "../../services/records";
+import { queueFirstSnapshot, resetProjectRecords } from "../../services/records";
+import { lookupLot } from "../../services/pluto";
 import { lockBaselineOnPreConstruction, slippageFor } from "../../services/field";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
@@ -35,12 +36,15 @@ const BBL_BOROUGH_MESSAGE =
 
 const count = z.number().int().min(0).max(100_000_000).nullable();
 const far = z.number().min(0).max(99).multipleOf(0.01).nullable();
+const feet = z.number().min(0).max(100_000).multipleOf(0.01).nullable();
 // Same cap as the Financials tab ($10 billion).
 const cents = z.number().int().min(0).max(1_000_000_000_000).nullable();
 
 const factsInput = z.object({
   description: z.string().trim().max(2000).nullable(),
   lotAreaSqft: count,
+  lotFrontFt: feet,
+  lotDepthFt: feet,
   zoning: z.string().trim().max(60).nullable(),
   residFar: far,
   builtFar: far,
@@ -376,7 +380,7 @@ export const projectsRouter = router({
       .where(inArray(schema.project.id, ids))
       .orderBy(asc(schema.project.name));
 
-    const outsider = ctx.actor.role === "external" ? ctx.actor.userId : null;
+    const outsider = !isInternalRole(ctx.actor.role) ? ctx.actor.userId : null;
     // Outside collaborators see a project's photos only when its Photos folder is shared with them.
     const photoOk = outsider ? await projectsWithSharedPhotos(ctx.db, outsider, ids) : null;
     const [phases, heroes, mine, counts, facts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, photoOk ? rows.filter((r) => photoOk.has(r.id)) : rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, outsider), loadCardFacts(ctx.db, ids, outsider)]);
@@ -385,7 +389,7 @@ export const projectsRouter = router({
     const headlines = await cardHeadlines(ctx.db, finIds);
     if (!outsider) await addRiskFacts(ctx.db, ids, new Set(finIds), facts);
 
-    const internal = ctx.actor.role !== "external";
+    const internal = isInternalRole(ctx.actor.role);
     const members = internal
       ? await ctx.db
           .select({ projectId: schema.projectMember.projectId, userId: schema.user.id, name: schema.user.name })
@@ -424,6 +428,8 @@ export const projectsRouter = router({
         companyId: schema.project.companyId,
         companyName: schema.company.name,
         lotAreaSqft: schema.project.lotAreaSqft,
+        lotFrontFt: schema.project.lotFrontFt,
+        lotDepthFt: schema.project.lotDepthFt,
         zoning: schema.project.zoning,
         residFar: schema.project.residFar,
         builtFar: schema.project.builtFar,
@@ -471,6 +477,24 @@ export const projectsRouter = router({
     };
   }),
 
+  /**
+   * Module A: the lot's facts from PLUTO, by BBL or (without one) by the
+   * BBL the city's address data gives. Read-only; the form fills its empty
+   * fields from the answer.
+   */
+  lookupLot: globalProcedure("project.create")
+    .input(z.object({ bbl: bblSchema.optional(), address: z.string().trim().max(200).optional(), borough: z.enum(BOROUGHS) }))
+    .mutation(async ({ input }) => {
+      let bbl = input.bbl ?? null;
+      if (!bbl && input.address && input.address.length >= 3) {
+        const geo = await tryGeocode(input.address, input.borough);
+        bbl = geo?.bbl && geo.bbl.startsWith(BOROUGH_CODE[input.borough]) ? geo.bbl : null;
+      }
+      if (!bbl) return { status: "no_bbl" as const };
+      if (!bbl.startsWith(BOROUGH_CODE[input.borough])) return { status: "wrong_borough" as const, bbl };
+      return { ...(await lookupLot(bbl)), bbl };
+    }),
+
   create: globalProcedure("project.create")
     .input(createInput)
     .mutation(async ({ ctx, input }) => {
@@ -501,6 +525,7 @@ export const projectsRouter = router({
           })
           .returning({ id: schema.project.id });
         const id = p!.id;
+        if (bbl) queueFirstSnapshot(id);
         const built = await buildProjectChecklist(tx, { projectId: id, type: input.type, template: tpl, chosenToggles: toggles, today, userId: ctx.viewer.id });
         // The creator is always a member (admins need membership to see it).
         await tx.insert(schema.projectMember).values({ projectId: id, userId: ctx.viewer.id, projectRole: "PM", ...flags, addedById: ctx.viewer.id });
@@ -558,7 +583,10 @@ export const projectsRouter = router({
       return ctx.db.transaction(async (tx) => {
         const version = await bumpVersion(tx, input.projectId, input.version, changes);
         // A different lot (or street address, which drives the DOB BIS and complaint lookups): start the records watch fresh.
-        if (before.bbl !== bbl || before.address.trim().toUpperCase() !== input.address.trim().toUpperCase()) await resetProjectRecords(tx, input.projectId);
+        if (before.bbl !== bbl || before.address.trim().toUpperCase() !== input.address.trim().toUpperCase()) {
+          await resetProjectRecords(tx, input.projectId);
+          if (bbl) queueFirstSnapshot(input.projectId);
+        }
         const changed = Object.fromEntries(
           Object.entries(changes).filter(([k, v]) => (before as Record<string, unknown>)[k] !== v),
         );
@@ -719,7 +747,7 @@ export const membersRouter = router({
       .orderBy(asc(schema.user.name));
     const showFlags = ctx.project.can("project.manageMembers");
     // External collaborators see who is on the project, not everyone's emails or permissions.
-    const isExternal = ctx.actor.role === "external";
+    const isExternal = !isInternalRole(ctx.actor.role);
     return rows.map((r) => ({
       userId: r.userId,
       name: r.name,
@@ -740,7 +768,10 @@ export const membersRouter = router({
       await ctx.db.transaction(async (tx) => {
         const [target] = await tx.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role, status: schema.user.status }).from(schema.user).where(eq(schema.user.id, userId));
         if (!target || target.status !== "active") throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
-        if (target.role === "external" && flags.canEditChecklist) {
+        if (target.role === "investor" && (flags.canEditChecklist || flags.canApprove)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Investors and lenders have a read-only portal." });
+        }
+        if (!isInternalRole(target.role) && flags.canEditChecklist) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Outside collaborators cannot edit checklists." });
         }
         const [before] = await tx
@@ -765,6 +796,11 @@ export const membersRouter = router({
           if ((before.canApprove && !flags.canApprove) || before.projectRole !== flags.projectRole) await rerouteApprovals(tx, userId, ctx.viewer.id, projectId);
         } else {
           await tx.insert(schema.projectMember).values({ projectId, userId, ...flags, addedById: ctx.viewer.id });
+          // Module J: an investor or lender sees the project's photos from the start (the share can be removed on the Files tab).
+          if (target.role === "investor") {
+            const [photos] = await tx.select({ id: schema.folder.id }).from(schema.folder).where(and(eq(schema.folder.projectId, projectId), eq(schema.folder.isPhotos, true)));
+            if (photos) await tx.insert(schema.folderShare).values({ folderId: photos.id, userId }).onConflictDoNothing();
+          }
         }
         await recordAudit(tx, {
           actorId: ctx.viewer.id,

@@ -19,6 +19,7 @@ const ROLE_LABEL: Record<(typeof GLOBAL_ROLES)[number], string> = {
   admin: "Admin",
   member: "Team member",
   external: "Outside collaborator",
+  investor: "Investor",
 };
 
 async function sendInviteEmail(opts: { to: string; name: string; inviter: string; role: string; token: string }) {

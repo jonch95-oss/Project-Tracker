@@ -23,13 +23,15 @@ export const ROLE_LABEL: Record<GlobalRole, string> = {
   admin: "Admin",
   member: "Team member",
   external: "Outside collaborator",
+  investor: "Investor or lender",
 };
 
 export const ROLE_DESCRIPTION: Record<GlobalRole, string> = {
   owner: "Everything, including users, templates, company settings, audit log and system.",
   admin: "Everything on assigned projects. Can create projects and edit templates.",
   member: "Works tasks on assigned projects. Edits checklists only where granted.",
-  external: "Architect, expediter, GC, lender or partner. Sees only what is assigned or shared.",
+  external: "Architect, expediter, GC or consultant. Sees only what is assigned or shared.",
+  investor: "Equity investor, JV partner or lender. Read-only portal: progress, photos, schedule, shared documents, and their own capital account if allowed.",
 };
 
 export const BOROUGHS = ["Brooklyn", "Manhattan", "Queens", "Bronx", "Staten Island"] as const;

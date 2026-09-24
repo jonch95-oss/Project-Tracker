@@ -32,7 +32,7 @@ async function makeThumb(file: File): Promise<{ blob: Blob; contentType: "image/
 }
 
 /** Write one object to storage (Vercel Blob in production, the local stand-in otherwise), reporting progress 0–1. */
-async function putObject(mode: "blob" | "local", uploadId: string, pathname: string, body: Blob, contentType: string, onProgress: (p: number) => void) {
+export async function putObject(mode: "blob" | "local", uploadId: string, pathname: string, body: Blob, contentType: string, onProgress: (p: number) => void) {
   if (mode === "blob") {
     const { upload } = await import("@vercel/blob/client");
     await upload(pathname, body, {

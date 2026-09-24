@@ -5,6 +5,7 @@ import { createContext } from "@/server/trpc/init";
 import { appRouter } from "@/server/trpc/root";
 import { dispatchPending } from "@/server/services/push";
 import { takePushDirty } from "@/server/services/tasks";
+import { syncProjectRecords, takeSnapshotQueue } from "@/server/services/records";
 import { logError } from "@/server/services/errors";
 
 /**
@@ -25,7 +26,13 @@ function handler(req: Request) {
     });
   }
   // Push whatever this request notified, once the response is on its way (the hourly tick is the safety net).
-  if (req.method === "POST") after(() => (takePushDirty() ? dispatchPending().catch((err) => logError("request", err, { path: "push-dispatch" })) : undefined));
+  if (req.method === "POST") {
+    after(async () => {
+      if (takePushDirty()) await dispatchPending().catch((err) => logError("request", err, { path: "push-dispatch" }));
+      // A project that just got a lot pulls its first public-records snapshot now (Module A); the nightly run is the safety net.
+      for (const id of takeSnapshotQueue()) await syncProjectRecords(id, { deadline: Date.now() + 50_000 }).catch((err) => logError("request", err, { path: "records-first-snapshot" }));
+    });
+  }
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req,

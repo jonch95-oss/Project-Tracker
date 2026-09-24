@@ -3,6 +3,7 @@ import { and, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { expiryLabel, expiryReminderMark, FINANCIAL_EXPIRY, isVendorCoi, vendorKey } from "@/core/expiries";
 import { addDays, daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { db, schema, type DbOrTx } from "../db";
+import { directoryCois } from "./directory";
 import { activeOwners, notify } from "./tasks";
 
 /** Who hears about an expiry: the owner(s) and the project's PM (money items only if they can see financials). */
@@ -11,7 +12,7 @@ async function expiryAudience(tx: DbOrTx, projectId: string, financial: boolean)
     .select({ userId: schema.projectMember.userId, fin: schema.projectMember.canViewFinancials })
     .from(schema.projectMember)
     .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-    .where(and(eq(schema.projectMember.projectId, projectId), sql`lower(${schema.projectMember.projectRole}) = 'pm'`, eq(schema.user.status, "active"), sql`${schema.user.role} <> 'external'`));
+    .where(and(eq(schema.projectMember.projectId, projectId), sql`lower(${schema.projectMember.projectRole}) = 'pm'`, eq(schema.user.status, "active"), sql`${schema.user.role} not in ('external', 'investor')`));
   return [...new Set([...(await activeOwners(tx)), ...pms.filter((m) => !financial || m.fin).map((m) => m.userId)])];
 }
 
@@ -69,7 +70,8 @@ export async function vendorsWithExpiredCoi(conn: DbOrTx, today = todayET()): Pr
     .from(schema.expiryItem)
     .innerJoin(schema.project, eq(schema.project.id, schema.expiryItem.projectId))
     .where(and(isNull(schema.expiryItem.closedAt), isNotNull(schema.expiryItem.vendorKey), isNull(schema.project.archivedAt), sql`${schema.project.status} <> 'closed'`));
-  const cois = rows.filter((r) => isVendorCoi(r.category) && r.key);
+  // The directory's certificates count too: a renewal filed there clears the flag, a lapsed one raises it.
+  const cois = [...rows.filter((r) => isVendorCoi(r.category) && r.key), ...(await directoryCois(conn))];
   // Covered per kind of certificate: a current GL doesn't excuse a lapsed workers' comp.
   const current = new Set(cois.filter((r) => r.expiresOn >= today).map((r) => `${r.key}|${r.category}`));
   return new Map(cois.filter((r) => r.expiresOn < today && !current.has(`${r.key}|${r.category}`)).map((r) => [r.key!, r.name ?? r.key!]));
@@ -94,6 +96,13 @@ export async function expiredCoiFlags(conn: DbOrTx, projectIds: string[], today 
   };
   for (const c of commitments) add(c.projectId, vendorKey(c.vendor));
   for (const i of items) if (i.key) add(i.projectId, i.key);
+  // Directory links (Module C): invoices, tasks given to the vendor and punch items name them too.
+  const invoices = await conn.select({ projectId: schema.invoice.projectId, vendor: schema.invoice.vendorName }).from(schema.invoice).where(inArray(schema.invoice.projectId, projectIds));
+  for (const i of invoices) add(i.projectId, vendorKey(i.vendor));
+  const tasks = await conn.select({ projectId: schema.task.projectId, key: schema.vendor.key }).from(schema.task).innerJoin(schema.vendor, eq(schema.vendor.id, schema.task.vendorId)).where(inArray(schema.task.projectId, projectIds));
+  for (const t of tasks) add(t.projectId, t.key);
+  const punch = await conn.select({ projectId: schema.punchItem.projectId, vendor: schema.punchItem.vendorName }).from(schema.punchItem).where(and(inArray(schema.punchItem.projectId, projectIds), isNotNull(schema.punchItem.vendorName)));
+  for (const p of punch) add(p.projectId, vendorKey(p.vendor));
   return out;
 }
 

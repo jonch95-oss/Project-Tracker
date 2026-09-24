@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { z } from "zod";
 import { requireViewer } from "@/server/session";
@@ -11,6 +11,8 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
   const viewer = await requireViewer();
   const { id } = await params;
   if (!z.uuid().safeParse(id).success) notFound();
+  // Investors and lenders read the project through their portal.
+  if (viewer.role === "investor") redirect(`/portal/${id}`);
   return (
     <Suspense>
       <ProjectView projectId={id} viewerId={viewer.id} />

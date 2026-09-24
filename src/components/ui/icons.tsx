@@ -42,6 +42,13 @@ export const IconTeam = (p: IconProps) => (
     <path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c1.8.8 3 2.6 3.5 5.2" />
   </Icon>
 );
+export const IconDirectory = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM3 7h2M3 12h2M3 17h2" />
+    <circle cx="12" cy="10" r="2.5" />
+    <path d="M8.5 17c.6-2 1.9-3 3.5-3s2.9 1 3.5 3" />
+  </Icon>
+);
 export const IconSystem = (p: IconProps) => (
   <Icon {...p}>
     <path d="M4 18a8 8 0 1 1 16 0M12 18l4-6M3 18h2M19 18h2M12 7V6" />

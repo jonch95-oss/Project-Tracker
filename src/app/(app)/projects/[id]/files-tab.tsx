@@ -36,7 +36,7 @@ export function FilesTab({ projectId, onOpenPhotos, focusFolder, focusFile }: { 
   const q = useQuery(trpc.files.folders.queryOptions({ projectId }));
   const canShare = q.data?.access.canShare ?? false;
   const m = useQuery({ ...trpc.members.list.queryOptions({ projectId }), enabled: canShare });
-  const members = (m.data ?? []).map((x) => ({ id: x.userId, name: x.name, external: x.globalRole === "external" }));
+  const members = (m.data ?? []).map((x) => ({ id: x.userId, name: x.name, external: x.globalRole === "external" || x.globalRole === "investor" }));
   // A link from a notification opens its folder (and file) directly.
   const [open, setOpen] = useState<string | null>(focusFolder ?? null);
   const [dialog, setDialog] = useState<null | "newFolder" | "trash">(null);

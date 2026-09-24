@@ -18,7 +18,7 @@ import {
   IconSettings,
   IconSignOut,
   IconSystem,
-  IconTemplate,
+  IconDirectory, IconTemplate,
   IconTasks,
   IconTeam,
 } from "../ui/icons";
@@ -39,16 +39,20 @@ interface NavItem {
 }
 
 const ALL: GlobalRole[] = ["owner", "admin", "member", "external"];
+/** Investors and lenders get their portal, notifications and settings, nothing else. */
+const WITH_INVESTOR: GlobalRole[] = [...ALL, "investor"];
 
 const NAV: NavItem[] = [
+  { href: "/portal", label: "Investments", icon: IconPortfolio, roles: ["investor"], mobile: true },
   { href: "/portfolio", label: "Portfolio", icon: IconPortfolio, roles: ALL, mobile: true },
   { href: "/tasks", label: "My Tasks", icon: IconTasks, roles: ALL, mobile: true },
-  { href: "/notifications", label: "Notifications", icon: IconBell, roles: ALL, mobile: true },
+  { href: "/notifications", label: "Notifications", icon: IconBell, roles: WITH_INVESTOR, mobile: true },
+  { href: "/directory", label: "Directory", icon: IconDirectory, roles: ["owner", "admin", "member"], mobile: false },
   { href: "/templates", label: "Templates", icon: IconTemplate, roles: ["owner", "admin"], mobile: false },
   { href: "/team", label: "Team", icon: IconTeam, roles: ["owner"], mobile: false },
   { href: "/audit", label: "Audit log", icon: IconLedger, roles: ["owner"], mobile: false },
   { href: "/system", label: "System", icon: IconSystem, roles: ["owner"], mobile: false },
-  { href: "/settings", label: "Settings", icon: IconSettings, roles: ALL, mobile: true },
+  { href: "/settings", label: "Settings", icon: IconSettings, roles: WITH_INVESTOR, mobile: true },
 ];
 
 const ROLE_LABEL: Record<GlobalRole, string> = {
@@ -56,6 +60,7 @@ const ROLE_LABEL: Record<GlobalRole, string> = {
   admin: "Admin",
   member: "Team member",
   external: "Outside collaborator",
+  investor: "Investor",
 };
 
 function isActive(pathname: string, href: string) {

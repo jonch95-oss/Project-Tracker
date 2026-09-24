@@ -19,7 +19,7 @@ const conflict = () => new TRPCError({ code: "CONFLICT", message: "Someone else 
 const notFound = (what: string) => new TRPCError({ code: "NOT_FOUND", message: `${what} not found` });
 const MAX_CENTS = 1_000_000_000_000;
 
-async function assertOnProject(tx: DbOrTx, projectId: string, userId: string | null | undefined) {
+export async function assertOnProject(tx: DbOrTx, projectId: string, userId: string | null | undefined) {
   if (!userId) return;
   const [m] = await tx.select({ id: schema.projectMember.userId }).from(schema.projectMember).where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId)));
   const [o] = await tx.select({ id: schema.user.id }).from(schema.user).where(and(eq(schema.user.id, userId), eq(schema.user.role, "owner")));

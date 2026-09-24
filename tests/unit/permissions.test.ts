@@ -33,6 +33,8 @@ describe("global permissions", () => {
     "system.view": ["owner"],
     "export.excel": ["owner"],
     "projects.viewAll": ["owner"],
+    "directory.view": ["owner", "admin", "member"],
+    "directory.edit": ["owner", "admin"],
   };
   for (const [action, roles] of Object.entries(expected) as [GlobalAction, GlobalRole[]][]) {
     for (const role of GLOBAL_ROLES) {

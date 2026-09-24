@@ -62,7 +62,7 @@ export function filePath(projectId: string, safeName: string): { dir: string; ob
 
 export async function createPendingUpload(
   conn: Database,
-  input: { userId: string; projectId: string; purpose: "photo" | "file"; objects: UploadObject[]; meta?: unknown },
+  input: { userId: string; projectId: string | null; purpose: "photo" | "file" | "directory"; objects: UploadObject[]; meta?: unknown },
   now = new Date(),
 ): Promise<PendingUpload> {
   const [row] = await conn

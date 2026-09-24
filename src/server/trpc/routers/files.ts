@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
+import { isInternalRole } from "@/core/permissions";
 import { cleanDisplayName, DOWNLOAD_URL_TTL_MS, fileExtension, MAX_FILE_BYTES, MAX_THUMB_BYTES, normalizeContentType, previewKind, storedContentType } from "@/core/files";
 import { safeFileName } from "@/core/images";
 import { schema, type DbOrTx } from "../../db";
@@ -560,7 +561,7 @@ export const filesRouter = router({
           .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
           .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.userId)));
         if (!m) throw new TRPCError({ code: "BAD_REQUEST", message: "That person isn't on this project." });
-        if (m.role !== "external") throw new TRPCError({ code: "BAD_REQUEST", message: "The internal team already sees every folder." });
+        if (isInternalRole(m.role)) throw new TRPCError({ code: "BAD_REQUEST", message: "The internal team already sees every folder." });
         if (input.on && f.gated && !m.fin) throw new TRPCError({ code: "BAD_REQUEST", message: "Give them financial access on the Team tab first." });
         if (input.on) await tx.insert(schema.folderShare).values({ folderId: f.id, userId: input.userId }).onConflictDoNothing();
         else await tx.delete(schema.folderShare).where(and(eq(schema.folderShare.folderId, f.id), eq(schema.folderShare.userId, input.userId)));

@@ -14,10 +14,11 @@ import { formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { useFileUpload } from "@/lib/file-upload";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
+import { CapitalSection } from "./capital-section";
 import { FileSheet } from "./files-tab";
 
 type Data = RouterOutputs["financials"]["overview"];
-type Section = "summary" | "budget" | "commitments" | "invoices" | "changes" | "draws" | "sales";
+type Section = "summary" | "budget" | "commitments" | "invoices" | "changes" | "draws" | "sales" | "capital";
 
 const SECTIONS: { key: Section; label: string }[] = [
   { key: "summary", label: "Summary" },
@@ -27,6 +28,7 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: "changes", label: "Change orders" },
   { key: "draws", label: "Draws" },
   { key: "sales", label: "Sales" },
+  { key: "capital", label: "Capital" },
 ];
 
 const $ = (c: number | null | undefined, whole = true) => (c == null ? "—" : formatMoney(c, { whole }));
@@ -77,6 +79,7 @@ export function FinancialsTab({ projectId }: { projectId: string }) {
         {section === "changes" && <ChangeOrders projectId={projectId} data={data} />}
         {section === "draws" && <Draws projectId={projectId} data={data} />}
         {section === "sales" && <Sales projectId={projectId} data={data} />}
+        {section === "capital" && <CapitalSection projectId={projectId} />}
       </TabPanel>
     </section>
   );

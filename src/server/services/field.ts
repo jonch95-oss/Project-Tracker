@@ -1,5 +1,6 @@
 import "server-only";
-import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { OUTSIDE_ROLES } from "@/core/permissions";
 import { isActiveSiteDay, parseOpenMeteo } from "@/core/field";
 import { projectDueDates, type DueRule } from "@/core/templates";
 import { baselineItems, forecast, slippageDays, type ScheduleTask } from "@/core/schedule";
@@ -207,7 +208,7 @@ async function logKeepers(tx: DbOrTx, projectId: string): Promise<string[]> {
     .select({ userId: schema.projectMember.userId })
     .from(schema.projectMember)
     .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-    .where(and(eq(schema.projectMember.projectId, projectId), sql`lower(${schema.projectMember.projectRole}) in ('pm', 'construction', 'gc')`, eq(schema.user.status, "active"), ne(schema.user.role, "external")));
+    .where(and(eq(schema.projectMember.projectId, projectId), sql`lower(${schema.projectMember.projectRole}) in ('pm', 'construction', 'gc')`, eq(schema.user.status, "active"), notInArray(schema.user.role, [...OUTSIDE_ROLES])));
   return rows.length ? rows.map((r) => r.userId) : (await activeOwners(tx)).slice(0, 1);
 }
 

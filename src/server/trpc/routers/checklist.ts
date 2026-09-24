@@ -73,6 +73,8 @@ export const checklistRouter = router({
         role: schema.task.role,
         assigneeId: schema.task.assigneeId,
         assigneeName: schema.user.name,
+        vendorId: schema.task.vendorId,
+        vendorName: schema.vendor.name,
         status: schema.task.status,
         priority: schema.task.priority,
         blockedReason: schema.task.blockedReason,
@@ -98,6 +100,7 @@ export const checklistRouter = router({
       })
       .from(schema.task)
       .leftJoin(schema.user, eq(schema.user.id, schema.task.assigneeId))
+      .leftJoin(schema.vendor, eq(schema.vendor.id, schema.task.vendorId))
       .where(eq(schema.task.projectId, input.projectId))
       .orderBy(asc(schema.task.sortOrder), asc(schema.task.createdAt));
     const shared = await sharedFor(c, ctx.db);
@@ -249,12 +252,18 @@ export const checklistRouter = router({
         approverRole: z.string().trim().max(60).nullish(),
         subItems: z.array(z.object({ id: z.string().min(1).max(40), text: z.string().trim().min(1).max(200), done: z.boolean() })).max(50).optional(),
         recurrence: z.object({ freq: z.enum(["weekly", "biweekly", "monthly"]) }).nullish(),
+        /** Module C: the directory company doing the work. */
+        vendorId: z.uuid().nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const t = await loadTask(tx, input.projectId, input.taskId);
+        if (input.vendorId) {
+          const [v] = await tx.select({ id: schema.vendor.id }).from(schema.vendor).where(and(eq(schema.vendor.id, input.vendorId), isNull(schema.vendor.archivedAt)));
+          if (!v) throw new TRPCError({ code: "NOT_FOUND", message: "That company isn't in the directory." });
+        }
         const touchesApproval =
           (input.requiresApproval !== undefined && input.requiresApproval !== t.requiresApproval) || (input.approverRole !== undefined && (input.approverRole ?? null) !== t.approverRole);
         if (touchesApproval && !ctx.project.can("task.approve")) {
@@ -271,6 +280,7 @@ export const checklistRouter = router({
         if (input.approverRole !== undefined) set.approverRole = input.approverRole ?? null;
         if (input.subItems !== undefined) set.subItems = input.subItems;
         if (input.recurrence !== undefined) set.recurrence = input.recurrence ?? null;
+        if (input.vendorId !== undefined) set.vendorId = input.vendorId ?? null;
         // The approver is worked out from the role at each request; a changed role takes effect next time.
         if (touchesApproval) set.approverId = null;
         if (input.phaseKey !== undefined && input.phaseKey !== t.phaseKey) {

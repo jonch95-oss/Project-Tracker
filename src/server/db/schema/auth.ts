@@ -16,7 +16,7 @@ export const user = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     twoFactorEnabled: boolean("two_factor_enabled").default(false),
-    role: text("role", { enum: ["owner", "admin", "member", "external"] })
+    role: text("role", { enum: ["owner", "admin", "member", "external", "investor"] })
       .notNull()
       .default("member"),
     status: text("status", { enum: ["active", "deactivated"] })

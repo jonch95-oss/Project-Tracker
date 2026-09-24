@@ -12,6 +12,7 @@ import { purgeTrashJob } from "./files";
 import { followUpJob, keyDateReminderJob } from "./tasks";
 import { closeStalePending, dispatchPending, releaseHeld } from "./push";
 import { digestJob, dueTomorrowJob, overdueNudgeJob } from "./notifications";
+import { directoryReminderJob } from "./directory";
 import { expiryReminderJob } from "./expiries";
 import { siteLogNudgeJob } from "./field";
 import { recordsSyncJob } from "./records";
@@ -167,6 +168,7 @@ const DAILY: { job: string; hourET: number; fn: () => Promise<JobResult> }[] = [
   { job: "due-tomorrow", hourET: 9, fn: () => dueTomorrowJob() },
   { job: "overdue-nudges", hourET: 9, fn: () => overdueNudgeJob() },
   { job: "expiry-reminders", hourET: 8, fn: () => expiryReminderJob() },
+  { job: "directory-reminders", hourET: 8, fn: () => directoryReminderJob() },
   { job: "site-log-nudge", hourET: 17, fn: () => siteLogNudgeJob() },
 ];
 

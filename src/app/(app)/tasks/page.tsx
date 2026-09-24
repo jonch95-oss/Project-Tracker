@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/ui/primitives";
 import { formatIsoDate, todayET } from "@/core/time";
+import { redirect } from "next/navigation";
 import { requireViewer } from "@/server/session";
 import { MyTasksView } from "./my-tasks-view";
 
@@ -8,6 +9,7 @@ export const metadata: Metadata = { title: "My Tasks" };
 
 export default async function TasksPage() {
   const viewer = await requireViewer();
+  if (viewer.role === "investor") redirect("/portal");
   const firstName = viewer.name.split(" ")[0];
   return (
     <>

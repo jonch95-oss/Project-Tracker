@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { IconArrowDown, IconArrowUp, IconClose, IconLock, IconPlus } from "@/components/ui/icons";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
@@ -57,6 +57,7 @@ export function TaskDialog({
 
   const onError = (e: unknown) => toast("error", errorMessage(e));
   const update = useMutation(trpc.checklist.updateTask.mutationOptions({ onError, onSettled: () => onChanged() }));
+  const vendors = useQuery({ ...trpc.directory.options.queryOptions(), enabled: canEdit, staleTime: 60_000 });
   const remove = useMutation(
     trpc.checklist.deleteTask.mutationOptions({
       onSuccess: async () => {
@@ -107,6 +108,7 @@ export function TaskDialog({
         requiresApproval,
         approverRole: requiresApproval ? str("approverRole") || "Owner" : null,
         recurrence: str("recurrence") ? { freq: str("recurrence") as "weekly" | "biweekly" | "monthly" } : null,
+        vendorId: str("vendorId") || null,
       },
       {
         onSuccess: () => {
@@ -135,6 +137,7 @@ export function TaskDialog({
       description={
         <>
           {phaseName} · {t.role}
+          {t.vendorName && <> · {t.vendorName}</>}
           {t.dueOn && <> · due {dueLabel(t.dueOn, today)}</>}
         </>
       }
@@ -214,6 +217,18 @@ export function TaskDialog({
                 <option value="weekly">Every week</option>
                 <option value="biweekly">Every 2 weeks</option>
                 <option value="monthly">Every month</option>
+              </Select>
+            </Field>
+            <Field label="Company (from the directory)" htmlFor="td-vendor" hint="The GC, sub or consultant doing this. Their COIs flag here.">
+              <Select id="td-vendor" name="vendorId" defaultValue={t.vendorId ?? ""}>
+                <option value="">None</option>
+                {vendors.data?.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                    {v.trade ? ` · ${v.trade}` : ""}
+                  </option>
+                ))}
+                {t.vendorId && !vendors.data?.some((v) => v.id === t.vendorId) && <option value={t.vendorId}>{t.vendorName ?? "Archived company"}</option>}
               </Select>
             </Field>
             <div className="flex flex-col justify-end gap-3">

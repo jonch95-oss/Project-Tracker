@@ -43,6 +43,10 @@ export const FINANCIAL_ENTITY_TYPES = [
   "draw",
   "sale",
   "capital",
+  "capital_terms",
+  "capital_commitment",
+  "capital_call",
+  "distribution",
   // Anything done to a file in the gated Financial folder (names included).
   "financial_file",
 ] as const;

@@ -8,7 +8,7 @@ import { AcceptInviteForm } from "./accept-form";
 
 export const metadata: Metadata = { title: "Accept invitation" };
 
-const ROLE_LABEL = { owner: "Owner", admin: "Admin", member: "Team member", external: "Outside collaborator" } as const;
+const ROLE_LABEL = { owner: "Owner", admin: "Admin", member: "Team member", external: "Outside collaborator", investor: "Investor" } as const;
 
 export default async function InvitePage({ params }: PageProps<"/invite/[token]">) {
   const { token } = await params;

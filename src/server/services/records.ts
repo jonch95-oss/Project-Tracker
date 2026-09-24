@@ -1,5 +1,6 @@
 import "server-only";
 import { and, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { OUTSIDE_ROLES } from "@/core/permissions";
 import {
   CLOSED_STAGES,
   diffRecords,
@@ -102,6 +103,24 @@ export function setRecordsClientForTests(c: RecordsClient | null) {
   clientOverride = c;
 }
 const client = () => clientOverride ?? socrataClient();
+/**
+ * Module A: a project that gets a lot (created with a BBL, or its BBL
+ * changed) pulls its first public-records snapshot right after the request,
+ * instead of waiting for the nightly run. Queued here, run by the request
+ * handler once the response is on its way.
+ */
+const snapshotQueue = new Set<string>();
+export function queueFirstSnapshot(projectId: string) {
+  snapshotQueue.add(projectId);
+}
+export function takeSnapshotQueue(): string[] {
+  const ids = [...snapshotQueue];
+  snapshotQueue.clear();
+  return ids;
+}
+
+/** The same client (token, retries, deadlines, test replay) for other NYC Open Data lookups. */
+export const recordsClient = client;
 
 /* ------------------------------------------------------------------ */
 /* Sync one project                                                    */
@@ -322,7 +341,7 @@ export async function recordAudience(tx: DbOrTx, projectId: string): Promise<str
     .select({ userId: schema.projectMember.userId })
     .from(schema.projectMember)
     .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
-    .where(and(eq(schema.projectMember.projectId, projectId), sql`lower(${schema.projectMember.projectRole}) = 'pm'`, ne(schema.user.role, "external"), eq(schema.user.status, "active")));
+    .where(and(eq(schema.projectMember.projectId, projectId), sql`lower(${schema.projectMember.projectRole}) = 'pm'`, notInArray(schema.user.role, [...OUTSIDE_ROLES]), eq(schema.user.status, "active")));
   return [...new Set([...(await activeOwners(tx)), ...pms.map((m) => m.userId)])];
 }
 

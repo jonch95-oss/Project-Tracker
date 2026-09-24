@@ -13,6 +13,8 @@ interface EditState {
   userId: string;
   name: string;
   isExternal: boolean;
+  /** Module J: a read-only investor or lender. */
+  isInvestor: boolean;
   projectRole: string;
   canViewFinancials: boolean;
   canEditChecklist: boolean;
@@ -71,7 +73,8 @@ export function TeamTab({ projectId, canManage }: { projectId: string; canManage
                       setEdit({
                         userId: m.userId,
                         name: m.name,
-                        isExternal: m.globalRole === "external",
+                        isExternal: m.globalRole === "external" || m.globalRole === "investor",
+                        isInvestor: m.globalRole === "investor",
                         projectRole: m.projectRole,
                         ...m.flags!,
                         isNew: false,
@@ -96,8 +99,9 @@ export function TeamTab({ projectId, canManage }: { projectId: string; canManage
             setEdit({
               userId: u.id,
               name: u.name,
-              isExternal: u.role === "external",
-              projectRole: u.role === "external" ? "Consultant" : "PM",
+              isExternal: u.role === "external" || u.role === "investor",
+              isInvestor: u.role === "investor",
+              projectRole: u.role === "investor" ? "Investor" : u.role === "external" ? "Consultant" : "PM",
               canViewFinancials: false,
               canEditChecklist: u.role === "admin",
               canApprove: false,
@@ -231,8 +235,8 @@ function AccessDialog({ projectId, state, onClose }: { projectId: string; state:
         </Field>
         <Switch
           id="acc-fin"
-          label="Can view financials"
-          description="Budget, costs, invoices, draws and sales. Hidden everywhere else when off."
+          label={s.isInvestor ? "Can see their capital account" : "Can view financials"}
+          description={s.isInvestor ? "Their own commitment, contributions and distributions in the portal. Never the project's budget or anyone else's account." : "Budget, costs, invoices, draws and sales. Hidden everywhere else when off."}
           checked={s.canViewFinancials}
           onChange={(v) => setS({ ...s, canViewFinancials: v })}
         />
@@ -244,7 +248,14 @@ function AccessDialog({ projectId, state, onClose }: { projectId: string; state:
           disabled={s.isExternal}
           onChange={(v) => setS({ ...s, canEditChecklist: v })}
         />
-        <Switch id="acc-approve" label="Can approve" description="Sign off on tasks that require approval." checked={s.canApprove} onChange={(v) => setS({ ...s, canApprove: v })} />
+        <Switch
+          id="acc-approve"
+          label="Can approve"
+          description={s.isInvestor ? "Investors and lenders have a read-only portal." : "Sign off on tasks that require approval."}
+          checked={s.canApprove}
+          disabled={s.isInvestor}
+          onChange={(v) => setS({ ...s, canApprove: v })}
+        />
         {error && (
           <p role="alert" className="text-sm text-blocked-text">
             {error}
