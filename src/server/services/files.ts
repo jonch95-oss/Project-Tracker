@@ -1,5 +1,6 @@
 import "server-only";
 import { and, asc, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { canProject } from "@/core/permissions";
 import { canSeeFolder, DEFAULT_GATED_FOLDER, PHOTOS_FOLDER, TRASH_DAYS } from "@/core/files";
 import { DEFAULT_FOLDERS } from "@/core/seed-library";
 import { db, schema, type Database, type DbOrTx } from "../db";
@@ -149,5 +150,32 @@ export async function folderCounts(conn: DbOrTx, folderIds: string[]): Promise<M
     .where(and(inArray(schema.file.folderId, folderIds), isNull(schema.file.deletedAt)))
     .groupBy(schema.file.folderId);
   for (const r of rows) out.set(r.folderId, { files: r.files, bytes: Number(r.bytes) });
+  return out;
+}
+
+/**
+ * Of these people, who can see this folder right now: active, on the project
+ * (or the owner), financial access for the gated folder, a share for
+ * outsiders. Used for folder-watch notices, at creation and again at send.
+ */
+export async function canSeeFolderNow(conn: DbOrTx, projectId: string, folderId: string, userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const [folder] = await conn.select().from(schema.folder).where(and(eq(schema.folder.id, folderId), eq(schema.folder.projectId, projectId)));
+  if (!folder) return new Set();
+  const people = await conn
+    .select({ userId: schema.user.id, role: schema.user.role, status: schema.user.status, member: schema.projectMember.userId, canViewFinancials: schema.projectMember.canViewFinancials })
+    .from(schema.user)
+    .leftJoin(schema.projectMember, and(eq(schema.projectMember.userId, schema.user.id), eq(schema.projectMember.projectId, projectId)))
+    .where(inArray(schema.user.id, userIds));
+  const shared = new Set(
+    (await conn.select({ u: schema.folderShare.userId }).from(schema.folderShare).where(and(eq(schema.folderShare.folderId, folderId), inArray(schema.folderShare.userId, userIds)))).map((r) => r.u),
+  );
+  const out = new Set<string>();
+  for (const p of people) {
+    const actor = { userId: p.userId, role: p.role, status: p.status };
+    const membership = p.member ? { projectRole: "", canViewFinancials: !!p.canViewFinancials, canEditChecklist: false, canApprove: false } : null;
+    if (!canProject(actor, membership, "project.view")) continue;
+    if (canSeeFolder(folder, { seesAll: canProject(actor, membership, "folder.viewAll"), financials: canProject(actor, membership, "financials.view"), shared: shared.has(p.userId) })) out.add(p.userId);
+  }
   return out;
 }

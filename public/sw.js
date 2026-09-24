@@ -35,12 +35,17 @@ self.addEventListener("notificationclick", (event) => {
   if (target.origin !== self.location.origin) target = new URL("/notifications", self.location.origin);
   event.waitUntil(
     (async () => {
-      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // Reuse an app window this worker controls (others can't be navigated); otherwise open one.
+      const windows = await self.clients.matchAll({ type: "window" });
       for (const w of windows) {
-        if (new URL(w.url).origin === self.location.origin && "focus" in w) {
+        if (new URL(w.url).origin !== self.location.origin) continue;
+        try {
+          // Focus first, while the tap still counts as the person's action.
           await w.focus();
-          if ("navigate" in w) await w.navigate(target.href);
+          await w.navigate(target.href);
           return;
+        } catch {
+          // Fall through to a new window.
         }
       }
       await self.clients.openWindow(target.href);

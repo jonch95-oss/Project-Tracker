@@ -79,8 +79,19 @@ export async function notify(tx: DbOrTx, actorId: string | null, rows: NotifyInp
   const values = out
     .filter((r) => active.has(r.userId) && (!r.projectId || active.get(r.userId) === "owner" || members.has(`${r.projectId}:${r.userId}`)))
     .map((r) => ({ userId: r.userId, kind: r.kind, title: r.title.slice(0, 300), body: r.body?.slice(0, 1000) ?? null, projectId: r.projectId ?? null, taskId: r.taskId ?? null, href: r.href ?? null, actorId }));
-  if (values.length) await tx.insert(schema.notification).values(values);
+  if (values.length) {
+    await tx.insert(schema.notification).values(values);
+    pushDirty = true;
+  }
   return values.length;
+}
+
+/** Set when this server instance wrote notifications since the last dispatch (so requests that notified nobody never dispatch). */
+let pushDirty = false;
+export function takePushDirty(): boolean {
+  const was = pushDirty;
+  pushDirty = false;
+  return was;
 }
 
 /** Everyone who should hear about activity on a task: assignee and watchers. */
@@ -191,6 +202,7 @@ export async function releaseFromProject(tx: DbOrTx, projectId: string, userId: 
   await tx.delete(schema.taskWatcher).where(and(eq(schema.taskWatcher.userId, userId), inArray(schema.taskWatcher.taskId, taskIds)));
   const folderIds = tx.select({ id: schema.folder.id }).from(schema.folder).where(eq(schema.folder.projectId, projectId));
   await tx.delete(schema.folderShare).where(and(eq(schema.folderShare.userId, userId), inArray(schema.folderShare.folderId, folderIds)));
+  await tx.delete(schema.folderWatch).where(and(eq(schema.folderWatch.userId, userId), inArray(schema.folderWatch.folderId, folderIds)));
   await tx.update(schema.task).set({ assigneeId: null, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(and(eq(schema.task.projectId, projectId), eq(schema.task.assigneeId, userId), ne(schema.task.status, "done")));
   await rerouteApprovals(tx, userId, actorId, projectId);
 }

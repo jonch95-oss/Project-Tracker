@@ -89,6 +89,19 @@ describe("notifications (Milestone 7)", () => {
       expect((await pc.push.devices()).some((d) => d.endpoint === ep)).toBe(false);
     });
 
+    it("the app's re-check refreshes a known device but never brings back one removed in Settings", async () => {
+      const u = await createUser("member");
+      const c = await callerFor(u.id);
+      const ep = endpoint();
+      await c.push.subscribe({ endpoint: ep, keys });
+      expect(await c.push.subscribe({ endpoint: ep, keys, label: "iPhone", refreshOnly: true })).toEqual({ ok: true });
+      const d = (await c.push.devices())[0]!;
+      expect(d.label).toBe("iPhone");
+      await c.push.removeDevice({ id: d.id });
+      expect(await c.push.subscribe({ endpoint: ep, keys, refreshOnly: true })).toEqual({ ok: false });
+      expect(await c.push.devices()).toHaveLength(0);
+    });
+
     it("keeps at most ten devices per person", async () => {
       const u = await createUser("member");
       const c = await callerFor(u.id);
@@ -126,6 +139,51 @@ describe("notifications (Milestone 7)", () => {
       expect(n!.pushState).toBe("sent");
       await dispatchPending();
       expect(pushedTo(ep1)).toHaveLength(1);
+    });
+
+    it("two dispatchers at once push each notification exactly once", async () => {
+      const u = await createUser("member");
+      const c = await callerFor(u.id);
+      const ep = endpoint();
+      await c.push.subscribe({ endpoint: ep, keys });
+      await notify(db(), null, [{ userId: u.id, kind: "assigned", title: "Only once" }]);
+      await Promise.all([dispatchPending(), dispatchPending(), dispatchPending()]);
+      expect(pushedTo(ep)).toHaveLength(1);
+      expect((await inbox(u.id))[0]!.pushState).toBe("sent");
+    });
+
+    it("a burst (a morning of overdue reminders) is one summary push, not one per task", async () => {
+      const u = await createUser("member");
+      const c = await callerFor(u.id);
+      const ep = endpoint();
+      await c.push.subscribe({ endpoint: ep, keys });
+      for (let i = 0; i < 6; i++) await notify(db(), null, [{ userId: u.id, kind: "overdue", title: `Overdue ${i}`, taskId: null }]);
+      await dispatchPending();
+      expect(pushedTo(ep)).toHaveLength(1);
+      expect(pushedTo(ep)[0]!.msg.title).toBe("6 new notifications");
+      expect((await inbox(u.id)).every((n) => n.pushState === "sent")).toBe(true);
+    });
+
+    it("a held file notice isn't pushed after the reader loses access to the folder", async () => {
+      const u = await createUser("member");
+      const c = await callerFor(u.id);
+      const ep = endpoint();
+      await c.push.subscribe({ endpoint: ep, keys });
+      const p = (await oc.projects.create({ name: `Held ${Date.now()}`, address: "9 Held St", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [] })).id;
+      await addMember(p, u.id, { canViewFinancials: true });
+      const financial = (await oc.files.folders({ projectId: p })).folders.find((f) => f.name === "Financial")!;
+      await c.files.watchFolder({ projectId: p, folderId: financial.id, on: true });
+      await c.notifySettings.save({ prefs: {}, quietStart: "00:00", quietEnd: "23:59", digest: true });
+      const b = await oc.files.beginUpload({ projectId: p, folderId: financial.id, name: "payoff-letter.pdf", contentType: "application/pdf", sizeBytes: 5 });
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(5), { contentType: o.contentType });
+      await oc.files.completeUpload({ projectId: p, uploadId: b.uploadId });
+      await dispatchPending(100, new Date(`${todayET()}T16:00:00Z`));
+      expect((await inbox(u.id)).find((n) => n.kind === "file_added")!.pushState).toBe("held");
+      await db().update(schema.projectMember).set({ canViewFinancials: false }).where(and(eq(schema.projectMember.projectId, p), eq(schema.projectMember.userId, u.id)));
+      await c.notifySettings.save({ prefs: {}, quietStart: null, quietEnd: null, digest: true });
+      await releaseHeld();
+      expect(pushedTo(ep)).toHaveLength(0);
+      expect((await inbox(u.id)).find((n) => n.kind === "file_added")!.pushState).toBe("skipped");
     });
 
     it("no device, or push switched off for that event: skipped (still in the Inbox)", async () => {
@@ -277,6 +335,9 @@ describe("notifications (Milestone 7)", () => {
       expect(d).toHaveLength(1);
       expect(d[0]!.title).toBe("Your day: 1 overdue · 1 due today · 1 approval waiting · 1 blocked");
       expect((await inbox(idle.id)).filter((n) => n.kind === "digest")).toHaveLength(0);
+      // A re-run the same day (after a failure partway through) never sends a second digest.
+      await digestJob();
+      expect((await inbox(u.id)).filter((n) => n.kind === "digest")).toHaveLength(1);
 
       const off = await createUser("member");
       await addMember(projectId, off.id);
@@ -338,6 +399,10 @@ describe("notifications (Milestone 7)", () => {
       await db().update(schema.notification).set({ readAt: new Date() }).where(eq(schema.notification.userId, fin.id));
       await up(financial.id, "wire-2.pdf");
       expect((await inbox(fin.id)).filter((n) => n.kind === "file_added")).toHaveLength(1);
+
+      // Leaving the project ends the watch.
+      await oc.members.remove({ projectId: p, userId: member.id });
+      expect(await db().select().from(schema.folderWatch).where(eq(schema.folderWatch.userId, member.id))).toHaveLength(0);
 
       // The uploader never hears about their own upload.
       await oc.files.watchFolder({ projectId: p, folderId: design.id, on: true });

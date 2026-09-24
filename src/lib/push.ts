@@ -48,6 +48,23 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
   return reg ? reg.pushManager.getSubscription() : null;
 }
 
+const OFF_KEY = "pc.push.off-here";
+
+/** Remember that the person turned push off on this device, so it isn't switched back on for them. */
+export function setPushOffHere(off: boolean) {
+  try {
+    if (off) localStorage.setItem(OFF_KEY, "1");
+    else localStorage.removeItem(OFF_KEY);
+  } catch {}
+}
+export function pushOffHere(): boolean {
+  try {
+    return localStorage.getItem(OFF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** A short name for the device list: "iPhone", "Mac · Chrome"… */
 export function deviceLabel(): string {
   const ua = navigator.userAgent;

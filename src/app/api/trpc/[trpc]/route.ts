@@ -4,6 +4,7 @@ import { allowedOrigins } from "@/server/env";
 import { createContext } from "@/server/trpc/init";
 import { appRouter } from "@/server/trpc/root";
 import { dispatchPending } from "@/server/services/push";
+import { takePushDirty } from "@/server/services/tasks";
 import { logError } from "@/server/services/errors";
 
 /**
@@ -24,7 +25,7 @@ function handler(req: Request) {
     });
   }
   // Push whatever this request notified, once the response is on its way (the hourly tick is the safety net).
-  if (req.method === "POST") after(() => dispatchPending().catch((err) => logError("request", err, { path: "push-dispatch" })));
+  if (req.method === "POST") after(() => (takePushDirty() ? dispatchPending().catch((err) => logError("request", err, { path: "push-dispatch" })) : undefined));
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req,

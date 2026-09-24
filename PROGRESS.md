@@ -1,5 +1,80 @@
 # Progress
 
+## Milestone 7 — Notifications (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (Settings → Notifications; Inbox; the Watch button on each folder; WhatsApp on every task and alert)
+
+### What shipped
+
+- **Web push, free.** It goes through each browser's own push service (Apple for the iPhone home-screen app, Google, Mozilla) using the VAPID keys stored in Vercel.
+  - A service worker (`public/sw.js`) shows each push and opens its link: the task, file or approval.
+  - It never opens a page outside this app.
+- **This device** (Settings): turn push on or off, send a test push, and see and remove your devices.
+  - The app re-checks this device each time it opens.
+  - Signing out detaches the device, so the next person on it doesn't get your notifications.
+  - Signing back in turns push back on without asking again. It stays off if you turned it off.
+- **First-run prompt** (Portfolio, My Tasks, Inbox only):
+  - On iPhone in Safari: "Add to Home Screen first", linking to the install guide.
+  - In the installed app or a desktop browser: asks for permission after a tap.
+- **Preferences:** push and email for each event, quiet hours (New York time) and the daily digest switch.
+  - In-app is always on: the Inbox records everything.
+  - Email exists only for the digest, approvals and the third overdue reminder (brief §3).
+- **Delivery:**
+  - Right after any request that created notifications, and hourly as a safety net.
+  - Rows are claimed first, then sent outside any database transaction, so nothing is pushed twice.
+  - A burst of four or more becomes one summary push.
+  - Quiet hours hold push and release it as one summary when they end. Anything read in the meantime is dropped.
+  - A file notice is checked against folder access again at the moment it is sent.
+- **Daily jobs (New York time):**
+  - digest at 7:00am: overdue, due today, approvals waiting, blocked; at most once a day; skipped when there's nothing
+  - due-tomorrow reminders at 9:00am
+  - overdue reminders every 2 days until the task is done or re-dated; the third copies the owner and emails both
+- **Approval requests email.** While email is on hold, each one is recorded as "skipped" in the outbox and nothing is lost. The existing budget guard (80 soft / 100 hard) applies once email is on.
+- **Folder watch:**
+  - notices for new files and versions
+  - a batch upload folds into one notice
+  - people who can't see the folder (the gated Financial folder, or outsiders without a share) never hear about it
+  - leaving a project ends your watches
+- **WhatsApp share** on every task (task sheet) and every alert (Inbox). It opens the person's own WhatsApp with the text typed in.
+- **No dollar figures** ever appear in push text, email subjects or WhatsApp text. Amounts like "$1,250,000", "$1.2M" and "($5,000)" become "an amount".
+
+### Review
+
+The independent review found 10 issues (1 P1, 4 P2, 5 P3). All are fixed, each with a regression test where one applies:
+
+- P1: pushes and emails were sent inside the claiming transaction.
+  - A timeout could roll back and re-send; slow push services could hold locks and connections.
+  - Now it claims, commits, then sends.
+- P2: every POST started a dispatch. Now only requests that wrote notifications do.
+- P2: a digest re-run after a partial failure could send twice. Now once per person per day.
+- P2: no grouping for live pushes. Bursts are now one summary.
+- P2: push silently stopped after signing out and back in. It now re-subscribes without a prompt, respecting "turned off here". A device removed in Settings is not brought back by the re-check.
+- P3: a held file notice could be pushed after access was revoked. Access is re-checked at send; watches end when you leave a project.
+- P3: tapping a push when an app tab was open didn't navigate. Fixed; it falls back to a new window.
+- P3: the "public-record changes" switch had no source. It is hidden until Milestone 8.
+- P3: the email "—" cell was announced wrongly by screen readers. Fixed.
+- P3: test gaps. Covered.
+
+### Test results
+
+- Unit: 215 tests
+- Integration: 1,688 tests. New:
+  - 18 notification tests: devices and the push-host allow-list, concurrent dispatch, bursts, quiet hours, preferences, approval email, due-tomorrow, the overdue schedule and escalation, the digest, and folder watches with access changes
+  - the permission-matrix rows for every new procedure
+- E2E: 28 of 28. New:
+  - preferences save and reload
+  - WhatsApp links carry no amounts and point at the task
+  - watch and unwatch a folder
+- Checked at 1440px and at iPhone size with no horizontal page scroll: My Tasks with the prompt, Inbox, Settings → Notifications.
+
+### Known limitations
+
+- **Real iPhone push isn't tested yet.** A real iPhone test of home-screen push is part of Milestone 12.
+- **Email is on hold.** Approval, digest and third-reminder emails are recorded as "skipped" until a sender is chosen.
+- **Photo uploads don't notify watchers.** Site photos come in batches from the field; folder watches cover documents.
+- **Grouped push.** Only the newest few titles show in a summary push; the Inbox has everything.
+- **Critical alerts come in Milestone 8.** Stop-work and vacate orders bypass quiet hours and the email budget; that path arrives with the public-records watch.
+
 ## Milestone 6 — Financials (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (each project's Financials tab, for people with financial access)

@@ -1,12 +1,11 @@
 import "server-only";
-import { and, eq, inArray, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
-import { canSeeFolder } from "@/core/files";
+import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
 import { channelOn, overdueNudge, safeOutsideText } from "@/core/notify";
-import { canProject } from "@/core/permissions";
-import { addDays, formatIsoDate, todayET } from "@/core/time";
+import { addDays, formatIsoDate, startOfDayET, todayET } from "@/core/time";
 import { db, schema, type DbOrTx } from "../db";
 import { env } from "../env";
 import { renderEmail, sendEmail } from "./email";
+import { canSeeFolderNow } from "./files";
 import { settingsFor } from "./push";
 import { activeOwners, notify, taskHref } from "./tasks";
 
@@ -167,10 +166,18 @@ export async function digestJob(now = new Date()): Promise<{ digests: number; em
   for (const u of wanting) {
     const c = counts.get(u.id);
     if (!c || c.overdue + c.today + c.approvals + c.blocked === 0) continue;
+    // Once a day, even if the job is re-run after a failure partway through.
+    const [already] = await conn
+      .select({ id: schema.notification.id })
+      .from(schema.notification)
+      .where(and(eq(schema.notification.userId, u.id), eq(schema.notification.kind, "digest"), gte(schema.notification.createdAt, startOfDayET(today))))
+      .limit(1);
+    if (already) continue;
     const title = digestTitle(c);
     const body = c.top.length ? c.top.map((t) => `“${t}”`).join(" · ") : "Open My Tasks for the list.";
-    digests += await notify(conn, null, [{ userId: u.id, kind: "digest", title, body, href: "/tasks" }]);
-    if (channelOn(settings.get(u.id)!.prefs, "digest", "email")) {
+    const wrote = await notify(conn, null, [{ userId: u.id, kind: "digest", title, body, href: "/tasks" }]);
+    digests += wrote;
+    if (wrote && channelOn(settings.get(u.id)!.prefs, "digest", "email")) {
       const content = renderEmail({
         preheader: title,
         heading: "Good morning",
@@ -197,24 +204,15 @@ export async function digestJob(now = new Date()): Promise<{ digests: number; em
  */
 export async function notifyFileAdded(tx: DbOrTx, actorId: string, input: { projectId: string; folderId: string; fileId: string; name: string; isNewVersion: boolean }): Promise<number> {
   const watchers = await tx
-    .select({ userId: schema.folderWatch.userId, role: schema.user.role, status: schema.user.status, canViewFinancials: schema.projectMember.canViewFinancials, member: schema.projectMember.userId })
+    .select({ userId: schema.folderWatch.userId })
     .from(schema.folderWatch)
-    .innerJoin(schema.user, eq(schema.user.id, schema.folderWatch.userId))
-    .leftJoin(schema.projectMember, and(eq(schema.projectMember.userId, schema.folderWatch.userId), eq(schema.projectMember.projectId, input.projectId)))
     .where(and(eq(schema.folderWatch.folderId, input.folderId), ne(schema.folderWatch.userId, actorId)));
   if (watchers.length === 0) return 0;
-  const [folder] = await tx.select().from(schema.folder).where(eq(schema.folder.id, input.folderId));
+  const [folder] = await tx.select({ name: schema.folder.name }).from(schema.folder).where(eq(schema.folder.id, input.folderId));
   if (!folder) return 0;
-  const shared = new Set(
-    (await tx.select({ u: schema.folderShare.userId }).from(schema.folderShare).where(and(eq(schema.folderShare.folderId, input.folderId), inArray(schema.folderShare.userId, watchers.map((w) => w.userId))))).map((r) => r.u),
-  );
+  const can = await canSeeFolderNow(tx, input.projectId, input.folderId, watchers.map((w) => w.userId));
+  const allowed = watchers.filter((w) => can.has(w.userId));
   const [p] = await tx.select({ name: schema.project.name }).from(schema.project).where(eq(schema.project.id, input.projectId));
-  const allowed = watchers.filter((w) => {
-    const actor = { userId: w.userId, role: w.role, status: w.status };
-    const membership = w.member ? { projectRole: "", canViewFinancials: !!w.canViewFinancials, canEditChecklist: false, canApprove: false } : null;
-    if (!canProject(actor, membership, "project.view")) return false;
-    return canSeeFolder(folder, { seesAll: canProject(actor, membership, "folder.viewAll"), financials: canProject(actor, membership, "financials.view"), shared: shared.has(w.userId) });
-  });
   // A batch upload is one notification, not twenty: fold into an unread one from the last few minutes.
   const folderHref = `/projects/${input.projectId}?tab=files&folder=${input.folderId}`;
   const recent = allowed.length

@@ -79,12 +79,22 @@ export const pushRouter = router({
   ),
 
   /**
-   * Register this browser. A device that was someone else's (a shared
+   * Register this browser (after a tap, or a quiet re-subscribe once
+   * permission is granted). A device that was someone else's (a shared
    * laptop, a sign-out without unsubscribing) moves to whoever signs in.
    */
   subscribe: protectedProcedure
-    .input(z.object({ endpoint: pushEndpoint, keys: z.object({ p256dh: b64url, auth: b64url }), label: z.string().trim().max(60).optional() }))
+    .input(z.object({ endpoint: pushEndpoint, keys: z.object({ p256dh: b64url, auth: b64url }), label: z.string().trim().max(60).optional(), refreshOnly: z.boolean().optional() }))
     .mutation(async ({ ctx, input }) => {
+      if (input.refreshOnly) {
+        // The app re-checks on every open: refresh keys, but never bring back a device removed in Settings.
+        const r = await ctx.db
+          .update(schema.pushSubscription)
+          .set({ p256dh: input.keys.p256dh, auth: input.keys.auth, ...(input.label ? { label: input.label } : {}) })
+          .where(and(eq(schema.pushSubscription.endpoint, input.endpoint), eq(schema.pushSubscription.userId, ctx.actor.userId)))
+          .returning({ id: schema.pushSubscription.id });
+        return { ok: r.length > 0 };
+      }
       const values = { userId: ctx.actor.userId, endpoint: input.endpoint, p256dh: input.keys.p256dh, auth: input.keys.auth, label: input.label || null, failures: 0 };
       await ctx.db.insert(schema.pushSubscription).values(values).onConflictDoUpdate({ target: schema.pushSubscription.endpoint, set: values });
       const keep = await ctx.db

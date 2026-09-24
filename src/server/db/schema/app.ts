@@ -571,8 +571,8 @@ export const notification = pgTable(
     /** In-app link, e.g. /projects/…?task=… */
     href: text("href"),
     readAt: timestamp("read_at", { withTimezone: true }),
-    /** Web push: pending = not yet decided; set when pushed, skipped (preference / no device) or held for quiet hours. */
-    pushState: text("push_state", { enum: ["pending", "sent", "skipped", "held"] }).notNull().default("pending"),
+    /** Web push: pending = not yet decided; sending = claimed by a dispatcher; then sent, skipped (preference / no device) or held for quiet hours. */
+    pushState: text("push_state", { enum: ["pending", "sending", "sent", "skipped", "held"] }).notNull().default("pending"),
     pushedAt: timestamp("pushed_at", { withTimezone: true }),
     createdAt: createdAt(),
   },

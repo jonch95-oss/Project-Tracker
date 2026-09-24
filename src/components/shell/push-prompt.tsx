@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { deviceLabel, currentSubscription, pushSupport, registerServiceWorker, subscribeThisDevice, type PushSupport } from "@/lib/push";
+import { deviceLabel, currentSubscription, pushOffHere, pushSupport, setPushOffHere, registerServiceWorker, subscribeThisDevice, type PushSupport } from "@/lib/push";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import { useToast } from "../ui/overlay";
 import { Button } from "../ui/primitives";
@@ -51,10 +51,19 @@ export function PushPrompt() {
   const { mutate: resync } = subscribe;
   useEffect(() => {
     if (!publicKey || state?.permission !== "granted") return;
-    void currentSubscription().then((sub) => {
-      const json = sub?.toJSON();
+    void (async () => {
+      const existing = (await currentSubscription())?.toJSON();
+      if (existing?.endpoint && existing.keys?.p256dh && existing.keys.auth) {
+        resync({ endpoint: existing.endpoint, keys: { p256dh: existing.keys.p256dh, auth: existing.keys.auth }, label: deviceLabel(), refreshOnly: true });
+        return;
+      }
+      // Allowed before but no subscription (signed out, or the browser dropped it): resubscribe
+      // quietly, since permission is already granted, unless they turned push off here.
+      if (pushOffHere()) return;
+      const r = await subscribeThisDevice(publicKey).catch(() => null);
+      const json = r && "sub" in r ? r.sub : null;
       if (json?.endpoint && json.keys?.p256dh && json.keys.auth) resync({ endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth }, label: deviceLabel() });
-    });
+    })();
   }, [publicKey, state?.permission, resync]);
 
   if (!state || state.dismissed || !publicKey || !PROMPT_PAGES.includes(pathname)) return null;
@@ -77,6 +86,7 @@ export function PushPrompt() {
         return;
       }
       await subscribe.mutateAsync({ endpoint: r.sub.endpoint!, keys: { p256dh: r.sub.keys!.p256dh!, auth: r.sub.keys!.auth! }, label: deviceLabel() });
+      setPushOffHere(false);
       toast("success", "Notifications are on for this device");
       setState({ ...state!, permission: "granted" });
     } catch (e) {

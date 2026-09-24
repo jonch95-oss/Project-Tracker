@@ -7,7 +7,7 @@ import { ConfirmDialog, useToast } from "@/components/ui/overlay";
 import { Button, Input, Panel, Skeleton, StatusPill, Switch } from "@/components/ui/primitives";
 import { channelOn, type Prefs } from "@/core/notify";
 import { formatDateTimeET } from "@/core/time";
-import { currentSubscription, deviceLabel, pushSupport, subscribeThisDevice, type PushSupport } from "@/lib/push";
+import { currentSubscription, deviceLabel, pushSupport, setPushOffHere, subscribeThisDevice, type PushSupport } from "@/lib/push";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 
 type Settings = RouterOutputs["notifySettings"]["get"];
@@ -63,6 +63,7 @@ function ThisDevice() {
       const r = await subscribeThisDevice(publicKey);
       if ("error" in r) return toast("error", r.error);
       await subscribe.mutateAsync({ endpoint: r.sub.endpoint!, keys: { p256dh: r.sub.keys!.p256dh!, auth: r.sub.keys!.auth! }, label: deviceLabel() });
+      setPushOffHere(false);
       setLocal({ support: "ok", permission: "granted", endpoint: r.sub.endpoint! });
       toast("success", "Notifications are on for this device");
     } catch (e) {
@@ -80,6 +81,7 @@ function ThisDevice() {
         await unsubscribe.mutateAsync({ endpoint: sub.endpoint });
         await sub.unsubscribe();
       }
+      setPushOffHere(true);
       setLocal((l) => (l ? { ...l, endpoint: null } : l));
     } catch (e) {
       toast("error", errorMessage(e));
@@ -104,7 +106,7 @@ function ThisDevice() {
   else if (local.support === "unsupported") status = <p className="text-sm text-muted">This browser can&apos;t receive notifications.</p>;
   else if (local.permission === "denied")
     status = <p className="text-sm text-muted">Notifications are blocked for this app. Allow them in your browser or device settings, then reload.</p>;
-  else if (here || local.endpoint)
+  else if (here)
     status = (
       <div className="flex flex-wrap items-center gap-3">
         <StatusPill tone="done">On for this device</StatusPill>
@@ -215,9 +217,12 @@ function Preferences({ initial }: { initial: Settings }) {
                   {e.email ? (
                     <input type="checkbox" className="size-5 accent-[var(--primary)]" aria-label={`${e.label}: email`} checked={channelOn(prefs, e.kind, "email")} onChange={(ev) => set(e.kind, "email", ev.target.checked)} />
                   ) : (
-                    <span className="text-muted" aria-label="No email for this event">
-                      —
-                    </span>
+                    <>
+                      <span className="text-muted" aria-hidden="true">
+                        —
+                      </span>
+                      <span className="sr-only">No email for this event</span>
+                    </>
                   )}
                 </td>
               </tr>
