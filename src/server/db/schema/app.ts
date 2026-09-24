@@ -87,6 +87,8 @@ export const project = pgTable(
     longitude: doublePrecision("longitude"),
     /** Pinned hero photo; when null the newest photo is the hero. */
     heroPhotoId: uuid("hero_photo_id"),
+    /** Module I: the local part of this project's inbound address (e.g. "347-myrtle-k3f9"); set on first view. */
+    inboundKey: text("inbound_key").unique(),
     /** Toggles that are on (brief §5.3). */
     toggles: jsonb("toggles").$type<string[]>().notNull().default([]),
     /** The template (and its revision) the checklist was generated from. */
@@ -1599,4 +1601,54 @@ export const distributionItem = pgTable(
     profitCents: money("profit_cents").notNull().default(0),
   },
   (t) => [uniqueIndex("distribution_item_idx").on(t.distributionId, t.investorId)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Module H: private calendar feeds                                    */
+/* ------------------------------------------------------------------ */
+
+/** One live feed link per person (only its hash is kept); regenerating or revoking kills the old link. */
+export const calendarFeed = pgTable(
+  "calendar_feed",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    lastFetchedAt: timestamp("last_fetched_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("calendar_feed_token_idx").on(t.tokenHash), index("calendar_feed_user_idx").on(t.userId)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Module I: email into a project                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every message the inbound webhook received, accepted or rejected. Bodies
+ * are not kept here (accepted mail goes to the Activity feed); the row counts
+ * toward the day's email budget and makes redelivery of one message a no-op.
+ */
+export const inboundEmail = pgTable(
+  "inbound_email",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The provider's message / delivery id, so a retried webhook is saved once. */
+    providerId: text("provider_id").notNull(),
+    projectId: uuid("project_id").references(() => project.id, { onDelete: "set null" }),
+    fromAddress: text("from_address").notNull(),
+    toAddress: text("to_address").notNull(),
+    subject: text("subject"),
+    status: text("status", { enum: ["accepted", "rejected"] }).notNull(),
+    reason: text("reason"),
+    senderId: text("sender_id").references(() => user.id, { onDelete: "set null" }),
+    attachments: integer("attachments").notNull().default(0),
+    /** The email-budget day (UTC) this message counts toward. */
+    quotaDay: text("quota_day").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("inbound_email_provider_idx").on(t.providerId), index("inbound_email_day_idx").on(t.quotaDay), index("inbound_email_project_idx").on(t.projectId)],
 );

@@ -15,6 +15,7 @@ import { authClient } from "@/lib/auth-client";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import { hasPasskeySupport, useClientFlag } from "@/lib/use-client-flag";
 import { useSignOut } from "@/lib/push";
+import { CalendarFeed } from "./calendar-feed";
 import { NotificationSettings } from "./notification-settings";
 
 interface ViewerProps {
@@ -48,6 +49,7 @@ export function SettingsView({ viewer, welcome }: { viewer: ViewerProps; welcome
         <PasskeyPanel />
       </div>
       <NotificationSettings />
+      {viewer.role !== "investor" && <CalendarFeed />}
       <div className="mt-12 flex justify-center lg:hidden">
         <Button
           variant="secondary"

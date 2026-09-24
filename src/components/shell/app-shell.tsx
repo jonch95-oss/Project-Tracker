@@ -18,7 +18,7 @@ import {
   IconSettings,
   IconSignOut,
   IconSystem,
-  IconDirectory, IconTemplate,
+  IconChart, IconDirectory, IconTemplate, IconUpload,
   IconTasks,
   IconTeam,
 } from "../ui/icons";
@@ -49,7 +49,9 @@ const NAV: NavItem[] = [
   { href: "/notifications", label: "Notifications", icon: IconBell, roles: WITH_INVESTOR, mobile: true },
   { href: "/directory", label: "Directory", icon: IconDirectory, roles: ["owner", "admin", "member"], mobile: false },
   { href: "/templates", label: "Templates", icon: IconTemplate, roles: ["owner", "admin"], mobile: false },
+  { href: "/import", label: "Import", icon: IconUpload, roles: ["owner", "admin"], mobile: false },
   { href: "/team", label: "Team", icon: IconTeam, roles: ["owner"], mobile: false },
+  { href: "/analytics", label: "Analytics", icon: IconChart, roles: ["owner"], mobile: false },
   { href: "/audit", label: "Audit log", icon: IconLedger, roles: ["owner"], mobile: false },
   { href: "/system", label: "System", icon: IconSystem, roles: ["owner"], mobile: false },
   { href: "/settings", label: "Settings", icon: IconSettings, roles: WITH_INVESTOR, mobile: true },

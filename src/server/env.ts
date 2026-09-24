@@ -20,6 +20,13 @@ const schema = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("Project Command <projects@liandev.com>"),
   OWNER_ALERT_EMAIL: z.string().optional(),
+  /**
+   * Email into a project (Module I). Off unless both are set: the inbound
+   * domain (e.g. "in.liandev.com", its MX pointed at the provider) and the
+   * provider's webhook signing secret ("whsec_…").
+   */
+  INBOUND_EMAIL_DOMAIN: z.string().optional(),
+  INBOUND_EMAIL_SECRET: z.string().optional(),
 
   // Provider usage APIs (optional; System page shows "Not connected" without them)
   NEON_API_KEY: z.string().optional(),

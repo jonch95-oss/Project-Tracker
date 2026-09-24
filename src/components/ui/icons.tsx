@@ -42,6 +42,16 @@ export const IconTeam = (p: IconProps) => (
     <path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c1.8.8 3 2.6 3.5 5.2" />
   </Icon>
 );
+export const IconUpload = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+  </Icon>
+);
+export const IconChart = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6M20 16V6" />
+  </Icon>
+);
 export const IconDirectory = (p: IconProps) => (
   <Icon {...p}>
     <path d="M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM3 7h2M3 12h2M3 17h2" />

@@ -16,6 +16,7 @@ import { recordAudit } from "../../services/audit";
 import { expiredCoiFlags, expiredCounts } from "../../services/expiries";
 import { queueFirstSnapshot, resetProjectRecords } from "../../services/records";
 import { lookupLot } from "../../services/pluto";
+import { inboundAddress } from "../../services/inbound";
 import { lockBaselineOnPreConstruction, slippageFor } from "../../services/field";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
@@ -699,6 +700,9 @@ export const projectsRouter = router({
       });
       return { ok: true };
     }),
+
+  /** Module I: the address that emails into this project (null while the feature is off). */
+  inboundAddress: projectProcedure("activity.view").query(async ({ ctx, input }) => ({ address: await inboundAddress(ctx.db, input.projectId) })),
 
   /**
    * The project's activity feed, newest first. Entries about money are left

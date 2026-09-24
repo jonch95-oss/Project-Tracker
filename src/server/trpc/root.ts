@@ -13,6 +13,9 @@ import { unitsRouter } from "./routers/units";
 import { directoryRouter } from "./routers/directory";
 import { capitalRouter } from "./routers/capital";
 import { portalRouter } from "./routers/portal";
+import { calendarRouter } from "./routers/calendar";
+import { analyticsRouter } from "./routers/analytics";
+import { importRouter } from "./routers/import";
 import { meetingsRouter, scheduleRouter, siteLogsRouter } from "./routers/field";
 import { templatesRouter } from "./routers/templates";
 import { invitesRouter, meRouter, usersRouter } from "./routers/users";
@@ -47,6 +50,9 @@ export const appRouter = router({
   directory: directoryRouter,
   capital: capitalRouter,
   portal: portalRouter,
+  calendar: calendarRouter,
+  analytics: analyticsRouter,
+  import: importRouter,
   audit: auditRouter,
   system: systemRouter,
 });

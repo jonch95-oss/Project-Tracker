@@ -53,6 +53,13 @@ export async function readUsage(conn: Database = db(), now = new Date()): Promis
     })
     .from(schema.emailOutbox)
     .where(inArray(schema.emailOutbox.status, ["sent"]));
+  // Inbound mail (Module I) counts toward the same quota.
+  const [inbound] = await conn
+    .select({
+      today: sql<number>`count(*) filter (where ${schema.inboundEmail.quotaDay} = ${day})::int`,
+      month: sql<number>`count(*) filter (where ${schema.inboundEmail.quotaDay} >= ${`${month}-01`})::int`,
+    })
+    .from(schema.inboundEmail);
 
   const [minutes] = await conn
     .select({ total: sql<number>`coalesce(sum(${schema.jobRun.billableMinutes}), 0)::int` })
@@ -70,8 +77,8 @@ export async function readUsage(conn: Database = db(), now = new Date()): Promis
     { key: "neon.storage", used: dbSize ? Number(dbSize.bytes) : null },
     { key: "blob.storage", used: fileBytes + Number(backupBytes?.total ?? 0) },
     { key: "blob.transfer", used: await counter(conn, "blob.transfer", month) },
-    { key: "resend.daily", used: emails?.today ?? 0 },
-    { key: "resend.monthly", used: emails?.month ?? 0 },
+    { key: "resend.daily", used: (emails?.today ?? 0) + (inbound?.today ?? 0) },
+    { key: "resend.monthly", used: (emails?.month ?? 0) + (inbound?.month ?? 0) },
     { key: "actions.minutes", used: minutes?.total ?? 0 },
     { key: "vercel.credit", used: await vercelCreditUsedCents(now) },
   ];

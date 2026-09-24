@@ -93,13 +93,14 @@ export function quotaDay(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** Emails that already count against today's quota (one recipient each). */
+/** Emails that already count against today's quota: one per recipient sent, plus every inbound message received (Module I). */
 export async function emailsCountedToday(conn: DbOrTx = db(), today = quotaDay()): Promise<number> {
   const [row] = await conn
     .select({ n: sql<number>`count(*)::int` })
     .from(schema.emailOutbox)
     .where(and(eq(schema.emailOutbox.sendDate, today), inArray(schema.emailOutbox.status, ["sent"])));
-  return row?.n ?? 0;
+  const [inbound] = await conn.select({ n: sql<number>`count(*)::int` }).from(schema.inboundEmail).where(eq(schema.inboundEmail.quotaDay, today));
+  return (row?.n ?? 0) + (inbound?.n ?? 0);
 }
 
 export type BudgetDecision = "send" | "hold";
