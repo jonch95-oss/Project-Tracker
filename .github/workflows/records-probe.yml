@@ -1,21 +1,10 @@
 name: Records probe
-# Manual only: prints live NYC Open Data metadata (dataset names, freshness, column names)
+# On request: prints live NYC Open Data metadata (dataset names, freshness, column names)
 # so the public-records watch is coded against the real schemas (brief §10). Public data only.
 on:
-  workflow_dispatch:
-    inputs:
-      ids:
-        description: "Space-separated dataset ids"
-        required: false
-        default: ""
-      search:
-        description: "Semicolon-separated catalog searches"
-        required: false
-        default: ""
-      queries:
-        description: "Newline-free, '|'-separated resource queries (id?params)"
-        required: false
-        default: ""
+  # Runs when the request file changes (the probe reads its ids, searches and queries from it).
+  push:
+    paths: [".github/records-probe.txt"]
 permissions:
   contents: read
 jobs:
@@ -23,12 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/records-probe.txt
+          sparse-checkout-cone-mode: false
       - name: Metadata
-        env:
-          IDS: ${{ inputs.ids }}
-          SEARCH: ${{ inputs.search }}
-          QUERIES: ${{ inputs.queries }}
         run: |
+          IDS=$(grep '^ids:' .github/records-probe.txt | cut -d: -f2-)
+          SEARCH=$(grep '^search:' .github/records-probe.txt | cut -d: -f2-)
+          QUERIES=$(grep '^queries:' .github/records-probe.txt | cut -d: -f2-)
           for id in $IDS; do
             echo "=== $id"
             curl -s "https://data.cityofnewyork.us/api/views/$id.json" | jq -c '{name, rowsUpdatedAt: (.rowsUpdatedAt|todate?), cols: [.columns[]? | .fieldName]}' || true

@@ -1,0 +1,3 @@
+ids: 64uk-42ks w9ak-ipjd ic3t-wcy2 ipu4-2q9a rbx6-tga4 3h2n-5cm9 6bgk-3dad 855j-jady wvxf-dwi5 tb8q-a3ar eabe-havv jz4z-kudi erm2-nwe9 9rz4-mjek scjx-j6np 8h5j-fqxa bnx9-e6tj 636b-3b5g
+search:stop work order;vacate order;permit issuance;tax lien sale;property charges balance;complaints received;OATH hearings;ECB violations
+queries:64uk-42ks.json?bbl=3011370045|8h5j-fqxa.json?borough=3&block=1137&lot=45&$limit=3
