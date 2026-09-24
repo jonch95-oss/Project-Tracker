@@ -27,10 +27,19 @@ async function audit(tx: DbOrTx, ctx: AuthedContext, action: "create" | "update"
   await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action, entityType, entityId, summary, ip: ctx.ip });
 }
 
-/** Projects the viewer may open (owners: all), to scope "the projects they are on". */
+/** Projects the viewer may open (owners and admins: all), to scope "the projects they are on". */
 async function viewableProjects(ctx: AuthedContext): Promise<{ id: string; name: string; financial: boolean }[]> {
   if (ctx.actor.role === "owner") {
     return (await ctx.db.select({ id: schema.project.id, name: schema.project.name }).from(schema.project).where(isNull(schema.project.archivedAt))).map((p) => ({ ...p, financial: true }));
+  }
+  if (ctx.actor.role === "admin") {
+    // Admins open every project; money still follows their membership flag on each.
+    const rows = await ctx.db
+      .select({ id: schema.project.id, name: schema.project.name, m: schema.projectMember })
+      .from(schema.project)
+      .leftJoin(schema.projectMember, and(eq(schema.projectMember.projectId, schema.project.id), eq(schema.projectMember.userId, ctx.viewer.id)))
+      .where(isNull(schema.project.archivedAt));
+    return rows.map((r) => ({ id: r.id, name: r.name, financial: canProject(ctx.actor, r.m, "financials.view") }));
   }
   const rows = await ctx.db
     .select({ id: schema.project.id, name: schema.project.name, m: schema.projectMember })

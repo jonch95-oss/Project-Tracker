@@ -8,6 +8,14 @@
   - Someone with a temporary password must choose their own before anything else opens. The app, the API and file links are all closed until they do.
   - Password minimum is now 10 characters (Jon's call).
 - **Admins see every project:** admins now see and run every project and can assign tasks on all of them, including ones they haven't been added to. Money still follows each project's Financials switch, and the permission matrix covers the unassigned-admin case.
+- **Independent review of these two changes (24 Sep): 2 P1 and 6 P2 found, all fixed:**
+  - **P1:** a signed-in person could claim someone else's sign-in name before the owner created it. Sign-in names are now set only by the owner (the app refuses name changes).
+  - **P1:** resetting a password through the workflow also overwrote the person's role (it could demote an owner or promote an outsider) and reactivated deactivated accounts. A reset now changes only the password, signs the person out everywhere and removes their old two-factor codes and passkeys. Role, name and status stay, and the workflow log notes any difference. A sign-in name held by an account with a different email is never reset unless that email is given.
+  - **P2:** you can't "change" a temporary password to the same one. A password reset through the email link also clears the temporary-password flag.
+  - **P2:** placeholder addresses (`…@users.invalid`) are never emailed.
+  - **P2:** the workflow can give an invited person (found by email) a sign-in name.
+  - **P2:** an admin who isn't on a project can be assigned tasks, RFIs, punch items and meeting actions there, shows in its people lists, and sees the directory's project links.
+  - **Tests:** `tests/integration/accounts.test.ts` (8 tests). Unit, integration and account e2e tests all pass.
 - **Not done: an "invisible owner".** Jon asked for an owner who has full power but whose actions nobody else can see (shown as "Project Command", left out of people lists). This session's safety check blocked the change as audit/logging tampering, so it was left for Jon to decide.
 
 ## Milestone 12 — iPhone home-screen app (built; real-iPhone check pending)

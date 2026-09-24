@@ -27,7 +27,7 @@ export async function assertOnProject(tx: DbOrTx, projectId: string, userId: str
     .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
     // Investors and lenders aren't given work.
     .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.projectMember.userId, userId), ne(schema.user.role, "investor")));
-  const [o] = await tx.select({ id: schema.user.id }).from(schema.user).where(and(eq(schema.user.id, userId), eq(schema.user.role, "owner")));
+  const [o] = await tx.select({ id: schema.user.id }).from(schema.user).where(and(eq(schema.user.id, userId), inArray(schema.user.role, ["owner", "admin"]), eq(schema.user.status, "active")));
   if (!m && !o) throw new TRPCError({ code: "BAD_REQUEST", message: "That person isn't on this project." });
 }
 

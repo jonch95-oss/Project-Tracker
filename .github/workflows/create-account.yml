@@ -3,7 +3,7 @@ name: Create account
 # Run by hand (Actions → Create account → Run workflow) to give someone a
 # sign-in name and a temporary password. They must choose their own password
 # the first time they sign in. Running it again for the same username resets
-# their password the same way.
+# only their password (and signs them out); their role stays as it is.
 on:
   workflow_dispatch:
     inputs:
@@ -14,11 +14,14 @@ on:
         description: "Sign-in name (letters, numbers, _ or .)"
         required: true
       role:
-        description: "Role"
+        description: "Role (new accounts only; a reset keeps their role)"
         required: true
         default: admin
         type: choice
         options: [admin, member, owner, external]
+      email:
+        description: "Email (optional; to give an invited person a sign-in name, or to reset an account with a real email)"
+        required: false
       password:
         description: "Temporary password (they must change it at first sign-in)"
         required: true
@@ -48,4 +51,5 @@ jobs:
           ACCOUNT_USERNAME: ${{ inputs.username }}
           ACCOUNT_ROLE: ${{ inputs.role }}
           ACCOUNT_PASSWORD: ${{ inputs.password }}
+          ACCOUNT_EMAIL: ${{ inputs.email }}
         run: npx tsx --conditions=react-server scripts/create-account.ts

@@ -53,6 +53,8 @@ function createAuth() {
         });
       },
       async onPasswordReset({ user }) {
+        // A password chosen through the email link replaces any temporary one.
+        await db().update(schema.user).set({ mustChangePassword: false }).where(eq(schema.user.id, user.id));
         await recordAudit(db(), {
           actorId: user.id,
           actorName: user.name,
@@ -127,6 +129,14 @@ function createAuth() {
         }
         // No public "is this name taken?" lookup: it would let anyone list sign-in names.
         if (ctx.path === "/is-username-available") throw new APIError("NOT_FOUND");
+        // Sign-in names are given out by the owner (Create account), never picked or changed by the person.
+        if (ctx.path === "/update-user" && ctx.body && typeof ctx.body === "object" && ("username" in ctx.body || "displayUsername" in ctx.body)) {
+          throw new APIError("FORBIDDEN", { message: "Sign-in names are set by the owner." });
+        }
+        // A temporary password has to actually be replaced.
+        if (ctx.path === "/change-password" && typeof ctx.body?.newPassword === "string" && ctx.body.newPassword === ctx.body.currentPassword) {
+          throw new APIError("BAD_REQUEST", { message: "Choose a password different from the one you were given." });
+        }
         // Same password rule everywhere (invite, reset, change).
         if (ctx.path === "/reset-password" || ctx.path === "/change-password") {
           const pw = typeof ctx.body?.newPassword === "string" ? ctx.body.newPassword : "";

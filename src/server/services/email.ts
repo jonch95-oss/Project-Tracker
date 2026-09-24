@@ -237,6 +237,8 @@ async function deliver(id: string, msg: OutgoingEmail): Promise<EmailStatus> {
  * are stored.
  */
 export async function sendEmail(msg: OutgoingEmail): Promise<EmailStatus> {
+  // Accounts made with only a sign-in name have a placeholder address (…@users.invalid): nothing to send to.
+  if (/\.invalid$/i.test(msg.to.trim())) return "skipped";
   const m = mailer();
   if (!m.enabled) {
     await db()

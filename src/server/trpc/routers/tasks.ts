@@ -60,7 +60,7 @@ export interface ProjectPerson {
   external: boolean;
 }
 
-/** People on a project (members plus the owner), for assigning, watching and @mentions. */
+/** People on a project (members, plus owners and admins), for assigning, watching and @mentions. */
 export async function projectPeople(conn: DbOrTx, projectId: string): Promise<ProjectPerson[]> {
   const members = await conn
     .select({ id: schema.user.id, name: schema.user.name, role: schema.user.role, projectRole: schema.projectMember.projectRole })
@@ -68,10 +68,12 @@ export async function projectPeople(conn: DbOrTx, projectId: string): Promise<Pr
     .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
     // Investors and lenders read their portal; they are never given, shown or @mentioned on tasks.
     .where(and(eq(schema.projectMember.projectId, projectId), eq(schema.user.status, "active"), ne(schema.user.role, "investor")));
-  const owners = await conn.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role }).from(schema.user).where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active")));
+  // Owners and admins run every project, so they can always be given work here.
+  const leads = await conn.select({ id: schema.user.id, name: schema.user.name, role: schema.user.role }).from(schema.user).where(and(inArray(schema.user.role, ["owner", "admin"]), eq(schema.user.status, "active")));
   const out = new Map<string, ProjectPerson>();
-  for (const o of owners) out.set(o.id, { ...o, projectRole: "Owner", external: false });
+  for (const o of leads) if (o.role === "owner") out.set(o.id, { ...o, projectRole: "Owner", external: false });
   for (const m of members) if (!out.has(m.id)) out.set(m.id, { ...m, external: !isInternalRole(m.role) });
+  for (const o of leads) if (!out.has(o.id)) out.set(o.id, { ...o, projectRole: "Admin", external: false });
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 

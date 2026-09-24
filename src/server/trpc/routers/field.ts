@@ -416,7 +416,7 @@ export const meetingsRouter = router({
             .from(schema.projectMember)
             .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
             .where(and(eq(schema.projectMember.projectId, input.projectId), eq(schema.projectMember.userId, input.assigneeId), ne(schema.user.role, "investor")));
-          const [owner] = await tx.select().from(schema.user).where(and(eq(schema.user.id, input.assigneeId), eq(schema.user.role, "owner")));
+          const [owner] = await tx.select().from(schema.user).where(and(eq(schema.user.id, input.assigneeId), inArray(schema.user.role, ["owner", "admin"]), eq(schema.user.status, "active")));
           if (!mem && !owner) throw new TRPCError({ code: "BAD_REQUEST", message: "That person isn't on this project." });
         }
         const values = { kind: input.kind, text: input.text, assigneeId: input.kind === "action" ? input.assigneeId : null, dueOn: input.kind === "action" ? input.dueOn : null, status: input.status };
