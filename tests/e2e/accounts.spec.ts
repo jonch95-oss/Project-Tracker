@@ -18,7 +18,8 @@ test("a username with a temporary password signs in, must choose their own, then
   await page.getByLabel("Email or username").fill(username.toUpperCase());
   await page.getByLabel("Password").fill("Lian$1234@");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(/\/change-password/);
+  // Signing in lands on "/", which sends them on to choose a password (allow for a cold dev-server compile).
+  await expect(page).toHaveURL(/\/change-password/, { timeout: 20_000 });
   await expect(page.getByRole("heading", { name: "Choose your password" })).toBeVisible();
 
   // Nothing else opens until they do.

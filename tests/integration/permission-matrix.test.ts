@@ -361,11 +361,11 @@ const MATRIX: Record<string, Row | "public"> = {
   "companies.list": { allowed: ACTIVE, call: (c) => c.companies.list() },
   "projects.list": { allowed: ACTIVE, call: (c) => c.projects.list() },
   "projects.get": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.projects.get({ projectId: f.projectId }),
   },
   "projects.update": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: async (c, f) => {
       const [p] = await db()
         .select()
@@ -385,7 +385,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "projects.setPhase": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: async (c, f) => {
       const [p] = await db()
         .select()
@@ -399,7 +399,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "projects.skipPhase": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: async (c, f) => {
       const [p] = await db()
         .select()
@@ -414,21 +414,21 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "projects.setArchived": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: (c, f) =>
       c.projects.setArchived({ projectId: f.projectId, archived: false }),
   },
   "projects.activity": {
-    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member", "admin-unassigned"],
     call: (c, f) => c.projects.activity({ projectId: f.projectId }),
   },
 
   "photos.list": {
-    allowed: [...ASSIGNED, "investor+fin", "investor"],
+    allowed: [...ASSIGNED, "investor+fin", "investor", "admin-unassigned"],
     call: (c, f) => c.photos.list({ projectId: f.projectId }),
   },
   "photos.beginUpload": {
-    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member", "admin-unassigned"],
     call: (c, f) =>
       c.photos.beginUpload({
         projectId: f.projectId,
@@ -440,7 +440,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "photos.completeUpload": {
-    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member", "admin-unassigned"],
     call: async (c, f) => {
       const b = await c.photos.beginUpload({
         projectId: f.projectId,
@@ -463,21 +463,21 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "photos.setHero": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: async (c, f) =>
       c.photos.setHero({ projectId: f.projectId, photoId: await f.photoId() }),
   },
   "photos.remove": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: async (c, f) =>
       c.photos.remove({ projectId: f.projectId, photoId: await f.photoId() }),
   },
   "checklist.get": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.checklist.get({ projectId: f.projectId }),
   },
   "checklist.setDone": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.checklist.setDone({
         projectId: f.projectId,
@@ -487,7 +487,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.addTask": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.addTask({
         projectId: f.projectId,
@@ -496,7 +496,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.updateTask": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.checklist.updateTask({
         projectId: f.projectId,
@@ -506,7 +506,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.deleteTask": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [t] = await db()
         .insert(schema.task)
@@ -516,7 +516,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "checklist.reorder": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const ids = (
         await db()
@@ -537,7 +537,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "checklist.setDependencies": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.setDependencies({
         projectId: f.projectId,
@@ -546,7 +546,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.previewToggles": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.previewToggles({
         projectId: f.projectId,
@@ -554,12 +554,12 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.setToggles": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.setToggles({ projectId: f.projectId, toggles: [] }),
   },
   "checklist.renamePhase": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.renamePhase({
         projectId: f.projectId,
@@ -568,7 +568,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.addPhase": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.addPhase({
         projectId: f.projectId,
@@ -577,7 +577,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "checklist.saveAsTemplate": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.saveAsTemplate({
         projectId: f.projectId,
@@ -659,11 +659,11 @@ const MATRIX: Record<string, Row | "public"> = {
     call: (c, f) => c.templates.projects({ templateId: f.templateId }),
   },
   "templates.updatePreview": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) => c.templates.updatePreview({ projectId: f.projectId }),
   },
   "templates.applyUpdate": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [t] = await db()
         .select({ version: schema.template.version })
@@ -676,12 +676,12 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "checklist.templateUpdatePreview": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.checklist.templateUpdatePreview({ projectId: f.projectId }),
   },
   "checklist.applyTemplateUpdate": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [t] = await db()
         .select({ version: schema.template.version })
@@ -694,7 +694,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "checklist.setSubItem": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) => {
       const [t] = await db()
         .select()
@@ -715,12 +715,12 @@ const MATRIX: Record<string, Row | "public"> = {
   },
 
   "tasks.detail": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.tasks.detail({ projectId: f.projectId, taskId: f.taskId }),
   },
   "tasks.assign": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const id = await freshTask(f.projectId);
       return c.tasks.assign({
@@ -732,7 +732,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "tasks.setStatus": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.tasks.setStatus({
         projectId: f.projectId,
@@ -742,7 +742,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "tasks.setPriority": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.tasks.setPriority({
         projectId: f.projectId,
@@ -752,7 +752,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "tasks.decide": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     // Each caller is the named approver; only those with approve rights may act on it.
     call: async (c, f, me) =>
       c.tasks.decide({
@@ -767,7 +767,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "tasks.addComment": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.tasks.addComment({
         projectId: f.projectId,
@@ -776,7 +776,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "tasks.editComment": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) => {
       const { id } = await c.tasks.addComment({
         projectId: f.projectId,
@@ -792,7 +792,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "tasks.deleteComment": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) => {
       const { id } = await c.tasks.addComment({
         projectId: f.projectId,
@@ -807,12 +807,12 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "tasks.watch": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.tasks.watch({ projectId: f.projectId, taskId: f.taskId, on: true }),
   },
   "tasks.setWatcher": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.tasks.setWatcher({
         projectId: f.projectId,
@@ -822,7 +822,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "tasks.bulk": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.tasks.bulk({
         projectId: f.projectId,
@@ -831,7 +831,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "tasks.shiftPhase": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.tasks.shiftPhase({
         projectId: f.projectId,
@@ -844,11 +844,11 @@ const MATRIX: Record<string, Row | "public"> = {
   "tasks.needsYou": { allowed: ACTIVE, call: (c) => c.tasks.needsYou() },
 
   "keyDates.list": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.keyDates.list({ projectId: f.projectId }),
   },
   "keyDates.save": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.keyDates.save({
         projectId: f.projectId,
@@ -857,7 +857,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "keyDates.remove": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [d] = await db()
         .insert(schema.keyDate)
@@ -887,11 +887,11 @@ const MATRIX: Record<string, Row | "public"> = {
     call: (c) => c.notifications.markAllRead(),
   },
   "records.overview": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.records.overview({ projectId: f.projectId }),
   },
   "records.syncNow": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     // Allowed means "got past the permission check": no BBL or the cooldown answer with their own codes.
     call: (c, f) =>
       c.records
@@ -902,7 +902,7 @@ const MATRIX: Record<string, Row | "public"> = {
         }),
   },
   "records.dismissAlert": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [a] = await db()
         .insert(schema.recordAlert)
@@ -920,7 +920,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "records.createTask": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [a] = await db()
         .insert(schema.recordAlert)
@@ -938,7 +938,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "records.updateViolation": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [v] = await db()
         .insert(schema.violationCase)
@@ -959,11 +959,11 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "expiries.list": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.expiries.list({ projectId: f.projectId }),
   },
   "expiries.save": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.expiries.save({
         projectId: f.projectId,
@@ -972,7 +972,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "expiries.close": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [e] = await db()
         .insert(schema.expiryItem)
@@ -991,7 +991,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "expiries.remove": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [e] = await db()
         .insert(schema.expiryItem)
@@ -1005,16 +1005,16 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "siteLogs.get": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.siteLogs.get({ projectId: f.projectId, date: "2026-01-02" }),
   },
   "siteLogs.list": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.siteLogs.list({ projectId: f.projectId }),
   },
   "siteLogs.range": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.siteLogs.range({
         projectId: f.projectId,
@@ -1023,7 +1023,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "siteLogs.save": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.siteLogs
         .save({
@@ -1045,11 +1045,11 @@ const MATRIX: Record<string, Row | "public"> = {
         }),
   },
   "schedule.get": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.schedule.get({ projectId: f.projectId }),
   },
   "schedule.setDates": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [t] = await db()
         .insert(schema.task)
@@ -1069,7 +1069,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "schedule.lock": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.schedule
         .lock({ projectId: f.projectId, reason: null })
@@ -1078,7 +1078,7 @@ const MATRIX: Record<string, Row | "public"> = {
         }),
   },
   "schedule.requestRebaseline": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       await db()
         .update(schema.scheduleBaseline)
@@ -1125,11 +1125,11 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "meetings.list": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.meetings.list({ projectId: f.projectId }),
   },
   "meetings.get": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) => {
       const [m] = await db()
         .insert(schema.meeting)
@@ -1144,7 +1144,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "meetings.create": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.meetings.create({
         projectId: f.projectId,
@@ -1154,7 +1154,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "meetings.update": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [m] = await db()
         .insert(schema.meeting)
@@ -1178,7 +1178,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "meetings.saveItem": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [m] = await db()
         .insert(schema.meeting)
@@ -1200,7 +1200,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "meetings.deleteItem": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [m] = await db()
         .insert(schema.meeting)
@@ -1219,11 +1219,11 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "rfis.list": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.rfis.list({ projectId: f.projectId }),
   },
   "rfis.save": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.rfis.save({
         projectId: f.projectId,
@@ -1239,7 +1239,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "rfis.answer": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: async (c, f, me) => {
       const [r] = await db()
         .insert(schema.rfi)
@@ -1260,7 +1260,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "rfis.setStatus": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [r] = await db()
         .insert(schema.rfi)
@@ -1280,7 +1280,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "rfis.attach": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [r] = await db()
         .insert(schema.rfi)
@@ -1317,11 +1317,11 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "submittals.list": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.submittals.list({ projectId: f.projectId }),
   },
   "submittals.create": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.submittals.create({
         projectId: f.projectId,
@@ -1335,7 +1335,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "submittals.decide": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: async (c, f, me) => {
       const [s] = await db()
         .insert(schema.submittal)
@@ -1359,7 +1359,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "submittals.resubmit": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [s] = await db()
         .insert(schema.submittal)
@@ -1382,11 +1382,11 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "drawings.list": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.drawings.list({ projectId: f.projectId }),
   },
   "drawings.createSet": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.drawings.createSet({
         projectId: f.projectId,
@@ -1397,7 +1397,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "drawings.sheet": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) => {
       const [set] = await db()
         .insert(schema.drawingSet)
@@ -1422,11 +1422,11 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "punch.list": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.punch.list({ projectId: f.projectId }),
   },
   "punch.create": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.punch.create({
         projectId: f.projectId,
@@ -1446,7 +1446,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "punch.update": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: async (c, f, me) => {
       const [p] = await db()
         .insert(schema.punchItem)
@@ -1466,7 +1466,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "punch.remove": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [p] = await db()
         .insert(schema.punchItem)
@@ -1527,11 +1527,11 @@ const MATRIX: Record<string, Row | "public"> = {
   },
 
   "files.folders": {
-    allowed: [...ASSIGNED, "investor+fin", "investor"],
+    allowed: [...ASSIGNED, "investor+fin", "investor", "admin-unassigned"],
     call: (c, f) => c.files.folders({ projectId: f.projectId }),
   },
   "files.list": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.list({
         projectId: f.projectId,
@@ -1539,7 +1539,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.canRead": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.canRead({
         projectId: f.projectId,
@@ -1547,7 +1547,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.get": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.get({
         projectId: f.projectId,
@@ -1555,7 +1555,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.beginUpload": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.beginUpload({
         projectId: f.projectId,
@@ -1566,7 +1566,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.completeUpload": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) => {
       const b = await c.files.beginUpload({
         projectId: f.projectId,
@@ -1586,7 +1586,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "files.rename": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.files.rename({
         projectId: f.projectId,
@@ -1596,7 +1596,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.move": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.files.move({
         projectId: f.projectId,
@@ -1606,7 +1606,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.remove": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.files.remove({
         projectId: f.projectId,
@@ -1614,11 +1614,11 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.trash": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) => c.files.trash({ projectId: f.projectId }),
   },
   "files.restore": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.files.restore({
         projectId: f.projectId,
@@ -1626,7 +1626,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.purge": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.files.purge({
         projectId: f.projectId,
@@ -1634,7 +1634,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.attach": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.attach({
         projectId: f.projectId,
@@ -1643,7 +1643,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.detach": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.detach({
         projectId: f.projectId,
@@ -1652,17 +1652,17 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.forTask": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) =>
       c.files.forTask({ projectId: f.projectId, taskId: f.taskId }),
   },
   "files.createFolder": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.files.createFolder({ projectId: f.projectId, name: `Folder ${uid()}` }),
   },
   "files.renameFolder": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [x] = await db()
         .insert(schema.folder)
@@ -1676,7 +1676,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "files.deleteFolder": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const [x] = await db()
         .insert(schema.folder)
@@ -1686,7 +1686,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "files.watchFolder": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: async (c, f) =>
       c.files.watchFolder({
         projectId: f.projectId,
@@ -1695,7 +1695,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "files.shareFolder": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.files.shareFolder({
         projectId: f.projectId,
@@ -1933,15 +1933,15 @@ const MATRIX: Record<string, Row | "public"> = {
   },
 
   "members.list": {
-    allowed: ASSIGNED,
+    allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.members.list({ projectId: f.projectId }),
   },
   "members.candidates": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: (c, f) => c.members.candidates({ projectId: f.projectId }),
   },
   "members.upsert": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: (c, f) =>
       c.members.upsert({
         projectId: f.projectId,
@@ -1953,7 +1953,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "members.remove": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: async (c, f) => {
       const temp = await createUser("member");
       await addMember(f.projectId, temp.id);
@@ -1975,16 +1975,16 @@ const MATRIX: Record<string, Row | "public"> = {
   },
 
   "units.list": {
-    allowed: INTERNAL_ASSIGNED,
+    allowed: [...INTERNAL_ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.units.list({ projectId: f.projectId }),
   },
   "units.saveUnit": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: (c, f) =>
       c.units.saveUnit({ projectId: f.projectId, unit: `N${uid()}`, sf: 900 }),
   },
   "units.saveSelection": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) =>
       c.units.saveSelection({
         projectId: f.projectId,
@@ -1994,7 +1994,7 @@ const MATRIX: Record<string, Row | "public"> = {
       }),
   },
   "units.signOff": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const u = await unitFixture(f.projectId);
       return c.units.signOff({
@@ -2007,7 +2007,7 @@ const MATRIX: Record<string, Row | "public"> = {
     },
   },
   "units.deleteSelection": {
-    allowed: EDITORS,
+    allowed: [...EDITORS, "admin-unassigned"],
     call: async (c, f) => {
       const u = await unitFixture(f.projectId);
       return c.units.deleteSelection({
@@ -2278,11 +2278,11 @@ const MATRIX: Record<string, Row | "public"> = {
     call: (c) => c.portal.list(),
   },
   "portal.project": {
-    allowed: PORTAL,
+    allowed: [...PORTAL, "admin-unassigned"],
     call: (c, f) => c.portal.project({ projectId: f.projectId }),
   },
   "portal.highlights": {
-    allowed: PORTAL,
+    allowed: [...PORTAL, "admin-unassigned"],
     call: (c, f) =>
       c.portal.highlights({
         projectId: f.projectId,
@@ -2292,12 +2292,12 @@ const MATRIX: Record<string, Row | "public"> = {
   },
 
   "projects.inboundAddress": {
-    allowed: ["owner", "admin+fin", "admin", "member+fin", "member"],
+    allowed: ["owner", "admin+fin", "admin", "member+fin", "member", "admin-unassigned"],
     call: (c, f) => c.projects.inboundAddress({ projectId: f.projectId }),
   },
 
   "projects.newInboundAddress": {
-    allowed: ["owner", "admin+fin", "admin"],
+    allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     // Email-in is off in tests: allowed callers get "not set up", not a refusal.
     call: (c, f) =>
       c.projects.newInboundAddress({ projectId: f.projectId }).catch((e: TRPCError) => {
@@ -2473,7 +2473,6 @@ describe("permission matrix", () => {
 
   it("unassigned users get NOT_FOUND, so project existence does not leak", async () => {
     for (const s of [
-      "admin-unassigned",
       "member-unassigned",
       "external-unassigned",
     ] as const) {
@@ -2486,6 +2485,15 @@ describe("permission matrix", () => {
         list.projects.find((p) => p.id === fixture.projectId),
       ).toBeUndefined();
     }
+  });
+
+  it("admins see every project, even ones they aren't on, but not its money", async () => {
+    const c = await callerFor(users["admin-unassigned"]);
+    const p = await c.projects.get({ projectId: fixture.projectId });
+    expect(p.id).toBe(fixture.projectId);
+    expect(p.access.canViewFinancials).toBe(false);
+    expect((await c.projects.list()).projects.some((x) => x.id === fixture.projectId)).toBe(true);
+    await expect(c.financials.overview({ projectId: fixture.projectId })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("project access reports financial visibility exactly as flagged", async () => {

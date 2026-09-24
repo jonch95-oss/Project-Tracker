@@ -412,15 +412,16 @@ describe("Milestone 11", () => {
           mapping: { name: 0, address: 1, type: 2 },
         }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      // An admin not on the project sees it, but budget lines still need money access there.
       const outsiderAdmin = await callerFor((await createUser("admin")).id);
-      await expect(
-        outsiderAdmin.import.commit({
-          kind: "budget",
-          projectId,
-          rows: [["Soft costs", "X", "1"]],
-          mapping: { category: 0, name: 1, originalCents: 2 },
-        }),
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      const refused = await outsiderAdmin.import.commit({
+        kind: "budget",
+        projectId,
+        rows: [["Soft costs", "X", "1"]],
+        mapping: { category: 0, name: 1, originalCents: 2 },
+      });
+      expect(refused).toMatchObject({ imported: 0 });
+      expect(refused.rejected[0]!.reasons[0]).toMatch(/permission/);
       // The same project twice (name and address) is only created once.
       const name = `Twice ${Date.now()}`;
       const once = await oc.import.commit({

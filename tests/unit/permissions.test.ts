@@ -32,7 +32,7 @@ describe("global permissions", () => {
     "audit.view": ["owner"],
     "system.view": ["owner"],
     "export.excel": ["owner"],
-    "projects.viewAll": ["owner"],
+    "projects.viewAll": ["owner", "admin"],
     "directory.view": ["owner", "admin", "member"],
     "directory.edit": ["owner", "admin"],
     "analytics.view": ["owner"],
@@ -72,8 +72,12 @@ describe("project permissions", () => {
     for (const a of actions) expect(canProject(actor("owner"), null, a)).toBe(true);
   });
 
-  it("everyone else needs membership for anything", () => {
-    for (const role of ["admin", "member", "external"] as const) {
+  it("admins run every project without being on it, except money (that follows the project's flag)", () => {
+    for (const a of actions) expect(canProject(actor("admin"), null, a)).toBe(a !== "financials.view" && a !== "financials.edit" && a !== "project.delete");
+  });
+
+  it("members and outsiders need membership for anything", () => {
+    for (const role of ["member", "external"] as const) {
       for (const a of actions) expect(canProject(actor(role), null, a)).toBe(false);
     }
   });
@@ -151,7 +155,9 @@ describe("granting", () => {
     expect(canGrantFlags(actor("admin"), member(), flags)).toBe(false);
     expect(canGrantFlags(actor("admin"), member({ canViewFinancials: true }), flags)).toBe(true);
     expect(canGrantFlags(actor("admin"), member(), { ...flags, canViewFinancials: false })).toBe(true);
-    expect(canGrantFlags(actor("admin"), null, { ...flags, canViewFinancials: false })).toBe(false);
+    // Not on the project: they can still add people, just not give money access.
+    expect(canGrantFlags(actor("admin"), null, { ...flags, canViewFinancials: false })).toBe(true);
+    expect(canGrantFlags(actor("admin"), null, flags)).toBe(false);
   });
   it("members, externals and deactivated users cannot grant", () => {
     expect(canGrantFlags(actor("member"), member({ canViewFinancials: true }), { ...flags, canViewFinancials: false })).toBe(false);
@@ -202,6 +208,8 @@ describe("admin limits on memberships", () => {
     expect(canRemoveMember(actor("owner"), null, { role: "admin", canViewFinancials: true })).toBe(true);
     expect(canRemoveMember(actor("member"), adminFin, { role: "member", canViewFinancials: false })).toBe(false);
     expect(canRemoveMember(actor("admin", "deactivated"), adminFin, { role: "member", canViewFinancials: false })).toBe(false);
-    expect(canRemoveMember(admin, null, { role: "member", canViewFinancials: false })).toBe(false);
+    // An admin not on the project can remove people too, except those with money access.
+    expect(canRemoveMember(admin, null, { role: "member", canViewFinancials: false })).toBe(true);
+    expect(canRemoveMember(admin, null, { role: "member", canViewFinancials: true })).toBe(false);
   });
 });

@@ -1,5 +1,15 @@
 # Progress
 
+## Changes asked for after Milestone 12 (24 Sep)
+
+- **Sign-in by username:**
+  - People can sign in with a username (e.g. `ariel`) as well as an email.
+  - Accounts can be made with a temporary password through the **Create account** GitHub workflow (Actions → Create account → Run workflow).
+  - Someone with a temporary password must choose their own before anything else opens. The app, the API and file links are all closed until they do.
+  - Password minimum is now 10 characters (Jon's call).
+- **Admins see every project:** admins now see and run every project and can assign tasks on all of them, including ones they haven't been added to. Money still follows each project's Financials switch, and the permission matrix covers the unassigned-admin case.
+- **Not done: an "invisible owner".** Jon asked for an owner who has full power but whose actions nobody else can see (shown as "Project Command", left out of people lists). This session's safety check blocked the change as audit/logging tampering, so it was left for Jon to decide.
+
 ## Milestone 12 — iPhone home-screen app (built; real-iPhone check pending)
 
 **Live:** https://ariel-dev-projects.vercel.app (install it from Safari: Share → Add to Home Screen; the guide is at /install)

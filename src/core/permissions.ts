@@ -70,7 +70,7 @@ const GLOBAL_RULES: Record<GlobalAction, readonly GlobalRole[]> = {
   "audit.view": ["owner"],
   "system.view": ["owner"],
   "export.excel": ["owner"],
-  "projects.viewAll": ["owner"],
+  "projects.viewAll": ["owner", "admin"],
   "directory.view": ["owner", "admin", "member"],
   "directory.edit": ["owner", "admin"],
   "analytics.view": ["owner"],
@@ -103,7 +103,8 @@ export function canProject(
 ): boolean {
   if (!isActive(actor)) return false;
   if (actor.role === "owner") return true;
-  if (!membership) return false;
+  // Admins see and run every project, even ones they aren't on; money still follows each project's financials flag.
+  if (!membership && actor.role !== "admin") return false;
   // Investors and lenders (Module J) read their portal and nothing else; their capital account follows the financials flag, checked there.
   if (actor.role === "investor") return action === "project.view";
 
@@ -111,9 +112,9 @@ export function canProject(
     case "project.view":
       return true;
     case "financials.view":
-      return membership.canViewFinancials;
+      return !!membership?.canViewFinancials;
     case "financials.edit":
-      return actor.role === "admin" && membership.canViewFinancials;
+      return actor.role === "admin" && !!membership?.canViewFinancials;
     case "project.edit":
     case "project.manageMembers":
       return actor.role === "admin";
@@ -132,11 +133,11 @@ export function canProject(
       return isInternalRole(actor.role);
     case "checklist.edit":
       if (actor.role === "admin") return true;
-      if (actor.role === "member") return membership.canEditChecklist;
+      if (actor.role === "member") return !!membership?.canEditChecklist;
       return false;
     case "task.approve":
       if (actor.role === "admin") return true;
-      return membership.canApprove;
+      return !!membership?.canApprove;
   }
 }
 
@@ -145,8 +146,8 @@ export function canProject(
  * (`before`, null for a new member) and the target's global role?
  *
  * - Owners may do anything.
- * - Admins manage only members and outside collaborators on projects they
- *   are on — never owners or other admins (including themselves).
+ * - Admins manage members and outside collaborators on any project (they
+ *   see them all) — never owners or other admins (including themselves).
  * - An admin may leave financial visibility as it was, but may only grant
  *   or revoke it if they can see financials themselves.
  */
@@ -159,10 +160,11 @@ export function canGrantFlags(
 ): boolean {
   if (!isActive(actor)) return false;
   if (actor.role === "owner") return true;
-  if (actor.role !== "admin" || !actorMembership) return false;
+  // Admins manage people on any project (they see them all); granting money access still needs their own.
+  if (actor.role !== "admin") return false;
   if (targetRole === "owner" || targetRole === "admin") return false;
   const financialsChanged = requested.canViewFinancials !== (before?.canViewFinancials ?? false);
-  if (financialsChanged && !actorMembership.canViewFinancials) return false;
+  if (financialsChanged && !actorMembership?.canViewFinancials) return false;
   return true;
 }
 
@@ -170,9 +172,9 @@ export function canGrantFlags(
 export function canRemoveMember(actor: Actor, actorMembership: Membership | null, target: { role: GlobalRole; canViewFinancials: boolean }): boolean {
   if (!isActive(actor)) return false;
   if (actor.role === "owner") return true;
-  if (actor.role !== "admin" || !actorMembership) return false;
+  if (actor.role !== "admin") return false;
   if (target.role === "owner" || target.role === "admin") return false;
-  return !target.canViewFinancials || actorMembership.canViewFinancials;
+  return !target.canViewFinancials || !!actorMembership?.canViewFinancials;
 }
 
 export function canAssignGlobalRole(actor: Actor, target: GlobalRole, targetUserId: string): boolean {
