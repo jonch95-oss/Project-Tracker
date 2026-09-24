@@ -6,12 +6,12 @@ import { cyclePath, unmetDependencies } from "@/core/deps";
 import type { ProjectTypeKey } from "@/core/labels";
 import { phaseKeyFor } from "@/core/phases";
 import { dueRuleSchema } from "@/core/template-schema";
-import { projectToTemplate, type DueRule, type Recurrence } from "@/core/templates";
+import { mergeConditionalParts, projectToTemplate, type DueRule, type Recurrence } from "@/core/templates";
 import { isToggleKey, irrelevantToggles } from "@/core/toggles";
 import { isIsoDate, todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { recordAudit } from "../../services/audit";
-import { applyToggles, effectiveToggles, previewToggles, projectEdges, reschedule, unmetPrerequisites } from "../../services/checklist";
+import { applyTemplateUpdate, applyToggles, assertValidTemplate, loadTemplate, describeDiff, effectiveToggles, lockProject, previewToggles, projectEdges, reschedule, templateUpdatePreview, unmetPrerequisites } from "../../services/checklist";
 import { projectProcedure, router, type AuthedContext, type ProjectAccess } from "../init";
 
 type Ctx = AuthedContext & { project: ProjectAccess };
@@ -129,7 +129,15 @@ export const checklistRouter = router({
         if (!canWorkTask(c, t)) throw new TRPCError({ code: "FORBIDDEN" });
         if (input.done) {
           const unmet = await unmetPrerequisites(tx, t.id);
-          if (unmet.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Waiting on: ${unmet.map((u) => u.title).join("; ")}. Finish ${unmet.length === 1 ? "it" : "those"} first.` });
+          if (unmet.length) {
+            // Only name prerequisites this person can see; count the rest.
+            const seeAll = ctx.project.can("task.viewAll");
+            const vis = seeAll ? unmet : (await tx.select({ id: schema.task.id, assigneeId: schema.task.assigneeId }).from(schema.task).where(inArray(schema.task.id, unmet.map((u) => u.id)))).filter((r) => canSeeTask(c, r)).map((r) => r.id);
+            const named = seeAll ? unmet : unmet.filter((u) => (vis as string[]).includes(u.id));
+            const hidden = unmet.length - named.length;
+            const parts = [...named.map((u) => u.title), ...(hidden ? [`${hidden} other task${hidden === 1 ? "" : "s"} on the project`] : [])];
+            throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Waiting on: ${parts.join("; ")}. Finish ${unmet.length === 1 ? "it" : "those"} first.` });
+          }
           const approves = t.requiresApproval && !ctx.project.can("task.approve");
           const status = approves ? ("awaiting_approval" as const) : ("done" as const);
           const version = await bumpTask(tx, t.id, input.version, {
@@ -142,8 +150,13 @@ export const checklistRouter = router({
           if (status === "done") await reschedule(tx, input.projectId);
           return { status, version };
         }
+        if (t.requiresApproval && t.status === "done" && !ctx.project.can("task.approve")) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "This task was approved. Only someone who can approve can reopen it." });
+        }
         const version = await bumpTask(tx, t.id, input.version, { status: "not_started", completedOn: null, completedAt: null, completedById: null });
         await audit(tx, c, `${ctx.viewer.name} reopened "${t.title}"`, t.id, { status: "not_started" });
+        // Tasks dated relative to this one go back to its due date.
+        await reschedule(tx, input.projectId);
         return { status: "not_started" as const, version };
       });
     }),
@@ -185,6 +198,14 @@ export const checklistRouter = router({
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
         const t = await loadTask(tx, input.projectId, input.taskId);
+        const touchesApproval =
+          (input.requiresApproval !== undefined && input.requiresApproval !== t.requiresApproval) || (input.approverRole !== undefined && (input.approverRole ?? null) !== t.approverRole);
+        if (touchesApproval && !ctx.project.can("task.approve")) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only someone who can approve tasks can change a task's approval." });
+        }
+        if (touchesApproval && t.status === "awaiting_approval") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This task is waiting for approval. Approve or send it back first." });
+        }
         const set: Partial<typeof schema.task.$inferInsert> = {};
         if (input.title !== undefined) set.title = input.title;
         if (input.description !== undefined) set.description = input.description ?? null;
@@ -249,6 +270,8 @@ export const checklistRouter = router({
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       await ctx.db.transaction(async (tx) => {
+        // One structure change at a time per project, so two edits can't form a loop together.
+        await lockProject(tx, input.projectId);
         const t = await loadTask(tx, input.projectId, input.taskId);
         const ids = [...new Set(input.dependsOnIds)];
         if (ids.length) {
@@ -286,12 +309,17 @@ export const checklistRouter = router({
     }),
 
   setToggles: projectProcedure("checklist.edit")
-    .input(z.object({ toggles: toggleList, removeStarted: z.array(z.uuid()).max(500).default([]) }))
+    .input(z.object({ toggles: toggleList, removeStarted: z.array(z.uuid()).max(500).default([]), expectedToggles: toggleList.optional() }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       for (const k of input.toggles) if (!isToggleKey(k)) throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown toggle: ${k}` });
       return ctx.db.transaction(async (tx) => {
+        await lockProject(tx, input.projectId);
         const [before] = await tx.select({ toggles: schema.project.toggles }).from(schema.project).where(eq(schema.project.id, input.projectId));
+        // The preview was made against these conditions; if someone changed them since, start over.
+        if (input.expectedToggles && [...input.expectedToggles].sort().join() !== [...before!.toggles].sort().join()) {
+          throw new TRPCError({ code: "CONFLICT", message: "Someone else changed the site conditions a moment ago. Reopen the dialog to see the current ones." });
+        }
         const out = await applyToggles(tx, input.projectId, [...new Set(input.toggles)], input.removeStarted, ctx.viewer.id);
         const on = input.toggles.filter((k) => !before!.toggles.includes(k));
         const off = before!.toggles.filter((k) => !input.toggles.includes(k));
@@ -305,6 +333,49 @@ export const checklistRouter = router({
           summary: `${ctx.viewer.name} changed the site conditions: ${[...on.map((k) => `+${k}`), ...off.map((k) => `−${k}`)].join(", ") || "no change"} (${out.added} tasks added, ${out.removed} removed)`,
           data: { on, off, ...out },
           ip: c.ip,
+        });
+        return out;
+      });
+    }),
+
+  /** Tick a sub-checklist item: anyone who can work the task, no version race (one item, one atomic update). */
+  setSubItem: projectProcedure()
+    .input(z.object({ taskId: z.uuid(), itemId: z.string().min(1).max(40), done: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const c = ctx as Ctx;
+      return ctx.db.transaction(async (tx) => {
+        const [t] = await tx.select().from(schema.task).where(and(eq(schema.task.id, input.taskId), eq(schema.task.projectId, input.projectId))).for("update");
+        if (!t || !canSeeTask(c, t)) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
+        if (!canWorkTask(c, t)) throw new TRPCError({ code: "FORBIDDEN" });
+        if (!t.subItems.some((s) => s.id === input.itemId)) throw new TRPCError({ code: "NOT_FOUND", message: "That item was removed." });
+        const items = t.subItems.map((s) => (s.id === input.itemId ? { ...s, done: input.done } : s));
+        const [r] = await tx.update(schema.task).set({ subItems: items, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(eq(schema.task.id, t.id)).returning({ version: schema.task.version });
+        return { version: r!.version };
+      });
+    }),
+
+  /** Review what applying the template's latest version would change on this project. */
+  templateUpdatePreview: projectProcedure("checklist.edit").query(async ({ ctx, input }) => {
+    const p = await templateUpdatePreview(ctx.db, input.projectId);
+    if (!p) throw new TRPCError({ code: "BAD_REQUEST", message: "This project wasn't made from a template." });
+    return { fromVersion: p.fromVersion, toVersion: p.toVersion, templateName: p.templateName, ...describeDiff(p.diff) };
+  }),
+
+  applyTemplateUpdate: projectProcedure("checklist.edit")
+    .input(z.object({ expectedVersion: z.number().int().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.transaction(async (tx) => {
+        const out = await applyTemplateUpdate(tx, input.projectId, ctx.viewer.id, input.expectedVersion);
+        await recordAudit(tx, {
+          actorId: ctx.viewer.id,
+          actorName: ctx.viewer.name,
+          action: "update",
+          entityType: "checklist",
+          entityId: input.projectId,
+          projectId: input.projectId,
+          summary: `${ctx.viewer.name} applied the latest template: ${out.added} added, ${out.removed} removed, ${out.changed} changed`,
+          data: out,
+          ip: ctx.ip,
         });
         return out;
       });
@@ -350,11 +421,15 @@ export const checklistRouter = router({
         const phases = await tx.select().from(schema.projectPhase).where(eq(schema.projectPhase.projectId, input.projectId)).orderBy(asc(schema.projectPhase.sortOrder));
         const tasks = await tx.select().from(schema.task).where(eq(schema.task.projectId, input.projectId)).orderBy(asc(schema.task.sortOrder));
         const edges = await projectEdges(tx, input.projectId);
-        const def = projectToTemplate({
+        const source = p!.templateId ? await loadTemplate(tx, p!.templateId) : null;
+        const def0 = projectToTemplate({
           name: input.name,
           projectType: p!.type as ProjectTypeKey,
           description: `Saved from ${p!.name}.`,
-          phases: phases.map((x) => ({ key: x.key, name: x.name, status: x.status, startedOn: x.startedOn })),
+          phases: phases.map((x) => {
+            const sp = source?.def.phases.find((y) => y.key === x.key);
+            return { key: x.key, name: x.name, status: x.status, startedOn: x.startedOn, showIf: sp?.showIf, hideIf: sp?.hideIf };
+          }),
           tasks: tasks.map((t) => ({
             id: t.id,
             templateKey: t.templateKey,
@@ -371,8 +446,13 @@ export const checklistRouter = router({
             requiredAttachment: t.requiredAttachment,
             recurrence: t.recurrence as Recurrence | null,
             toggleSource: t.toggleSource,
+            killScreen: t.killScreen,
+            milestone: t.milestone,
+            hideIf: source?.def.tasks.find((k) => k.key === t.templateKey)?.hideIf,
           })),
         });
+        const def = mergeConditionalParts(def0, source?.def ?? null);
+        assertValidTemplate(def);
         const [row] = await tx.insert(schema.template).values({ name: input.name, projectType: def.projectType, definition: def, createdById: ctx.viewer.id }).returning({ id: schema.template.id });
         await tx.insert(schema.templateRevision).values({ templateId: row!.id, version: 1, definition: def, savedById: ctx.viewer.id });
         await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: "create", entityType: "template", entityId: row!.id, projectId: input.projectId, summary: `${ctx.viewer.name} saved ${p!.name} as the template ${input.name}`, ip: ctx.ip });

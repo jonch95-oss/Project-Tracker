@@ -111,9 +111,11 @@ async function loadPhases(conn: DbOrTx, projectIds: string[]) {
 }
 
 /** Task totals per phase, for "% complete" (counts only; no task content). */
-async function loadTaskCounts(conn: DbOrTx, projectIds: string[]) {
+async function loadTaskCounts(conn: DbOrTx, projectIds: string[], onlyAssignee: string | null = null) {
   const out = new Map<string, Record<string, { total: number; done: number }>>();
   if (projectIds.length === 0) return out;
+  // Outside collaborators only count the tasks they can see (their own).
+  const scope = onlyAssignee ? and(inArray(schema.task.projectId, projectIds), eq(schema.task.assigneeId, onlyAssignee)) : inArray(schema.task.projectId, projectIds);
   const rows = await conn
     .select({
       projectId: schema.task.projectId,
@@ -122,7 +124,7 @@ async function loadTaskCounts(conn: DbOrTx, projectIds: string[]) {
       done: sql<number>`(count(*) filter (where ${schema.task.status} = 'done'))::int`,
     })
     .from(schema.task)
-    .where(inArray(schema.task.projectId, projectIds))
+    .where(scope)
     .groupBy(schema.task.projectId, schema.task.phaseKey);
   for (const r of rows) {
     const m = out.get(r.projectId) ?? {};
@@ -262,7 +264,7 @@ export const projectsRouter = router({
       .where(inArray(schema.project.id, ids))
       .orderBy(asc(schema.project.name));
 
-    const [phases, heroes, mine, counts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids)]);
+    const [phases, heroes, mine, counts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids, ctx.actor.role === "external" ? ctx.actor.userId : null)]);
     const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
     const headlines = finIds.length ? await ctx.db.select().from(schema.projectHeadline).where(inArray(schema.projectHeadline.projectId, finIds)) : [];
 
@@ -321,7 +323,7 @@ export const projectsRouter = router({
       .innerJoin(schema.company, eq(schema.company.id, schema.project.companyId))
       .where(eq(schema.project.id, input.projectId));
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-    const [phases, heroes, counts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p]), loadTaskCounts(ctx.db, [p.id])]);
+    const [phases, heroes, counts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p]), loadTaskCounts(ctx.db, [p.id], ctx.project.can("task.viewAll") ? null : ctx.actor.userId)]);
     const canFin = ctx.project.can("financials.view");
     const [h] = canFin ? await ctx.db.select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, p.id)) : [];
     return {

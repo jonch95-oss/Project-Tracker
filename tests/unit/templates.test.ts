@@ -12,6 +12,7 @@ import {
   toggleImpact,
   validateTemplate,
   type LiveTask,
+  type LiveTaskFull,
   type SchedulableTask,
   type TemplateDef,
 } from "@/core/templates";
@@ -301,33 +302,60 @@ describe("template engine", () => {
     expect(off.add).toEqual([]);
   });
 
-  it("template update diff touches only not-started template tasks", () => {
+  it("template update is a three-way diff: only what the template changed, never hand edits or deleted tasks", () => {
+    const live = (over: Partial<LiveTaskFull> & { id: string; templateKey: string | null }): LiveTaskFull => {
+      const k = mini.tasks.find((x) => x.key === over.templateKey);
+      return {
+        title: k?.title ?? "Mine",
+        phaseKey: k?.phaseKey ?? "p1",
+        started: false,
+        description: null,
+        role: k?.role ?? "PM",
+        due: k?.due ?? null,
+        requiresApproval: false,
+        approverRole: null,
+        requiredAttachment: null,
+        recurrence: null,
+        killScreen: false,
+        milestone: false,
+        subItems: [],
+        dependsOn: k ? [...(k.dependsOn ?? [])].filter((d) => d !== "x") : [],
+        ...over,
+      };
+    };
     const next: TemplateDef = {
       ...mini,
       tasks: [
-        { ...mini.tasks[0]!, title: "A renamed" },
-        { ...mini.tasks[1]!, title: "B renamed" },
+        { ...mini.tasks[0]!, title: "A renamed", role: "Legal" }, // a: title + role changed
+        { ...mini.tasks[1]!, title: "B renamed", due: { days: 9, unit: "business", from: "phase_start" } }, // b: title + rule changed
+        mini.tasks[2]!,
+        { ...mini.tasks[3]!, killScreen: true }, // c: flag changed
         { key: "new", phaseKey: "p2", title: "Brand new", role: "PM", due: { days: 1, unit: "business", from: "phase_start" } },
       ],
     };
-    const live: LiveTask[] = [
-      { id: "1", templateKey: "a", title: "A", phaseKey: "p1", started: true },
-      { id: "2", templateKey: "b", title: "B", phaseKey: "p1", started: false },
-      { id: "3", templateKey: "c", title: "C", phaseKey: "p2", started: false },
-      { id: "3b", templateKey: "c", title: "C", phaseKey: "p2", started: true },
-      { id: "4", templateKey: null, title: "Mine", phaseKey: "p1", started: false },
+    const rows = [
+      live({ id: "1", templateKey: "a", started: true }), // started: kept
+      live({ id: "2", templateKey: "b", title: "B — renamed by hand" }), // title edited by hand: title skipped, rule applied
+      live({ id: "4", templateKey: null, title: "Mine" }), // hand-made: untouched
     ];
-    const d = templateUpdateDiff(next, new Set(), live);
+    // "c" was deleted by hand; it is not brought back even though the template changed it.
+    const d = templateUpdateDiff(mini, next, new Set(), rows);
     expect(d.add.map((k) => k.key)).toEqual(["new"]);
-    expect(d.rename).toEqual([{ task: live[1], to: "B renamed" }]);
-    expect(d.remove.map((l) => l.id)).toEqual(["3"]);
-    expect(d.kept.map((l) => l.id).sort()).toEqual(["1", "3b"]);
+    expect(d.kept.map((l) => l.id)).toEqual(["1"]);
+    expect(d.update).toHaveLength(1);
+    expect(d.update[0]!.task.id).toBe("2");
+    expect(d.update[0]!.changes).toEqual({ due: { days: 9, unit: "business", from: "phase_start" } });
+    expect(d.update[0]!.skipped).toEqual(["title"]);
+    expect(d.remove).toEqual([]);
     expect(diffIsEmpty(d)).toBe(false);
-    expect(diffIsEmpty(templateUpdateDiff(mini, new Set(), [
-      { id: "1", templateKey: "a", title: "A", phaseKey: "p1", started: false },
-      { id: "2", templateKey: "b", title: "B", phaseKey: "p1", started: false },
-      { id: "3", templateKey: "c", title: "C", phaseKey: "p2", started: false },
-    ]))).toBe(true);
+
+    // A task the new version drops: removed if not started.
+    const dropB: TemplateDef = { ...mini, tasks: mini.tasks.filter((k) => k.key !== "b").map((k) => ({ ...k, dependsOn: (k.dependsOn ?? []).filter((x) => x !== "b") })) };
+    const d2 = templateUpdateDiff(mini, dropB, new Set(), [live({ id: "2", templateKey: "b" }), live({ id: "3", templateKey: "c" })]);
+    expect(d2.remove.map((l) => l.id)).toEqual(["2"]);
+    expect(d2.update.map((u) => [u.task.id, u.changes])).toEqual([["3", { dependsOn: [] }]]);
+    // Identical versions: nothing to do.
+    expect(diffIsEmpty(templateUpdateDiff(mini, mini, new Set(), [live({ id: "1", templateKey: "a" })]))).toBe(true);
   });
 
   it("saves a live project as a template, keeping rules and mapping ids to keys", () => {
@@ -362,5 +390,32 @@ describe("template engine", () => {
     expect(slugKey("Site visit!", taken)).toBe("site_visit");
     expect(slugKey("Site visit", taken)).toBe("site_visit_2");
     expect(slugKey("***", taken)).toBe("task");
+  });
+});
+
+describe("save-as-template keeps the source's conditional parts", async () => {
+  const { mergeConditionalParts } = await import("@/core/templates");
+  it("adds conditional phases in place and conditional tasks, pruning dangling references", () => {
+    const saved: TemplateDef = {
+      name: "Saved",
+      projectType: "gut_renovation",
+      phases: [
+        { key: "p1", name: "One" },
+        { key: "p2", name: "Two" },
+      ],
+      tasks: [{ key: "a", phaseKey: "p1", title: "A", role: "PM", due: { days: 1, unit: "business", from: "phase_start" }, dependsOn: ["gone"] }],
+    };
+    const merged = mergeConditionalParts(saved, mini);
+    expect(merged.phases.map((p) => p.key)).toEqual(["p1", "p2", "p3"]);
+    expect(merged.tasks.map((k) => k.key)).toEqual(["a", "x", "r"]);
+    expect(merged.tasks[0]!.dependsOn).toEqual([]);
+    expect(validateTemplate(merged)).toEqual([]);
+    expect(mergeConditionalParts(saved, null)).toBe(saved);
+    // An anchor on a task that didn't make it falls back to the phase start.
+    const anchored = mergeConditionalParts({ ...saved, tasks: [{ ...saved.tasks[0]!, due: { days: 1, unit: "business", from: { task: "zz" } } }] }, mini);
+    expect(anchored.tasks[0]!.due.from).toBe("phase_start");
+    // A conditional phase whose earlier neighbours are all missing goes first.
+    const lone = mergeConditionalParts({ ...saved, phases: [{ key: "p2", name: "Two" }], tasks: [] }, { ...mini, phases: [{ key: "p0", name: "Zero", showIf: ["jv"] }, ...mini.phases] });
+    expect(lone.phases[0]!.key).toBe("p0");
   });
 });

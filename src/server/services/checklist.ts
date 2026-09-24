@@ -2,22 +2,25 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { edgesFrom } from "@/core/deps";
+import { edgesFrom, wouldCreateCycle } from "@/core/deps";
 import type { ProjectTypeKey } from "@/core/labels";
 import { DEFAULT_TEMPLATE_TYPES, defaultTemplate } from "@/core/seed-library";
 import { parseTemplateDef } from "@/core/template-schema";
 import {
   generateChecklist,
   scheduleDueDates,
+  FIELD_LABEL,
   templateUpdateDiff,
   toggleImpact,
   validateTemplate,
   type DueRule,
   type GeneratedTask,
-  type LiveTask,
+  type LiveTaskFull,
+  type Recurrence,
   type TemplateDef,
   type TemplateUpdateDiff,
   type ToggleImpact,
+  type UpdatableField,
 } from "@/core/templates";
 import { impliedToggles } from "@/core/toggles";
 import { schema, type Database, type DbOrTx } from "../db";
@@ -103,11 +106,19 @@ function taskValues(projectId: string, g: GeneratedTask, sortOrder: number, user
   };
 }
 
+/** Serialize checklist-structure changes on one project (dependencies, toggles, template updates). */
+export async function lockProject(tx: DbOrTx, projectId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`checklist:${projectId}`}))`);
+}
+
 /**
  * Insert generated tasks (and their dependencies, by template key) into a
- * project. Dependencies may point at tasks already on the project.
+ * project. Dependencies may point at tasks already on the project, and tasks
+ * already on the project whose definition lists a newly added task as a
+ * prerequisite get that edge too (a toggle can add a prerequisite). An edge
+ * that would close a loop with hand-made dependencies is skipped.
  */
-async function insertGenerated(tx: DbOrTx, projectId: string, gen: GeneratedTask[], userId: string | null): Promise<void> {
+async function insertGenerated(tx: DbOrTx, projectId: string, gen: GeneratedTask[], userId: string | null, def?: TemplateDef | null): Promise<void> {
   if (gen.length === 0) return;
   const existing = await tx.select({ id: schema.task.id, templateKey: schema.task.templateKey, phaseKey: schema.task.phaseKey, sortOrder: schema.task.sortOrder }).from(schema.task).where(eq(schema.task.projectId, projectId));
   // New tasks go after what's already in their phase, keeping template order among themselves.
@@ -130,8 +141,22 @@ async function insertGenerated(tx: DbOrTx, projectId: string, gen: GeneratedTask
       if (on) deps.push({ taskId: id, dependsOnId: on });
     }
   }
-  // Existing tasks that depend on a newly added one (e.g. a toggle adds a prerequisite).
-  if (deps.length) await tx.insert(schema.taskDependency).values(deps).onConflictDoNothing();
+  if (def) {
+    const added = new Set(gen.map((g) => g.key));
+    for (const t of existing) {
+      if (!t.templateKey) continue;
+      const wants = def.tasks.find((k) => k.key === t.templateKey)?.dependsOn ?? [];
+      for (const d of wants) if (added.has(d)) deps.push({ taskId: t.id, dependsOnId: idByKey.get(d)! });
+    }
+  }
+  if (!deps.length) return;
+  const edges = await projectEdges(tx, projectId);
+  const safe = deps.filter((d) => {
+    if (wouldCreateCycle(edges, d.taskId, d.dependsOnId)) return false;
+    edges.set(d.taskId, [...(edges.get(d.taskId) ?? []), d.dependsOnId]);
+    return true;
+  });
+  if (safe.length) await tx.insert(schema.taskDependency).values(safe).onConflictDoNothing();
 }
 
 /** Recompute rule-based due dates the project can know now (after a phase starts, a task finishes, a toggle changes). */
@@ -168,9 +193,29 @@ export async function buildProjectChecklist(tx: DbOrTx, input: { projectId: stri
 }
 
 async function liveState(tx: DbOrTx, projectId: string) {
-  const tasks = await tx.select({ id: schema.task.id, templateKey: schema.task.templateKey, title: schema.task.title, phaseKey: schema.task.phaseKey, status: schema.task.status }).from(schema.task).where(eq(schema.task.projectId, projectId));
+  const tasks = await tx.select().from(schema.task).where(eq(schema.task.projectId, projectId));
   const phases = await tx.select().from(schema.projectPhase).where(eq(schema.projectPhase.projectId, projectId)).orderBy(asc(schema.projectPhase.sortOrder));
-  const live: LiveTask[] = tasks.map((t) => ({ id: t.id, templateKey: t.templateKey, title: t.title, phaseKey: t.phaseKey, started: t.status !== "not_started" }));
+  const edges = await projectEdges(tx, projectId);
+  const keyOf = new Map(tasks.map((t) => [t.id, t.templateKey]));
+  const live: LiveTaskFull[] = tasks.map((t) => ({
+    id: t.id,
+    templateKey: t.templateKey,
+    title: t.title,
+    phaseKey: t.phaseKey,
+    started: t.status !== "not_started",
+    description: t.description,
+    role: t.role,
+    due: (t.dueRule as DueRule | null) ?? null,
+    requiresApproval: t.requiresApproval,
+    approverRole: t.approverRole,
+    requiredAttachment: t.requiredAttachment,
+    recurrence: (t.recurrence as Recurrence | null) ?? null,
+    killScreen: t.killScreen,
+    milestone: t.milestone,
+    subItems: t.subItems.map((x) => x.text),
+    // Hand-made prerequisites (no template key) can't be compared with a template, so they're ignored here.
+    dependsOn: (edges.get(t.id) ?? []).map((id) => keyOf.get(id)).filter((k): k is string => !!k),
+  }));
   return { live, phases };
 }
 
@@ -215,6 +260,7 @@ export async function previewToggles(tx: DbOrTx, projectId: string, nextChosen: 
  * only where the person said so (`removeStarted`).
  */
 export async function applyToggles(tx: DbOrTx, projectId: string, nextChosen: string[], removeStarted: string[], userId: string) {
+  await lockProject(tx, projectId);
   const impact = await previewToggles(tx, projectId, nextChosen);
   const allowedStarted = new Set(impact.ask.map((t) => t.id));
   for (const id of removeStarted) if (!allowedStarted.has(id)) throw new TRPCError({ code: "BAD_REQUEST", message: "That task isn't affected by this change." });
@@ -237,7 +283,7 @@ export async function applyToggles(tx: DbOrTx, projectId: string, nextChosen: st
   if (impact.phasesAdded.length && def) await renumberPhases(tx, projectId, def);
 
   if (removeIds.length) await tx.delete(schema.task).where(and(eq(schema.task.projectId, projectId), inArray(schema.task.id, removeIds)));
-  await insertGenerated(tx, projectId, impact.add, userId);
+  await insertGenerated(tx, projectId, impact.add, userId, def);
   await tx.update(schema.project).set({ toggles: nextChosen, version: sql`${schema.project.version} + 1`, updatedAt: new Date() }).where(eq(schema.project.id, projectId));
   await reschedule(tx, projectId);
   return { added: impact.add.length, removed: removeIds.length, phasesAdded: impact.phasesAdded.map((p) => p.name), phasesSetAside: impact.phasesRemoved };
@@ -258,34 +304,112 @@ async function renumberPhases(tx: DbOrTx, projectId: string, def: TemplateDef): 
   for (const [i, { p }] of withRank.entries()) if (p.sortOrder !== i) await tx.update(schema.projectPhase).set({ sortOrder: i }).where(eq(schema.projectPhase.id, p.id));
 }
 
-export async function templateUpdatePreview(tx: DbOrTx, projectId: string): Promise<{ diff: TemplateUpdateDiff; fromVersion: number | null; toVersion: number; templateName: string } | null> {
+async function revisionDef(tx: DbOrTx, templateId: string, version: number | null): Promise<TemplateDef | null> {
+  if (version === null) return null;
+  const [rev] = await tx
+    .select({ definition: schema.templateRevision.definition })
+    .from(schema.templateRevision)
+    .where(and(eq(schema.templateRevision.templateId, templateId), eq(schema.templateRevision.version, version)));
+  return rev ? parseTemplateDef(rev.definition) : null;
+}
+
+export async function templateUpdatePreview(tx: DbOrTx, projectId: string): Promise<{ diff: TemplateUpdateDiff; fromVersion: number | null; toVersion: number; templateName: string; next: TemplateDef } | null> {
   const { project, template } = await projectTemplate(tx, projectId);
   if (!template) return null;
   const { live } = await liveState(tx, projectId);
-  const diff = templateUpdateDiff(template.def, effectiveToggles(project.type as ProjectTypeKey, project.toggles), live);
-  return { diff, fromVersion: project.templateVersion, toVersion: template.row.version, templateName: template.row.name };
+  // Diff from the revision the project came from; without it, compare against the latest (no field changes).
+  const base = (await revisionDef(tx, template.row.id, project.templateVersion)) ?? template.def;
+  const diff = templateUpdateDiff(base, template.def, effectiveToggles(project.type as ProjectTypeKey, project.toggles), live);
+  return { diff, fromVersion: project.templateVersion, toVersion: template.row.version, templateName: template.row.name, next: template.def };
 }
 
-/** Apply the template's latest version to a project: only not-started template tasks change. */
-export async function applyTemplateUpdate(tx: DbOrTx, projectId: string, userId: string) {
+/**
+ * Apply the template's latest version to a project: only what the template
+ * changed, only on tasks that haven't started and weren't changed by hand.
+ * `expectedVersion` guards against applying a version nobody reviewed.
+ */
+export async function applyTemplateUpdate(tx: DbOrTx, projectId: string, userId: string, expectedVersion?: number) {
+  await lockProject(tx, projectId);
   const prev = await templateUpdatePreview(tx, projectId);
   if (!prev) throw new TRPCError({ code: "BAD_REQUEST", message: "This project wasn't made from a template." });
-  const { project, template } = await projectTemplate(tx, projectId);
-  const { diff } = prev;
-  // Phases the new version adds (for these toggles) join as upcoming.
-  const gen = generateChecklist(template!.def, effectiveToggles(project.type as ProjectTypeKey, project.toggles));
+  if (expectedVersion !== undefined && prev.toVersion !== expectedVersion) {
+    throw new TRPCError({ code: "CONFLICT", message: `The template was saved again (now version ${prev.toVersion}) since you reviewed it. Review the update again.` });
+  }
+  const { project } = await projectTemplate(tx, projectId);
+  const { diff, next } = prev;
+  const gen = generateChecklist(next, effectiveToggles(project.type as ProjectTypeKey, project.toggles));
   const phases = await tx.select().from(schema.projectPhase).where(eq(schema.projectPhase.projectId, projectId));
   const newPhases = gen.phases.filter((p) => !phases.some((x) => x.key === p.key));
   if (newPhases.length) {
     await tx.insert(schema.projectPhase).values(newPhases.map((p) => ({ projectId, key: p.key, name: p.name, sortOrder: 0, status: "pending" as const })));
-    await renumberPhases(tx, projectId, template!.def);
+    await renumberPhases(tx, projectId, next);
   }
   if (diff.remove.length) await tx.delete(schema.task).where(inArray(schema.task.id, diff.remove.map((t) => t.id)));
-  for (const r of diff.rename) await tx.update(schema.task).set({ title: r.to, updatedAt: new Date(), version: sql`${schema.task.version} + 1` }).where(eq(schema.task.id, r.task.id));
-  await insertGenerated(tx, projectId, diff.add, userId);
-  await tx.update(schema.project).set({ templateVersion: template!.row.version, updatedAt: new Date() }).where(eq(schema.project.id, projectId));
+  const ids = new Map((await tx.select({ id: schema.task.id, key: schema.task.templateKey }).from(schema.task).where(eq(schema.task.projectId, projectId))).filter((r) => r.key).map((r) => [r.key!, r.id]));
+  let changed = 0;
+  for (const u of diff.update) {
+    const c = u.changes;
+    if (!Object.keys(c).length) continue;
+    changed++;
+    const [cur] = await tx.select({ subItems: schema.task.subItems }).from(schema.task).where(eq(schema.task.id, u.task.id));
+    const set: Partial<typeof schema.task.$inferInsert> = {};
+    if (c.title !== undefined) set.title = c.title;
+    if (c.description !== undefined) set.description = c.description;
+    if (c.role !== undefined) set.role = c.role;
+    if (c.phaseKey !== undefined && gen.phases.some((p) => p.key === c.phaseKey)) set.phaseKey = c.phaseKey;
+    if (c.due !== undefined) set.dueRule = c.due;
+    if (c.requiresApproval !== undefined) set.requiresApproval = c.requiresApproval;
+    if (c.approverRole !== undefined) set.approverRole = c.approverRole;
+    if (c.requiredAttachment !== undefined) set.requiredAttachment = c.requiredAttachment;
+    if (c.recurrence !== undefined) set.recurrence = c.recurrence;
+    if (c.killScreen !== undefined) set.killScreen = c.killScreen;
+    if (c.milestone !== undefined) set.milestone = c.milestone;
+    if (c.subItems !== undefined) {
+      // Keep ticks on items whose text didn't change.
+      const old = cur?.subItems ?? [];
+      set.subItems = c.subItems.map((text) => old.find((o) => o.text === text) ?? { id: randomUUID(), text, done: false });
+    }
+    if (Object.keys(set).length) await tx.update(schema.task).set({ ...set, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(eq(schema.task.id, u.task.id));
+    if (c.dependsOn !== undefined) {
+      // Replace only the template-keyed prerequisites; hand-made ones stay.
+      const templKeyed = await tx
+        .select({ dependsOnId: schema.taskDependency.dependsOnId, key: schema.task.templateKey })
+        .from(schema.taskDependency)
+        .innerJoin(schema.task, eq(schema.task.id, schema.taskDependency.dependsOnId))
+        .where(eq(schema.taskDependency.taskId, u.task.id));
+      const drop = templKeyed.filter((r) => r.key).map((r) => r.dependsOnId);
+      if (drop.length) await tx.delete(schema.taskDependency).where(and(eq(schema.taskDependency.taskId, u.task.id), inArray(schema.taskDependency.dependsOnId, drop)));
+      const edges = await projectEdges(tx, projectId);
+      for (const k of c.dependsOn) {
+        const on = ids.get(k);
+        if (!on || wouldCreateCycle(edges, u.task.id, on)) continue;
+        await tx.insert(schema.taskDependency).values({ taskId: u.task.id, dependsOnId: on }).onConflictDoNothing();
+        edges.set(u.task.id, [...(edges.get(u.task.id) ?? []), on]);
+      }
+    }
+  }
+  await insertGenerated(tx, projectId, diff.add, userId, next);
+  await tx.update(schema.project).set({ templateVersion: prev.toVersion, updatedAt: new Date() }).where(eq(schema.project.id, projectId));
   await reschedule(tx, projectId);
-  return { added: diff.add.length, removed: diff.remove.length, renamed: diff.rename.length, kept: diff.kept.length };
+  return { added: diff.add.length, removed: diff.remove.length, changed, kept: diff.kept.length };
+}
+
+/** A readable summary of a diff for the preview dialogs. */
+export function describeDiff(d: TemplateUpdateDiff) {
+  return {
+    add: d.add.map((k) => ({ key: k.key, title: k.title, phaseKey: k.phaseKey })),
+    remove: d.remove.map((t) => ({ id: t.id, title: t.title })),
+    update: d.update
+      .filter((u) => Object.keys(u.changes).length || u.skipped.length)
+      .map((u) => ({
+        id: u.task.id,
+        title: u.task.title,
+        newTitle: u.changes.title ?? null,
+        fields: (Object.keys(u.changes) as UpdatableField[]).map((f) => FIELD_LABEL[f]),
+        skipped: u.skipped.map((f) => FIELD_LABEL[f]),
+      })),
+    kept: d.kept.map((t) => ({ id: t.id, title: t.title })),
+  };
 }
 
 /** Blocking prerequisites of a task that aren't done (for "can't check this off yet because…"). */

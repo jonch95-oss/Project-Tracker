@@ -300,8 +300,8 @@ function PhaseTasks({
                     {overdue ? "Overdue · " : "Due "}
                     {dueLabel(t.dueOn, today)}
                   </span>
-                ) : !isDone ? (
-                  <span className="text-faint">Dated when its phase starts</span>
+                ) : !isDone && t.dueRule ? (
+                  <span className="text-faint">{t.dueRule.from === "phase_start" ? "Dated when its phase starts" : "Dated when the task before it is done"}</span>
                 ) : null}
                 {t.status === "awaiting_approval" ? (
                   <StatusPill tone="attention">Awaiting approval</StatusPill>

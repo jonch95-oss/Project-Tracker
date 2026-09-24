@@ -109,7 +109,9 @@ export function TaskDialog({
     );
   }
 
+  // Adding or removing items is a checklist edit; ticking one is working the task (and can't race).
   const setSubItems = (items: { id: string; text: string; done: boolean }[]) => update.mutate({ projectId, taskId: t.id, version: t.version, subItems: items });
+  const tick = useMutation(trpc.checklist.setSubItem.mutationOptions({ onError, onSettled: () => onChanged() }));
   const isDone = t.status === "done";
   const phaseName = checklist.phases.find((p) => p.key === t.phaseKey)?.name ?? t.phaseKey;
   const rule = ruleText(t, checklist.tasks);
@@ -163,7 +165,8 @@ export function TaskDialog({
         {t.requiredAttachment && <p className="text-sm text-muted">Needs an attachment: {t.requiredAttachment}. File attachments arrive with Files.</p>}
 
         {canEdit ? (
-          <form key={`${t.version}-${formKey}`} id="task-form" onSubmit={save} className="grid gap-5 sm:grid-cols-2">
+          // Keyed on the task and explicit saves only, so ticking a sub-item doesn't wipe what's being typed.
+          <form key={`${t.id}-${formKey}`} id="task-form" onSubmit={save} className="grid gap-5 sm:grid-cols-2">
             <Field label="Title" htmlFor="td-title" className="sm:col-span-2">
               <Input id="td-title" name="title" required maxLength={200} defaultValue={t.title} />
             </Field>
@@ -214,7 +217,7 @@ export function TaskDialog({
           t.description && <p className="whitespace-pre-line text-[15px] leading-relaxed">{t.description}</p>
         )}
 
-        <SubItems items={t.subItems} canEdit={canEdit} onChange={setSubItems} />
+        <SubItems items={t.subItems} canEdit={canEdit} onChange={setSubItems} onTick={(itemId, done) => tick.mutate({ projectId, taskId: t.id, itemId, done })} />
 
         <section aria-labelledby="td-deps-h">
           <h3 id="td-deps-h" className="mb-2 text-[13px] font-medium">
@@ -293,7 +296,17 @@ export function TaskDialog({
   );
 }
 
-function SubItems({ items, canEdit, onChange }: { items: { id: string; text: string; done: boolean }[]; canEdit: boolean; onChange: (items: { id: string; text: string; done: boolean }[]) => void }) {
+function SubItems({
+  items,
+  canEdit,
+  onChange,
+  onTick,
+}: {
+  items: { id: string; text: string; done: boolean }[];
+  canEdit: boolean;
+  onChange: (items: { id: string; text: string; done: boolean }[]) => void;
+  onTick: (itemId: string, done: boolean) => void;
+}) {
   const [key, setKey] = useState(0);
   if (!canEdit && items.length === 0) return null;
   return (
@@ -309,8 +322,7 @@ function SubItems({ items, canEdit, onChange }: { items: { id: string; text: str
                 type="checkbox"
                 id={`sub-${s.id}`}
                 checked={s.done}
-                disabled={!canEdit}
-                onChange={(e) => onChange(items.map((x) => (x.id === s.id ? { ...x, done: e.target.checked } : x)))}
+                onChange={(e) => onTick(s.id, e.target.checked)}
                 className="size-4 accent-[var(--accent)]"
               />
               <label htmlFor={`sub-${s.id}`} className={cn("flex-1 text-sm", s.done && "text-muted line-through")}>

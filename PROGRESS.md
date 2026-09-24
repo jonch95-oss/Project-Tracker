@@ -1,5 +1,53 @@
 # Progress
 
+## Milestone 3 — Templates, phases, checklists, toggles (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (Templates in the sidebar for the owner and admins; each project's Checklist tab)
+
+### What shipped
+
+- **Starter library (§5.4)** as seed data: every task from the brief with a default role, a relative due date (business days, skipping weekends and federal holidays), prerequisites, approvals (A), kill screens, milestones, recurring construction tasks and sub-checklists. The toggle tags from the brief are conditions. One default template per project type, including the contract-flip and foreclosure-auction tracks; "rental hold" swaps AG Plan & Sales for Rental / Hold.
+- **New project in two steps:** the property, then the site-condition questions (landmarked, MIH, E-designation, occupied, demolition, excavation, construction loan, JV, tax incentive, rental hold, 1031, flood zone, violations) with a live count of the checklist it will generate, and a choice of template.
+- **Checklist tab:**
+  - phases with progress; the current phase opens first
+  - one-tap complete (optimistic); a task with unfinished prerequisites shows a lock and "Waiting on …" and says why if tapped; approval tasks go to "Awaiting approval" unless you can approve
+  - due dates appear when a phase starts or a prerequisite finishes; manual dates are never overwritten; overdue items are flagged with an icon and text
+  - task sheet: edit title, role, phase, due date, notes, approval, sub-checklist and prerequisites (loops refused, with the loop spelled out); move up/down; delete
+  - drag to reorder on desktop, up/down buttons everywhere
+  - add tasks inline; add and rename phases
+  - **Site conditions** dialog with a live preview of every task and phase a change adds or removes; started tasks are removed only if you tick them
+  - **Save as template**, and a banner with a reviewed **Apply template update** when the template has moved on
+- **Template studio:** list by project type (default, duplicate, archive), and an editor for phases (drag or up/down, conditions), tasks (role, due rule, approval, prerequisites with loop prevention, sub-items, attachment, repeat, kill screen, milestone, show/hide conditions), a "generate for a test project" preview with dates, and projects using the template with a per-project diff and apply. Every save is a new version; live projects are never rewritten silently.
+- Portfolio and project **% complete** now credit the current phase's checklist.
+
+### Review
+
+The independent review found 12 issues; all fixed with regression tests:
+- **P0:** checking off a blocked task could name hidden prerequisites to an outside collaborator. It now names only what they can see and counts the rest; their phase counts are their own tasks only.
+- **P1:**
+  - template updates are now a true three-way diff: hand edits and hand deletions stay; rule, role and other field changes do apply
+  - a condition that adds a prerequisite now wires existing tasks to it
+  - prerequisite edits are serialized per project so no loop can form
+  - save-as-template keeps flags and conditions and always produces a valid template
+  - members with checklist rights can review and apply updates
+- **P2–P3:**
+  - approval can't be removed or an approved task reopened without approve rights
+  - applying an update checks the reviewed version and shows the full list
+  - the task sheet no longer loses typing; sub-items can be ticked by whoever works the task
+  - honest date hints; reopening reschedules
+  - stale site-condition previews are refused
+
+### Test results
+
+- Unit: 192 tests (template engine, calendar and holidays, dependency graph, the library's validity, three-way diffs, save-as merge)
+- Integration: 780 tests, including the permission matrix for every checklist and template procedure, and the regressions above
+- E2E (Playwright, desktop plus iPhone-sized): 19/19. New: create with conditions and live count, blocking and completion, task sheet, prerequisites, site-condition removal preview, Template studio save, outside collaborator's empty checklist, iPhone one-tap complete with no horizontal scroll
+
+### Known limitations
+
+- Assignment to people, comments, @mentions, watchers, approval decisions with notes, recurrence roll-forward, My Tasks and key dates arrive in Milestone 4 (this milestone's checklist uses roles).
+- Required attachments are shown but can't be satisfied until Files (Milestone 5).
+
 ## Milestone 2 — Projects & Portfolio (done)
 
 **Live:** https://ariel-dev-projects.vercel.app/portfolio

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { addBusinessDays } from "@/core/calendar";
 import { defaultTemplate } from "@/core/seed-library";
@@ -259,9 +259,11 @@ describe("templates", () => {
     expect(preview).toMatchObject({ fromVersion: 1, toVersion: 2 });
     expect(preview.add.map((a) => a.key)).toEqual(["neighbors_meeting"]);
     expect(preview.remove.map((r) => r.title)).toEqual(["Finished-product sales comps"]);
-    expect(preview.rename).toEqual([expect.objectContaining({ from: "Site visit with photos", to: "Site visit and drone flight" })]);
-    const [res] = await c.templates.applyUpdate({ projectIds: [projectId] });
-    expect(res).toMatchObject({ added: 1, removed: 1, renamed: 1 });
+    expect(preview.update.find((u) => u.title === "Site visit with photos")).toMatchObject({ newTitle: "Site visit and drone flight", fields: ["title"] });
+    await expect(c.templates.applyUpdate({ projectIds: [projectId], expectedVersion: 1 })).rejects.toMatchObject({ code: "CONFLICT" });
+    const [res] = await c.templates.applyUpdate({ projectIds: [projectId], expectedVersion: 2 });
+    expect(res).toMatchObject({ added: 1, removed: 1 });
+    expect(res!.changed).toBeGreaterThanOrEqual(1);
     expect((await task(projectId, "site_visit")).title).toBe("Site visit and drone flight");
     const [p] = await db().select({ v: schema.project.templateVersion }).from(schema.project).where(eq(schema.project.id, projectId));
     expect(p!.v).toBe(2);
@@ -301,5 +303,131 @@ describe("templates", () => {
     expect(out.tasks.find((k) => k.key === "mih_check")!.dueOn).toBe("2026-10-07");
     // Later phases get dates too (as if each started after the previous one's last task).
     expect(out.tasks.find((k) => k.key === "assignment_fee")!.dueOn).toBeTruthy();
+  });
+});
+
+describe("Milestone 3 review regressions", () => {
+  let owner: Awaited<ReturnType<typeof createUser>>;
+  let c: Caller;
+  beforeAll(async () => {
+    owner = await createUser("owner");
+    c = await callerFor(owner.id);
+  });
+
+  it("a blocked-task error never names tasks an outside collaborator can't see", async () => {
+    const { id } = await newProject(c);
+    const ext = await createUser("external");
+    await addMember(id, ext.id);
+    const offer = await task(id, "partner_approval_offer");
+    const pluto = await task(id, "pluto_pull");
+    await db().update(schema.task).set({ assigneeId: ext.id }).where(inArray(schema.task.id, [offer.id, pluto.id]));
+    const ec = await callerFor(ext.id);
+    const err = await ec.checklist.setDone({ projectId: id, taskId: offer.id, done: true, version: offer.version }).catch((e) => e);
+    expect(err.code).toBe("PRECONDITION_FAILED");
+    expect(err.message).not.toMatch(/MIH|E-designation|LPC|Pro forma/);
+    expect(err.message).toMatch(/4 other tasks on the project/);
+    // Counts too: only their own tasks.
+    const p = await ec.projects.get({ projectId: id });
+    const total = Object.values(p.taskCounts).reduce((a, x) => a + x.total, 0);
+    expect(total).toBe(2);
+  });
+
+  it("template updates keep hand edits and hand deletions, and apply rule/role changes", async () => {
+    const { id: templateId } = await c.templates.create({ name: `Regress ${Math.random()}`, from: { projectType: "gut_renovation" } });
+    const { id: projectId } = await c.projects.create({ name: "Regress", address: "1 R St", type: "gut_renovation", companyId: await companyId(), bbl: null, templateId });
+    const sv = await task(projectId, "site_visit");
+    await c.checklist.updateTask({ projectId, taskId: sv.id, version: sv.version, title: "Site visit — owner already walked it" });
+    await c.checklist.deleteTask({ projectId, taskId: (await task(projectId, "sales_comps")).id });
+    const t = await c.templates.get({ templateId });
+    const def = structuredClone(t.definition);
+    def.tasks = def.tasks.map((k) => (k.key === "mih_check" ? { ...k, role: "Legal", due: { ...k.due, days: 4 } } : k.key === "site_visit" ? { ...k, title: "Site visit and drone" } : k));
+    await c.templates.save({ templateId, version: t.version, definition: def });
+    const prev = await c.checklist.templateUpdatePreview({ projectId });
+    expect(prev.add).toEqual([]);
+    expect(prev.update.find((u) => u.title.startsWith("Site visit"))).toMatchObject({ fields: [], skipped: ["title"] });
+    await c.checklist.applyTemplateUpdate({ projectId, expectedVersion: prev.toVersion });
+    expect((await task(projectId, "site_visit")).title).toBe("Site visit — owner already walked it");
+    const mih = await task(projectId, "mih_check");
+    expect(mih.role).toBe("Legal");
+    expect((mih.dueRule as { days: number }).days).toBe(4);
+    const rows = await db().select().from(schema.task).where(and(eq(schema.task.projectId, projectId), eq(schema.task.templateKey, "sales_comps")));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("turning a condition on wires existing tasks to the prerequisites it adds", async () => {
+    const { id: templateId } = await c.templates.create({ name: `Wire ${Math.random()}`, from: { projectType: "gut_renovation" } });
+    const t = await c.templates.get({ templateId });
+    const def = structuredClone(t.definition);
+    def.tasks = def.tasks.map((k) => (k.key === "site_visit" ? { ...k, dependsOn: [...(k.dependsOn ?? []), "geotech"] } : k));
+    // geotech lives in Due Diligence; move it to the pipeline so it's a real prerequisite there.
+    def.tasks = def.tasks.map((k) => (k.key === "geotech" ? { ...k, phaseKey: "pipeline" } : k));
+    const saved = await c.templates.save({ templateId, version: t.version, definition: def });
+    expect(saved.version).toBe(2);
+    const { id } = await c.projects.create({ name: "Wire", address: "2 W St", type: "gut_renovation", companyId: await companyId(), bbl: null, templateId });
+    await c.checklist.setToggles({ projectId: id, toggles: ["excavation"], expectedToggles: [] });
+    const sv = await task(id, "site_visit");
+    await expect(c.checklist.setDone({ projectId: id, taskId: sv.id, done: true, version: sv.version })).rejects.toMatchObject({ message: expect.stringMatching(/Geotech/) });
+  });
+
+  it("two simultaneous prerequisite edits can't form a loop", async () => {
+    const { id } = await newProject(c);
+    const a = await task(id, "mih_check");
+    const b = await task(id, "lpc_check");
+    const r = await Promise.allSettled([
+      c.checklist.setDependencies({ projectId: id, taskId: a.id, dependsOnIds: [b.id] }),
+      c.checklist.setDependencies({ projectId: id, taskId: b.id, dependsOnIds: [a.id] }),
+    ]);
+    expect(r.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+  });
+
+  it("save as template after skipping a phase is valid, and keeps flags and conditions", async () => {
+    const { id } = await newProject(c, { type: "ground_up_condo" });
+    let p = await c.projects.get({ projectId: id });
+    await c.projects.skipPhase({ projectId: id, key: "design_zoning", skipped: true, version: p.version });
+    const { templateId } = await c.checklist.saveAsTemplate({ projectId: id, name: `Skipped ${Math.random()}` });
+    const t = await c.templates.get({ templateId });
+    expect(t.definition.tasks.find((k) => k.key === "mih_check")?.killScreen).toBe(true);
+    expect(t.definition.tasks.find((k) => k.key === "dob_filed")?.milestone).toBe(true);
+    expect(t.definition.tasks.find((k) => k.key === "dob_filed")?.dependsOn ?? []).not.toContain("construction_documents");
+    expect(t.definition.phases.find((ph) => ph.key === "rental_hold")?.showIf).toEqual(["rental_hold"]);
+    expect(t.definition.tasks.find((k) => k.key === "finish_spec")).toBeUndefined(); // it was in the skipped phase
+    // It saves again unchanged.
+    await c.templates.save({ templateId, version: t.version, definition: t.definition });
+    p = await c.projects.get({ projectId: id });
+    expect(p.id).toBe(id);
+  });
+
+  it("approval can't be switched off or an approved task reopened without approve rights", async () => {
+    const { id } = await newProject(c);
+    const m = await createUser("member");
+    await addMember(id, m.id, { canEditChecklist: true });
+    const mc = await callerFor(m.id);
+    const signed = await task(id, "partner_approval_offer");
+    await expect(mc.checklist.updateTask({ projectId: id, taskId: signed.id, version: signed.version, requiresApproval: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Owner approves a simple approval task; the member can't reopen it.
+    const t = await task(id, "site_visit");
+    await c.checklist.updateTask({ projectId: id, taskId: t.id, version: t.version, requiresApproval: true, approverRole: "Owner" });
+    const t2 = await task(id, "site_visit");
+    await c.checklist.setDone({ projectId: id, taskId: t2.id, done: true, version: t2.version });
+    const t3 = await task(id, "site_visit");
+    await expect(mc.checklist.setDone({ projectId: id, taskId: t3.id, done: false, version: t3.version })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("site-condition changes from a stale preview are refused", async () => {
+    const { id } = await newProject(c);
+    await c.checklist.setToggles({ projectId: id, toggles: ["occupied"], expectedToggles: [] });
+    await expect(c.checklist.setToggles({ projectId: id, toggles: ["flood_zone"], expectedToggles: [] })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("sub-items can be ticked by people working the task, without version races", async () => {
+    const { id } = await newProject(c);
+    const m = await createUser("member");
+    await addMember(id, m.id);
+    const mc = await callerFor(m.id);
+    const t = await task(id, "tenant_dd").catch(() => null);
+    const withItems = t ?? (await db().select().from(schema.task).where(eq(schema.task.projectId, id))).find((x) => x.subItems.length > 1)!;
+    await Promise.all(withItems.subItems.map((s) => mc.checklist.setSubItem({ projectId: id, taskId: withItems.id, itemId: s.id, done: true })));
+    const [after] = await db().select().from(schema.task).where(eq(schema.task.id, withItems.id));
+    expect(after!.subItems.every((s) => s.done)).toBe(true);
   });
 });

@@ -281,37 +281,116 @@ export function toggleImpact(t: TemplateDef, before: ReadonlySet<string>, after:
 /* Template updates → live projects                                    */
 /* ------------------------------------------------------------------ */
 
-export interface TemplateUpdateDiff {
-  add: GeneratedTask[];
-  remove: LiveTask[];
-  rename: { task: LiveTask; to: string }[];
-  /** Started tasks the new template dropped or renamed: left exactly as they are. */
-  kept: LiveTask[];
+/** The fields of a template task that an update can change on a live task. */
+export const UPDATABLE_FIELDS = ["title", "description", "role", "phaseKey", "due", "requiresApproval", "approverRole", "requiredAttachment", "recurrence", "killScreen", "milestone", "subItems", "dependsOn"] as const;
+export type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
+
+export const FIELD_LABEL: Record<UpdatableField, string> = {
+  title: "title",
+  description: "description",
+  role: "role",
+  phaseKey: "phase",
+  due: "due rule",
+  requiresApproval: "approval",
+  approverRole: "approver",
+  requiredAttachment: "required attachment",
+  recurrence: "repeat",
+  killScreen: "kill screen",
+  milestone: "milestone",
+  subItems: "sub-checklist",
+  dependsOn: "prerequisites",
+};
+
+/** A live task with the fields an update compares (dependsOn as template keys). */
+export interface LiveTaskFull extends LiveTask {
+  description: string | null;
+  role: string;
+  due: DueRule | null;
+  requiresApproval: boolean;
+  approverRole: string | null;
+  requiredAttachment: string | null;
+  recurrence: Recurrence | null;
+  killScreen: boolean;
+  milestone: boolean;
+  subItems: string[];
+  dependsOn: string[];
 }
 
+export interface TaskChange {
+  task: LiveTaskFull;
+  /** New values for the fields the template changed and nobody changed by hand. */
+  changes: Partial<Pick<GeneratedTask, UpdatableField>>;
+  /** Fields the template changed but this project had already changed by hand (left alone). */
+  skipped: UpdatableField[];
+}
+
+export interface TemplateUpdateDiff {
+  add: GeneratedTask[];
+  remove: LiveTaskFull[];
+  update: TaskChange[];
+  /** Started tasks the update would have changed or removed: left exactly as they are. */
+  kept: LiveTaskFull[];
+}
+
+/** JSON with sorted object keys (stored jsonb doesn't keep key order). */
+function stable(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(v);
+}
+
+const norm = (f: UpdatableField, v: unknown): string => {
+  if (f === "dependsOn" && Array.isArray(v)) return stable([...v].sort());
+  if (v === undefined || v === null || v === "" || v === false) return f === "subItems" || f === "dependsOn" ? "[]" : "null";
+  if (Array.isArray(v) && v.length === 0) return "[]";
+  return stable(v);
+};
+
 /**
- * What "apply template update to this project" would do. Only not-started
- * template tasks change; anything started or added by hand is kept.
+ * Three-way diff for "apply template update": what changed between the
+ * revision a project came from (`base`) and the latest one (`next`), applied
+ * to the project as it is now (`live`). Only what the template changed is
+ * touched; a field someone already changed by hand on the project is left
+ * alone; tasks deleted by hand stay deleted; started tasks never change.
  */
-export function templateUpdateDiff(next: TemplateDef, toggles: ReadonlySet<string>, live: readonly LiveTask[]): TemplateUpdateDiff {
-  const gen = generateChecklist(next, toggles);
-  const wanted = new Map(gen.tasks.map((k) => [k.key, k]));
-  const present = new Set(live.map((l) => l.templateKey).filter(Boolean) as string[]);
-  const out: TemplateUpdateDiff = { add: gen.tasks.filter((k) => !present.has(k.key)), remove: [], rename: [], kept: [] };
-  for (const l of live) {
-    if (!l.templateKey) continue;
-    const w = wanted.get(l.templateKey);
-    if (!w) (l.started ? out.kept : out.remove).push(l);
-    else if (w.title !== l.title) {
-      if (l.started) out.kept.push(l);
-      else out.rename.push({ task: l, to: w.title });
+export function templateUpdateDiff(base: TemplateDef, next: TemplateDef, toggles: ReadonlySet<string>, live: readonly LiveTaskFull[]): TemplateUpdateDiff {
+  const b = new Map(generateChecklist(base, toggles).tasks.map((k) => [k.key, k]));
+  const n = new Map(generateChecklist(next, toggles).tasks.map((k) => [k.key, k]));
+  const byKey = new Map(live.filter((l) => l.templateKey).map((l) => [l.templateKey!, l]));
+  const out: TemplateUpdateDiff = { add: [], remove: [], update: [], kept: [] };
+  for (const [key, k] of n) if (!b.has(key) && !byKey.has(key)) out.add.push(k);
+  for (const [key] of b) {
+    if (n.has(key)) continue;
+    const l = byKey.get(key);
+    if (l) (l.started ? out.kept : out.remove).push(l);
+  }
+  for (const [key, nk] of n) {
+    const bk = b.get(key);
+    const l = byKey.get(key);
+    if (!bk || !l) continue;
+    const changedFields = UPDATABLE_FIELDS.filter((f) => norm(f, bk[f]) !== norm(f, nk[f]));
+    if (!changedFields.length) continue;
+    if (l.started) {
+      out.kept.push(l);
+      continue;
     }
+    const changes: Partial<Pick<GeneratedTask, UpdatableField>> = {};
+    const skipped: UpdatableField[] = [];
+    for (const f of changedFields) {
+      if (norm(f, l[f]) === norm(f, bk[f])) (changes as Record<string, unknown>)[f] = nk[f];
+      else skipped.push(f);
+    }
+    if (Object.keys(changes).length || skipped.length) out.update.push({ task: l, changes, skipped });
   }
   return out;
 }
 
 export function diffIsEmpty(d: TemplateUpdateDiff): boolean {
-  return d.add.length + d.remove.length + d.rename.length === 0;
+  return d.add.length + d.remove.length + d.update.filter((u) => Object.keys(u.changes).length).length === 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -334,6 +413,10 @@ export interface ProjectSnapshotTask {
   requiredAttachment: string | null;
   recurrence: Recurrence | null;
   toggleSource: string[];
+  killScreen?: boolean;
+  milestone?: boolean;
+  /** From the source template, when known. */
+  hideIf?: string[];
 }
 
 /** Keys that are safe, readable and unique. */
@@ -352,10 +435,20 @@ export function slugKey(text: string, taken: Set<string>): string {
 }
 
 export function projectToTemplate(
-  input: { name: string; projectType: ProjectTypeKey; description?: string | null; phases: { key: string; name: string; status: string; startedOn: string | null }[]; tasks: ProjectSnapshotTask[] },
+  input: {
+    name: string;
+    projectType: ProjectTypeKey;
+    description?: string | null;
+    phases: { key: string; name: string; status: string; startedOn: string | null; showIf?: string[]; hideIf?: string[] }[];
+    tasks: ProjectSnapshotTask[];
+  },
 ): TemplateDef {
-  const phases = input.phases.filter((p) => p.status !== "skipped").map((p) => ({ key: p.key, name: p.name }));
+  // Phases skipped by hand are left out; phases set aside by a condition keep their condition.
+  const phases = input.phases
+    .filter((p) => p.status !== "skipped" || p.showIf?.length || p.hideIf?.length)
+    .map((p) => ({ key: p.key, name: p.name, ...(p.showIf?.length ? { showIf: p.showIf } : {}), ...(p.hideIf?.length ? { hideIf: p.hideIf } : {}) }));
   const phaseKeys = new Set(phases.map((p) => p.key));
+  const keptIds = new Set(input.tasks.filter((t) => phaseKeys.has(t.phaseKey)).map((t) => t.id));
   const starts = new Map(input.phases.map((p) => [p.key, p.startedOn]));
   const taken = new Set<string>();
   const keyOf = new Map<string, string>();
@@ -366,7 +459,8 @@ export function projectToTemplate(
       // Keep the rule a task came with; for hand-made tasks, derive "days after phase start" from the dates.
       const start = starts.get(t.phaseKey);
       const due: DueRule = t.due ?? { days: t.dueOn && start ? Math.max(0, daysBetween(start, t.dueOn)) : 14, unit: "calendar", from: "phase_start" };
-      const anchor = typeof due.from === "object" ? input.tasks.find((x) => x.templateKey === (due.from as { task: string }).task) : null;
+      const anchorTask = typeof due.from === "object" ? input.tasks.find((x) => x.templateKey === (due.from as { task: string }).task) : null;
+      const anchor = anchorTask && keptIds.has(anchorTask.id) ? anchorTask : null;
       return {
         key: keyOf.get(t.id)!,
         phaseKey: t.phaseKey,
@@ -376,12 +470,54 @@ export function projectToTemplate(
         due: typeof due.from === "object" ? (anchor ? { ...due, from: { task: keyOf.get(anchor.id)! } } : { ...due, from: "phase_start" }) : due,
         requiresApproval: t.requiresApproval,
         approverRole: t.approverRole,
-        dependsOn: t.dependsOnIds.map((id) => keyOf.get(id)).filter((k): k is string => !!k),
+        // Prerequisites that aren't in the new template are dropped.
+        dependsOn: t.dependsOnIds.filter((id) => keptIds.has(id)).map((id) => keyOf.get(id)).filter((k): k is string => !!k),
         subItems: t.subItems,
         requiredAttachment: t.requiredAttachment,
         recurrence: t.recurrence,
+        killScreen: !!t.killScreen,
+        milestone: !!t.milestone,
         showIf: t.toggleSource.length ? t.toggleSource : undefined,
+        hideIf: t.hideIf?.length ? t.hideIf : undefined,
       };
     });
   return { name: input.name, projectType: input.projectType, description: input.description ?? null, phases, tasks };
+}
+
+/**
+ * When saving a project as a template, keep what the source template had for
+ * conditions this project doesn't have on: its conditional phases and tasks.
+ * References to anything not in the result are dropped.
+ */
+export function mergeConditionalParts(saved: TemplateDef, source: TemplateDef | null): TemplateDef {
+  if (!source) return saved;
+  const phases = [...saved.phases];
+  for (const [i, sp] of source.phases.entries()) {
+    if (phases.some((p) => p.key === sp.key) || !(sp.showIf?.length || sp.hideIf?.length)) continue;
+    // Insert after the nearest earlier source phase that's present.
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const idx = phases.findIndex((p) => p.key === source.phases[j]!.key);
+      if (idx !== -1) {
+        at = idx + 1;
+        break;
+      }
+    }
+    phases.splice(at, 0, { ...sp });
+  }
+  const phaseKeys = new Set(phases.map((p) => p.key));
+  const taken = new Set(saved.tasks.map((k) => k.key));
+  const conditionalPhase = new Set(source.phases.filter((p) => p.showIf?.length || p.hideIf?.length).map((p) => p.key));
+  const extra = source.tasks.filter((k) => !taken.has(k.key) && phaseKeys.has(k.phaseKey) && (k.showIf?.length || k.hideIf?.length || conditionalPhase.has(k.phaseKey)));
+  const tasks = [...saved.tasks, ...extra.map((k) => ({ ...k }))];
+  const keys = new Set(tasks.map((k) => k.key));
+  return {
+    ...saved,
+    phases,
+    tasks: tasks.map((k) => ({
+      ...k,
+      dependsOn: (k.dependsOn ?? []).filter((d) => keys.has(d)),
+      due: typeof k.due.from === "object" && !keys.has(k.due.from.task) ? { ...k.due, from: "phase_start" as const } : k.due,
+    })),
+  };
 }

@@ -246,7 +246,28 @@ const MATRIX: Record<string, Row | "public"> = {
   },
   "templates.projects": { allowed: TEMPLATE_EDITORS, call: (c, f) => c.templates.projects({ templateId: f.templateId }) },
   "templates.updatePreview": { allowed: EDITORS, call: (c, f) => c.templates.updatePreview({ projectId: f.projectId }) },
-  "templates.applyUpdate": { allowed: EDITORS, call: (c, f) => c.templates.applyUpdate({ projectIds: [f.projectId] }) },
+  "templates.applyUpdate": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [t] = await db().select({ version: schema.template.version }).from(schema.template).where(eq(schema.template.id, f.templateId));
+      return c.templates.applyUpdate({ projectIds: [f.projectId], expectedVersion: t!.version });
+    },
+  },
+  "checklist.templateUpdatePreview": { allowed: EDITORS, call: (c, f) => c.checklist.templateUpdatePreview({ projectId: f.projectId }) },
+  "checklist.applyTemplateUpdate": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [t] = await db().select({ version: schema.template.version }).from(schema.template).where(eq(schema.template.id, f.templateId));
+      return c.checklist.applyTemplateUpdate({ projectId: f.projectId, expectedVersion: t!.version });
+    },
+  },
+  "checklist.setSubItem": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => {
+      const [t] = await db().select().from(schema.task).where(and(eq(schema.task.projectId, f.projectId), eq(schema.task.templateKey, "dot_permits")));
+      return c.checklist.setSubItem({ projectId: f.projectId, taskId: t!.id, itemId: t!.subItems[0]!.id, done: false });
+    },
+  },
 
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],

@@ -49,7 +49,7 @@ export function TogglesDialog({ projectId, checklist, onClose, onChanged }: { pr
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!changed || preview.isFetching} loading={apply.isPending} onClick={() => apply.mutate({ projectId, toggles: on, removeStarted })}>
+          <Button disabled={!changed || preview.isFetching} loading={apply.isPending} onClick={() => apply.mutate({ projectId, toggles: on, removeStarted, expectedToggles: checklist.toggles })}>
             Apply changes
           </Button>
         </>

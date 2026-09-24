@@ -8,7 +8,7 @@ import { generateChecklist, scheduleDueDates, type TemplateDef } from "@/core/te
 import { todayET } from "@/core/time";
 import { schema } from "../../db";
 import { recordAudit } from "../../services/audit";
-import { applyTemplateUpdate, assertValidTemplate, effectiveToggles, ensureDefaultTemplates, loadTemplate, templateUpdatePreview } from "../../services/checklist";
+import { applyTemplateUpdate, assertValidTemplate, describeDiff, effectiveToggles, ensureDefaultTemplates, loadTemplate, templateUpdatePreview } from "../../services/checklist";
 import { globalProcedure, projectAccess, requireProject, router, type AuthedContext } from "../init";
 
 const conflict = () =>
@@ -178,26 +178,21 @@ export const templatesRouter = router({
       await requireChecklistEdit(ctx, input.projectId);
       const p = await templateUpdatePreview(ctx.db, input.projectId);
       if (!p) throw new TRPCError({ code: "BAD_REQUEST", message: "This project wasn't made from a template." });
-      return {
-        fromVersion: p.fromVersion,
-        toVersion: p.toVersion,
-        templateName: p.templateName,
-        add: p.diff.add.map((k) => ({ key: k.key, title: k.title, phaseKey: k.phaseKey })),
-        remove: p.diff.remove.map((t) => ({ id: t.id, title: t.title })),
-        rename: p.diff.rename.map((r) => ({ id: r.task.id, from: r.task.title, to: r.to })),
-        kept: p.diff.kept.map((t) => ({ id: t.id, title: t.title })),
-      };
+      return { fromVersion: p.fromVersion, toVersion: p.toVersion, templateName: p.templateName, ...describeDiff(p.diff) };
     }),
 
-  /** Apply the latest version to the chosen projects. */
+  /**
+   * Apply the reviewed version to the chosen projects, all or nothing.
+   * Refused if the template was saved again after the review.
+   */
   applyUpdate: globalProcedure("templates.edit")
-    .input(z.object({ projectIds: z.array(z.uuid()).min(1).max(100) }))
+    .input(z.object({ projectIds: z.array(z.uuid()).min(1).max(100), expectedVersion: z.number().int().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const results: { projectId: string; added: number; removed: number; renamed: number; kept: number }[] = [];
-      for (const projectId of input.projectIds) {
-        await requireChecklistEdit(ctx, projectId);
-        const r = await ctx.db.transaction(async (tx) => {
-          const out = await applyTemplateUpdate(tx, projectId, ctx.viewer.id);
+      for (const projectId of input.projectIds) await requireChecklistEdit(ctx, projectId);
+      return ctx.db.transaction(async (tx) => {
+        const results: { projectId: string; added: number; removed: number; changed: number; kept: number }[] = [];
+        for (const projectId of input.projectIds) {
+          const out = await applyTemplateUpdate(tx, projectId, ctx.viewer.id, input.expectedVersion);
           await recordAudit(tx, {
             actorId: ctx.viewer.id,
             actorName: ctx.viewer.name,
@@ -205,15 +200,14 @@ export const templatesRouter = router({
             entityType: "checklist",
             entityId: projectId,
             projectId,
-            summary: `${ctx.viewer.name} applied the latest template: ${out.added} added, ${out.removed} removed, ${out.renamed} renamed`,
+            summary: `${ctx.viewer.name} applied the latest template: ${out.added} added, ${out.removed} removed, ${out.changed} changed`,
             data: out,
             ip: ctx.ip,
           });
-          return out;
-        });
-        results.push({ projectId, ...r });
-      }
-      return results;
+          results.push({ projectId, ...out });
+        }
+        return results;
+      });
     }),
 });
 

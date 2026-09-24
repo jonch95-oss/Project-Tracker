@@ -11,32 +11,36 @@ import type { Checklist } from "./checklist-tab";
 export function TemplateUpdateDialog({ projectId, onClose, onChanged }: { projectId: string; onClose: () => void; onChanged: () => Promise<unknown> }) {
   const trpc = useTRPC();
   const toast = useToast();
-  const q = useQuery(trpc.templates.updatePreview.queryOptions({ projectId }));
+  const q = useQuery(trpc.checklist.templateUpdatePreview.queryOptions({ projectId }));
   const apply = useMutation(
-    trpc.templates.applyUpdate.mutationOptions({
-      onSuccess: async ([r]) => {
-        toast("success", `Template update applied: ${r!.added} added, ${r!.removed} removed, ${r!.renamed} renamed`);
+    trpc.checklist.applyTemplateUpdate.mutationOptions({
+      onSuccess: async (r) => {
+        toast("success", `Template update applied: ${r.added} added, ${r.removed} removed, ${r.changed} changed`);
         onClose();
         await onChanged();
       },
-      onError: (e) => toast("error", errorMessage(e)),
+      onError: async (e) => {
+        toast("error", errorMessage(e));
+        await q.refetch();
+      },
     }),
   );
   const d = q.data;
-  const empty = d && d.add.length + d.remove.length + d.rename.length === 0;
+  const changes = d?.update.filter((u) => u.fields.length) ?? [];
+  const empty = d && d.add.length + d.remove.length + changes.length === 0;
   return (
     <Dialog
       open
       onClose={onClose}
       size="lg"
       title="Apply template update"
-      description={d ? `${d.templateName}: version ${d.fromVersion ?? "?"} → ${d.toVersion}. Only tasks that haven't started change.` : undefined}
+      description={d ? `${d.templateName}: version ${d.fromVersion ?? "?"} → ${d.toVersion}. Only what the template changed; tasks that have started, and anything changed by hand here, stay as they are.` : undefined}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!d} loading={apply.isPending} onClick={() => apply.mutate({ projectIds: [projectId] })}>
+          <Button disabled={!d} loading={apply.isPending} onClick={() => d && apply.mutate({ projectId, expectedVersion: d.toVersion })}>
             {empty ? "Mark as up to date" : "Apply to this project"}
           </Button>
         </>
@@ -47,15 +51,33 @@ export function TemplateUpdateDialog({ projectId, onClose, onChanged }: { projec
       ) : q.isError ? (
         <p className="text-sm text-blocked-text">{errorMessage(q.error)}</p>
       ) : (
-        <div className="flex flex-col gap-5 text-sm">
-          {empty && <p className="text-muted">Nothing on this checklist changes.</p>}
-          <DiffList title="Added" items={d!.add.map((a) => a.title)} />
-          <DiffList title="Removed (not started)" items={d!.remove.map((a) => a.title)} />
-          <DiffList title="Renamed" items={d!.rename.map((r) => `${r.from} → ${r.to}`)} />
-          <DiffList title="Kept as they are (already started)" items={d!.kept.map((a) => a.title)} muted />
-        </div>
+        <DiffSummary diff={d!} />
       )}
     </Dialog>
+  );
+}
+
+export type DiffView = {
+  add: { key: string; title: string }[];
+  remove: { id: string; title: string }[];
+  update: { id: string; title: string; newTitle: string | null; fields: string[]; skipped: string[] }[];
+  kept: { id: string; title: string }[];
+};
+
+/** The full list of what an update does (no truncation). */
+export function DiffSummary({ diff: d }: { diff: DiffView }) {
+  const changes = d.update.filter((u) => u.fields.length);
+  const skippedOnly = d.update.filter((u) => u.skipped.length);
+  const empty = d.add.length + d.remove.length + changes.length === 0;
+  return (
+    <div className="flex flex-col gap-5 text-sm">
+      {empty && <p className="text-muted">Nothing on this checklist changes.</p>}
+      <DiffList title="Added" items={d.add.map((a) => a.title)} />
+      <DiffList title="Removed (not started)" items={d.remove.map((a) => a.title)} />
+      <DiffList title="Changed" items={changes.map((u) => `${u.title}${u.newTitle ? ` → ${u.newTitle}` : ""}: ${u.fields.join(", ")}`)} />
+      <DiffList title="Changed here by hand, left alone" items={skippedOnly.map((u) => `${u.title}: ${u.skipped.join(", ")}`)} muted />
+      <DiffList title="Already started, left alone" items={d.kept.map((a) => a.title)} muted />
+    </div>
   );
 }
 

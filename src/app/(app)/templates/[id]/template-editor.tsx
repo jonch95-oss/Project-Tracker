@@ -14,6 +14,7 @@ import { describeConditions, TOGGLES, toggleLabel } from "@/core/toggles";
 import { formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { errorMessage, useTRPC } from "@/lib/trpc";
+import { DiffSummary } from "../../projects/[id]/checklist-extras";
 
 const RECUR_LABEL: Record<string, string> = { weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
 const ROLES = ["PM", "Acquisitions", "Legal", "Finance", "Construction", "Design", "Sales", "Owner", "Partner"];
@@ -688,11 +689,14 @@ function ProjectsDialog({ templateId, version, dirty, onClose }: { templateId: s
   const apply = useMutation(
     trpc.templates.applyUpdate.mutationOptions({
       onSuccess: async ([r]) => {
-        toast("success", `Applied: ${r!.added} added, ${r!.removed} removed, ${r!.renamed} renamed`);
+        toast("success", `Applied: ${r!.added} added, ${r!.removed} removed, ${r!.changed} changed`);
         setReviewing(null);
         await qc.invalidateQueries({ queryKey: trpc.templates.projects.queryKey({ templateId }) });
       },
-      onError: (e) => toast("error", errorMessage(e)),
+      onError: async (e) => {
+        toast("error", errorMessage(e));
+        await preview.refetch();
+      },
     }),
   );
   const d = preview.data;
@@ -728,24 +732,8 @@ function ProjectsDialog({ templateId, version, dirty, onClose }: { templateId: s
                     <Skeleton className="h-16" />
                   ) : (
                     <>
-                      <p>
-                        Adds <span className="num">{d.add.length}</span>, removes <span className="num">{d.remove.length}</span> not started, renames <span className="num">{d.rename.length}</span>; keeps{" "}
-                        <span className="num">{d.kept.length}</span> started tasks as they are.
-                      </p>
-                      <ul className="mt-2 list-disc pl-5 text-muted">
-                        {d.add.slice(0, 6).map((a) => (
-                          <li key={a.key}>+ {a.title}</li>
-                        ))}
-                        {d.remove.slice(0, 6).map((a) => (
-                          <li key={a.id}>− {a.title}</li>
-                        ))}
-                        {d.rename.slice(0, 6).map((a) => (
-                          <li key={a.id}>
-                            {a.from} → {a.to}
-                          </li>
-                        ))}
-                      </ul>
-                      <Button size="sm" className="mt-3" loading={apply.isPending} onClick={() => apply.mutate({ projectIds: [p.id] })}>
+                      <DiffSummary diff={d} />
+                      <Button size="sm" className="mt-3" loading={apply.isPending} onClick={() => apply.mutate({ projectIds: [p.id], expectedVersion: d.toVersion })}>
                         Apply to {p.name}
                       </Button>
                     </>
