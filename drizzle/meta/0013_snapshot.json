@@ -1,5 +1,5 @@
 {
-  "id": "b0277bac-baba-4900-ab55-d513f1c3e5b4",
+  "id": "b91bc735-a96a-4267-b8d5-6b23787993a5",
   "prevId": "b6b98ba9-eb36-450c-b0fb-253896a401d7",
   "version": "7",
   "dialect": "postgresql",
@@ -1805,6 +1805,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "version_id": {
+          "name": "version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "sort_order": {
           "name": "sort_order",
           "type": "integer",
@@ -1876,6 +1882,19 @@
           "tableTo": "file",
           "columnsFrom": [
             "file_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drawing_sheet_version_id_file_version_id_fk": {
+          "name": "drawing_sheet_version_id_file_version_id_fk",
+          "tableFrom": "drawing_sheet",
+          "tableTo": "file_version",
+          "columnsFrom": [
+            "version_id"
           ],
           "columnsTo": [
             "id"
@@ -3965,6 +3984,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "meeting_item_task_idx": {
+          "name": "meeting_item_task_idx",
+          "columns": [
+            {
+              "expression": "task_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -5125,6 +5159,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "project_photo_site_log_idx": {
+          "name": "project_photo_site_log_idx",
+          "columns": [
+            {
+              "expression": "site_log_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -5139,6 +5188,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_photo_site_log_id_site_log_id_fk": {
+          "name": "project_photo_site_log_id_site_log_id_fk",
+          "tableFrom": "project_photo",
+          "tableTo": "site_log",
+          "columnsFrom": [
+            "site_log_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "project_photo_uploaded_by_id_user_id_fk": {
@@ -5391,6 +5453,21 @@
             },
             {
               "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "punch_sheet_idx": {
+          "name": "punch_sheet_idx",
+          "columns": [
+            {
+              "expression": "sheet_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -6631,6 +6708,22 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "schedule_baseline_current_idx": {
+          "name": "schedule_baseline_current_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"schedule_baseline\".\"status\" = 'current'",
           "concurrently": false,
           "method": "btree",
           "with": {}

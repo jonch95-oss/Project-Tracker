@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { sql } from "drizzle-orm";
@@ -311,11 +312,11 @@ export const projectPhoto = pgTable(
     caption: text("caption"),
     takenAt: timestamp("taken_at", { withTimezone: true }),
     /** Module D: a photo taken for a day's site log. */
-    siteLogId: uuid("site_log_id"),
+    siteLogId: uuid("site_log_id").references((): AnyPgColumn => siteLog.id, { onDelete: "set null" }),
     uploadedById: text("uploaded_by_id").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
-  (t) => [index("project_photo_project_idx").on(t.projectId, t.createdAt), uniqueIndex("project_photo_object_idx").on(t.objectKey)],
+  (t) => [index("project_photo_project_idx").on(t.projectId, t.createdAt), uniqueIndex("project_photo_object_idx").on(t.objectKey), index("project_photo_site_log_idx").on(t.siteLogId)],
 );
 
 /**
@@ -1132,7 +1133,11 @@ export const scheduleBaseline = pgTable(
     lockedAt: timestamp("locked_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("schedule_baseline_number_idx").on(t.projectId, t.number)],
+  (t) => [
+    uniqueIndex("schedule_baseline_number_idx").on(t.projectId, t.number),
+    // One current baseline per project, whichever path locks it.
+    uniqueIndex("schedule_baseline_current_idx").on(t.projectId).where(sql`${t.status} = 'current'`),
+  ],
 );
 
 /** Module F: requests for information. */
@@ -1260,6 +1265,10 @@ export const drawingSheet = pgTable(
     fileId: uuid("file_id")
       .notNull()
       .references(() => file.id, { onDelete: "cascade" }),
+    /** The version issued with the set: a later upload to the same file doesn't change what this set shows (or where its pins sit). */
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => fileVersion.id, { onDelete: "cascade" }),
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: createdAt(),
   },
@@ -1296,7 +1305,7 @@ export const punchItem = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("punch_number_idx").on(t.projectId, t.number), index("punch_filter_idx").on(t.projectId, t.status)],
+  (t) => [uniqueIndex("punch_number_idx").on(t.projectId, t.number), index("punch_filter_idx").on(t.projectId, t.status), index("punch_sheet_idx").on(t.sheetId)],
 );
 
 /** Module G: meetings and their items (notes and action items that become tasks). */
@@ -1337,9 +1346,10 @@ export const meetingItem = pgTable(
     taskId: uuid("task_id").references(() => task.id, { onDelete: "set null" }),
     /** Carried forward from an earlier meeting of the same type. */
     carriedFromId: uuid("carried_from_id"),
-    status: text("status", { enum: ["open", "closed"] }).notNull().default("open"),
+    /** "carried": moved on to the next meeting's minutes (still open there), not done. */
+    status: text("status", { enum: ["open", "closed", "carried"] }).notNull().default("open"),
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: createdAt(),
   },
-  (t) => [index("meeting_item_meeting_idx").on(t.meetingId, t.sortOrder)],
+  (t) => [index("meeting_item_meeting_idx").on(t.meetingId, t.sortOrder), index("meeting_item_task_idx").on(t.taskId)],
 );

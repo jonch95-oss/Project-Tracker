@@ -177,6 +177,8 @@ async function loadPdf(url: string): Promise<PdfTask> {
   return pdfjs.getDocument({ url }) as unknown as PdfTask;
 }
 
+const MAX_CANVAS_PIXELS = 16_000_000;
+
 function SheetViewer({ projectId, sheetId, onBack }: { projectId: string; sheetId: string; onBack: () => void }) {
   const trpc = useTRPC();
   const q = useQuery(trpc.drawings.sheet.queryOptions({ projectId, sheetId }));
@@ -222,7 +224,11 @@ function SheetViewer({ projectId, sheetId, onBack }: { projectId: string; sheetI
       const base = p.getViewport({ scale: 1 });
       const width = box.current!.clientWidth * zoom;
       const scale = width / base.width;
-      const vp = p.getViewport({ scale: scale * (window.devicePixelRatio || 1) });
+      // iOS Safari draws nothing on a canvas over ~16.7M pixels; past that, render at the cap and let CSS stretch it.
+      const dpr = window.devicePixelRatio || 1;
+      const wanted = scale * dpr;
+      const cap = Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height));
+      const vp = p.getViewport({ scale: Math.min(wanted, cap) });
       const c = canvas.current!;
       c.width = vp.width;
       c.height = vp.height;
@@ -325,7 +331,7 @@ function SheetViewer({ projectId, sheetId, onBack }: { projectId: string; sheetI
           </div>
         )}
       </div>
-      {draft && <PunchDialog projectId={projectId} draft={draft} onClose={() => setDraft(null)} />}
+      {draft && <PunchDialog projectId={projectId} draft={draft} team={!!q.data?.canPin} onClose={() => setDraft(null)} />}
     </div>
   );
 }

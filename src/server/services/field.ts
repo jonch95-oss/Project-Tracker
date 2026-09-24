@@ -1,6 +1,7 @@
 import "server-only";
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { isActiveSiteDay, parseOpenMeteo } from "@/core/field";
+import { projectDueDates, type DueRule } from "@/core/templates";
 import { baselineItems, forecast, slippageDays, type ScheduleTask } from "@/core/schedule";
 import { todayET } from "@/core/time";
 import { db, schema, type DbOrTx } from "../db";
@@ -47,10 +48,25 @@ export const fetchWeather: WeatherFetcher = (lat, lon, date) => (weatherOverride
 /* Schedule (Module E)                                                 */
 /* ------------------------------------------------------------------ */
 
-export async function loadScheduleTasks(conn: DbOrTx, projectId: string): Promise<(ScheduleTask & { title: string; phaseKey: string; status: string; milestone: boolean; assigneeId: string | null; sortOrder: number })[]> {
+export type ScheduleRow = ScheduleTask & { title: string; phaseKey: string; status: string; milestone: boolean; assigneeId: string | null; sortOrder: number; projected: boolean };
+
+/**
+ * The project's tasks for the schedule. Tasks in phases that haven't started
+ * get their projected dates (flagged `projected`), so the plan, the baseline
+ * and the forecast all cover the whole job, not just the phases begun so far.
+ */
+export async function loadScheduleTasks(conn: DbOrTx, projectId: string, today = todayET()): Promise<ScheduleRow[]> {
+  return (await loadScheduleTasksFor(conn, [projectId], today)).get(projectId) ?? [];
+}
+
+/** loadScheduleTasks for many projects in three queries (portfolio cards, reports). */
+export async function loadScheduleTasksFor(conn: DbOrTx, projectIds: string[], today = todayET()): Promise<Map<string, ScheduleRow[]>> {
+  const out = new Map<string, ScheduleRow[]>();
+  if (projectIds.length === 0) return out;
   const tasks = await conn
     .select({
       id: schema.task.id,
+      projectId: schema.task.projectId,
       title: schema.task.title,
       phaseKey: schema.task.phaseKey,
       status: schema.task.status,
@@ -61,16 +77,58 @@ export async function loadScheduleTasks(conn: DbOrTx, projectId: string): Promis
       dueOn: schema.task.dueOn,
       startedOn: schema.task.startedOn,
       completedOn: schema.task.completedOn,
+      templateKey: schema.task.templateKey,
+      dueRule: schema.task.dueRule,
+      dueManual: schema.task.dueManual,
     })
     .from(schema.task)
-    .where(eq(schema.task.projectId, projectId));
+    .where(inArray(schema.task.projectId, projectIds));
+  const phases = await conn
+    .select({ projectId: schema.projectPhase.projectId, key: schema.projectPhase.key, status: schema.projectPhase.status, startedOn: schema.projectPhase.startedOn })
+    .from(schema.projectPhase)
+    .where(inArray(schema.projectPhase.projectId, projectIds))
+    .orderBy(asc(schema.projectPhase.sortOrder));
   const deps = tasks.length
     ? await conn
         .select({ taskId: schema.taskDependency.taskId, dependsOnId: schema.taskDependency.dependsOnId })
         .from(schema.taskDependency)
-        .where(inArray(schema.taskDependency.taskId, tasks.map((t) => t.id)))
+        .innerJoin(schema.task, eq(schema.task.id, schema.taskDependency.taskId))
+        .where(inArray(schema.task.projectId, projectIds))
     : [];
-  return tasks.map((t) => ({ ...t, done: t.status === "done", deps: deps.filter((d) => d.taskId === t.id).map((d) => d.dependsOnId) }));
+  const depsOf = new Map<string, string[]>();
+  for (const d of deps) depsOf.set(d.taskId, [...(depsOf.get(d.taskId) ?? []), d.dependsOnId]);
+  const keyOf = (t: (typeof tasks)[number]) => t.templateKey ?? `id:${t.id}`;
+  for (const projectId of projectIds) {
+    const mine = tasks.filter((t) => t.projectId === projectId);
+    const projected = projectDueDates(
+      mine.map((t) => ({ key: keyOf(t), phaseKey: t.phaseKey, due: (t.dueRule as DueRule | null) ?? null, dueOn: t.dueOn, dueManual: t.dueManual, completedOn: t.completedOn })),
+      phases.filter((p) => p.projectId === projectId),
+      today,
+    );
+    out.set(
+      projectId,
+      mine.map((row) => {
+        const dueOn = row.dueOn ?? (row.status === "done" ? null : (projected.get(keyOf(row)) ?? null));
+        return {
+          id: row.id,
+          title: row.title,
+          phaseKey: row.phaseKey,
+          status: row.status,
+          milestone: row.milestone,
+          assigneeId: row.assigneeId,
+          sortOrder: row.sortOrder,
+          startOn: row.startOn,
+          dueOn,
+          startedOn: row.startedOn,
+          completedOn: row.completedOn,
+          projected: !row.dueOn && !!dueOn,
+          done: row.status === "done",
+          deps: depsOf.get(row.id) ?? [],
+        };
+      }),
+    );
+  }
+  return out;
 }
 
 export async function currentBaseline(conn: DbOrTx, projectId: string) {
@@ -87,7 +145,13 @@ export async function currentBaseline(conn: DbOrTx, projectId: string) {
  * turns the request row itself into the current baseline). The previous
  * baseline is kept as history.
  */
+/** Serializes everything that locks or requests a baseline for one project (the manual lock, re-baselines, the phase hook). Call inside a transaction. */
+export async function lockBaselineMutex(tx: DbOrTx, projectId: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`baseline:${projectId}`}))`);
+}
+
 export async function lockBaseline(tx: DbOrTx, projectId: string, opts: { requestedById: string | null; approvedById: string | null; reason: string | null; requestId?: string }): Promise<string> {
+  await lockBaselineMutex(tx, projectId);
   const tasks = await loadScheduleTasks(tx, projectId);
   const { items, finish: planned } = baselineItems(tasks);
   // The finish we commit to is the forecast at lock time (work already late is already late): later slippage is new delay.
@@ -112,6 +176,7 @@ export async function nextBaselineNumber(tx: DbOrTx, projectId: string): Promise
 /** Brief Module E: the baseline locks when the project enters Pre-Construction (if none is locked yet). */
 export async function lockBaselineOnPreConstruction(tx: DbOrTx, projectId: string, currentPhaseKey: string | null, actorId: string | null): Promise<boolean> {
   if (currentPhaseKey !== "pre_construction") return false;
+  await lockBaselineMutex(tx, projectId);
   if (await currentBaseline(tx, projectId)) return false;
   await lockBaseline(tx, projectId, { requestedById: actorId, approvedById: actorId, reason: "Locked at the start of Pre-Construction" });
   return true;
@@ -122,9 +187,10 @@ export async function slippageFor(conn: DbOrTx, projectIds: string[], today = to
   const out = new Map<string, number>();
   if (projectIds.length === 0) return out;
   const baselines = await conn.select({ projectId: schema.scheduleBaseline.projectId, finishOn: schema.scheduleBaseline.finishOn }).from(schema.scheduleBaseline).where(and(inArray(schema.scheduleBaseline.projectId, projectIds), eq(schema.scheduleBaseline.status, "current")));
+  const all = await loadScheduleTasksFor(conn, baselines.filter((b) => b.finishOn).map((b) => b.projectId), today);
   for (const b of baselines) {
     if (!b.finishOn) continue;
-    const f = forecast(await loadScheduleTasks(conn, b.projectId), today);
+    const f = forecast(all.get(b.projectId) ?? [], today);
     const s = slippageDays(b.finishOn, f.finish);
     if (s !== null) out.set(b.projectId, s);
   }

@@ -70,6 +70,9 @@ describe("field and construction", () => {
       await mc.siteLogs.save({ projectId, date: today, version: r.version, manpower: [{ trade: "Concrete", company: null, count: 7 }], inspections: [], delays: [{ cause: "Rain", hours: 2, notes: null }], workPerformed: "Poured", deliveries: null, visitors: null, safety: null, notes: null });
       await expect(mc.siteLogs.save({ projectId, date: today, version: r.version, manpower: [], inspections: [], delays: [] })).rejects.toMatchObject({ code: "CONFLICT" });
       await expect(mc.siteLogs.save({ projectId, date: addDays(today, 1), manpower: [], inspections: [], delays: [] })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      // Someone opening an empty form for the same day can't silently replace the filed log.
+      await expect(ac.siteLogs.save({ projectId, date: today, manpower: [], inspections: [], delays: [] })).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(mc.siteLogs.range({ projectId, from: addDays(today, -200), to: today })).rejects.toMatchObject({ code: "BAD_REQUEST" });
       await expect(xc.siteLogs.get({ projectId, date: today })).rejects.toMatchObject({ code: "FORBIDDEN" });
       const list = await mc.siteLogs.list({ projectId, limit: 10 });
       expect(list[0]).toMatchObject({ date: today, crew: 7, delays: 1 });
@@ -124,7 +127,9 @@ describe("field and construction", () => {
       const [t2] = await db().insert(schema.task).values({ projectId, phaseKey: "construction", title: "Foundation", startOn: addDays(today, 11), dueOn: addDays(today, 25) }).returning();
       await db().insert(schema.taskDependency).values({ taskId: t2!.id, dependsOnId: t1!.id });
       const s0 = await ac.schedule.get({ projectId });
-      expect(s0.tasks.find((t) => t.id === t2!.id)).toMatchObject({ critical: true });
+      // The dependent pair shares its slack (a chain), and the template's later phases are on the plan as projected dates.
+      expect(s0.tasks.find((t) => t.id === t2!.id)!.slack).toBe(s0.tasks.find((t) => t.id === t1!.id)!.slack);
+      expect(s0.tasks.some((t) => t.projected && t.phaseKey === "construction")).toBe(true);
       expect(s0.baseline).toBeNull();
 
       // Entering Pre-Construction locks the first baseline.
@@ -136,12 +141,13 @@ describe("field and construction", () => {
       await expect(ac.schedule.lock({ projectId, reason: null })).rejects.toMatchObject({ code: "BAD_REQUEST" });
 
       // A slip on the critical path shows as days behind, on the card too.
-      // Push the foundation past the whole project's forecast finish: that's the new finish.
+      // Push the foundation two weeks past the end of Construction: every later phase follows (same weekday, so business-day rules shift exactly 14 days).
       const t2now = s1.tasks.find((t) => t.id === t2!.id)!;
-      await ac.schedule.setDates({ projectId, taskId: t2!.id, version: t2now.version, startOn: t2now.startOn, dueOn: addDays(s1.forecastFinish!, 4) });
+      const constructionEnd = s1.tasks.filter((t) => t.phaseKey === "construction" && t.forecast).map((t) => t.forecast!.finish).sort().at(-1)!;
+      await ac.schedule.setDates({ projectId, taskId: t2!.id, version: t2now.version, startOn: t2now.startOn, dueOn: addDays(constructionEnd, 14) });
       const s2 = await ac.schedule.get({ projectId });
-      expect(s2.slippage).toBe(4);
-      expect((await oc.projects.list({})).projects.find((x) => x.id === projectId)!.facts.slippage).toBe(4);
+      expect(s2.slippage).toBe(14);
+      expect((await oc.projects.list({})).projects.find((x) => x.id === projectId)!.facts.slippage).toBe(14);
       await expect(ac.schedule.setDates({ projectId, taskId: t2!.id, version: t2now.version, startOn: null, dueOn: today })).rejects.toMatchObject({ code: "CONFLICT" });
       await expect(ac.schedule.setDates({ projectId, taskId: t1!.id, version: t1!.version, startOn: addDays(today, 5), dueOn: today })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
@@ -163,6 +169,28 @@ describe("field and construction", () => {
       // An owner's own re-baseline is approved as it's made.
       expect((await oc.schedule.requestRebaseline({ projectId, reason: "Owner reset" })).approved).toBe(true);
       await expect(mc.schedule.lock({ projectId, reason: null })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("the baseline covers phases that haven't started, so starting one on time isn't new delay", async () => {
+      const pid = (await oc.projects.create({ name: `Baseline ${Date.now()}`, address: "12 Plan St", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [] })).id;
+      let p = await oc.projects.get({ projectId: pid });
+      await oc.projects.setPhase({ projectId: pid, key: "pre_construction", version: p.version });
+      const [b] = await db().select().from(schema.scheduleBaseline).where(eq(schema.scheduleBaseline.projectId, pid));
+      const construction = (await db().select({ id: schema.task.id, rule: schema.task.dueRule }).from(schema.task).where(and(eq(schema.task.projectId, pid), eq(schema.task.phaseKey, "construction")))).filter((t) => t.rule);
+      const locked = new Set(b!.items.map((i) => i.taskId));
+      expect(construction.length).toBeGreaterThan(0);
+      expect(construction.every((t) => locked.has(t.id))).toBe(true);
+      p = await oc.projects.get({ projectId: pid });
+      await oc.projects.setPhase({ projectId: pid, key: "construction", version: p.version });
+      // Construction started today, no later than planned: not behind.
+      expect((await oc.schedule.get({ projectId: pid })).slippage!).toBeLessThanOrEqual(0);
+      // Only one current baseline, whatever locks it.
+      await expect(db().insert(schema.scheduleBaseline).values({ projectId: pid, number: 99, status: "current" })).rejects.toThrow();
+    });
+
+    it("dates outside 2000-2100 are refused (a mistyped year)", async () => {
+      const [t] = await db().insert(schema.task).values({ projectId, phaseKey: "construction", title: "Typo", dueOn: addDays(today, 3) }).returning();
+      await expect(ac.schedule.setDates({ projectId, taskId: t!.id, version: t!.version, startOn: null, dueOn: "0202-05-01" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
     it("starting work records the actual start", async () => {
@@ -196,6 +224,21 @@ describe("field and construction", () => {
       expect(n.meeting.number).toBe(2);
       expect(n.items.map((i) => i.text)).toEqual(["Send revised window schedule"]);
       expect(n.items[0]).toMatchObject({ carriedFromId: a.id, taskId: item.taskId });
+      // The first minutes keep the item as carried (not done), and it's edited in the new meeting only.
+      expect((await ac.meetings.get({ projectId, id })).items.find((i) => i.id === a.id)!.status).toBe("carried");
+      await expect(ac.meetings.saveItem({ projectId, meetingId: id, id: a.id, kind: "action", text: "x", assigneeId: architect.id, dueOn: today })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      // Finished from the Tasks tab: it reads as done and doesn't carry again.
+      const [carriedTask] = await db().select().from(schema.task).where(eq(schema.task.id, item.taskId!));
+      await ac.checklist.setDone({ projectId, taskId: carriedTask!.id, version: carriedTask!.version, done: true });
+      expect((await ac.meetings.get({ projectId, id: next.id })).items[0]!.status).toBe("closed");
+      expect((await ac.meetings.list({ projectId })).find((x) => x.id === next.id)!.openActions).toBe(0);
+      const third = await ac.meetings.create({ projectId, type: "oac", heldOn: addDays(today, 14), title: null });
+      expect((await ac.meetings.get({ projectId, id: third.id })).items).toEqual([]);
+      // Reopening the item reopens its task; turning an unstarted action into a note drops its task.
+      await ac.meetings.saveItem({ projectId, meetingId: next.id, id: n.items[0]!.id, kind: "action", text: "Send revised window schedule", assigneeId: architect.id, dueOn: addDays(today, 7), status: "open" });
+      expect((await db().select().from(schema.task).where(eq(schema.task.id, item.taskId!)))[0]!.status).toBe("not_started");
+      await ac.meetings.saveItem({ projectId, meetingId: next.id, id: n.items[0]!.id, kind: "note", text: "Window schedule: FYI only", assigneeId: null, dueOn: null });
+      expect(await db().select().from(schema.task).where(eq(schema.task.id, item.taskId!))).toEqual([]);
       expect((await ac.meetings.create({ projectId, type: "lender", heldOn: today, title: null })).id).toBeTruthy();
 
       as = admin.id;
@@ -217,6 +260,7 @@ describe("field and construction", () => {
       await expect(zc.rfis.answer({ projectId, id: r.id, version: 1, answer: "No" })).rejects.toMatchObject({ code: "NOT_FOUND" });
       await expect(ac.rfis.toChangeOrder({ projectId, id: r.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
       await xc.rfis.answer({ projectId, id: r.id, version: 1, answer: "Use W14x22 instead." });
+      await expect(ac.rfis.answer({ projectId, id: r.id, version: 2, answer: "Overwrite" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
       expect((await inbox(admin.id)).some((n) => n.title === "RFI #1 answered: Beam depth at grid C")).toBe(true);
       await expect(mc.rfis.toChangeOrder({ projectId, id: r.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
       const co = await ac.rfis.toChangeOrder({ projectId, id: r.id });
@@ -224,6 +268,17 @@ describe("field and construction", () => {
       const [row] = await db().select().from(schema.changeOrder).where(eq(schema.changeOrder.id, co.changeOrderId));
       expect(row).toMatchObject({ amountCents: 1_250_000, scheduleDays: 3, status: "pending", description: "RFI #1: Beam depth at grid C" });
       expect((await ac.rfis.toChangeOrder({ projectId, id: r.id })).created).toBe(false);
+      // A file in a folder the addressee can't open isn't even named to them.
+      const fin = (await ac.files.folders({ projectId })).folders.find((f) => f.gated)!;
+      const fb = await tinyPdf();
+      const up = await ac.files.beginUpload({ projectId, folderId: fin.id, name: "Budget detail.pdf", contentType: "application/pdf", sizeBytes: fb.length });
+      for (const o of up.objects) await storage().put(o.pathname, fb, { contentType: o.contentType });
+      const finFile = (await ac.files.completeUpload({ projectId, uploadId: up.uploadId })).fileId;
+      await ac.rfis.attach({ projectId, id: r.id, fileId: finFile, on: true });
+      expect((await ac.rfis.list({ projectId })).rfis.find((x) => x.id === r.id)!.files.map((f) => f.name)).toContain("Budget detail.pdf");
+      const theirs = (await xc.rfis.list({ projectId })).rfis.find((x) => x.id === r.id)!;
+      expect(theirs.files).toEqual([]);
+      expect(theirs.hiddenFiles).toBe(1);
       const r2 = await ac.rfis.save({ projectId, subject: "Second", question: "?", fromUserId: null, fromName: "GC", toUserId: null, toName: "Engineer", dueOn: null, costImpactCents: null, scheduleImpactDays: null });
       expect(r2.number).toBe(2);
     });
@@ -263,6 +318,13 @@ describe("field and construction", () => {
       let list = await ac.drawings.list({ projectId });
       expect(list.sets[0]!.sheets.map((s) => s.number)).toEqual(["A-100", "A-101"]);
       sheetId = list.sets[0]!.sheets[1]!.id;
+      // A new version of the PDF in Files doesn't change what the issued set shows.
+      const issued = (await ac.drawings.sheet({ projectId, sheetId })).versionId;
+      const nb = await tinyPdf();
+      const nv = await ac.files.beginUpload({ projectId, fileId: f1, name: "A-101 Floor plans.pdf", contentType: "application/pdf", sizeBytes: nb.length });
+      for (const o of nv.objects) await storage().put(o.pathname, nb, { contentType: o.contentType });
+      await ac.files.completeUpload({ projectId, uploadId: nv.uploadId });
+      expect((await ac.drawings.sheet({ projectId, sheetId })).versionId).toBe(issued);
       const f3 = await upload("A-101 Floor plans rev 2.pdf");
       await ac.drawings.createSet({ projectId, discipline: "A", name: "Bid set", issuedOn: today, fileIds: [f3] });
       list = await ac.drawings.list({ projectId });
@@ -290,6 +352,10 @@ describe("field and construction", () => {
       await sc.punch.update({ projectId, id: p1.id, version: 1, status: "ready" });
       expect((await inbox(member.id)).some((n) => n.title.startsWith(`Punch #${p1.number} ready for review`))).toBe(true);
       await mc.punch.update({ projectId, id: p1.id, version: 2, status: "closed" });
+      await expect(sc.punch.update({ projectId, id: p1.id, version: 3, status: "open" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const otherProject = (await oc.projects.create({ name: `Other ${Date.now()}`, address: "1 Elsewhere", type: "gut_renovation", companyId: await companyId(), bbl: null, toggles: [] })).id;
+      const [foreign] = await db().insert(schema.projectPhoto).values({ projectId: otherProject, objectKey: `x/${Date.now()}.jpg`, thumbKey: "x/t.jpg", contentType: "image/jpeg", sizeBytes: 1, thumbBytes: 1, width: 1, height: 1 }).returning();
+      await expect(mc.punch.update({ projectId, id: p1.id, version: 3, photoId: foreign!.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
       await expect(zc.punch.update({ projectId, id: p1.id, version: 3, status: "open" })).rejects.toMatchObject({ code: "NOT_FOUND" });
       await expect(sc.punch.create({ projectId, sheetId: null, page: 1, x: null, y: null, title: "x", description: null, trade: null, vendorName: null, assigneeId: null, floor: null, unit: null, dueOn: null, photoId: null })).rejects.toMatchObject({ code: "FORBIDDEN" });
 

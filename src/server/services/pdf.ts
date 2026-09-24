@@ -104,12 +104,17 @@ export async function renderPdf(input: PdfDocInput): Promise<Uint8Array> {
     y -= 14;
     for (const [label, value] of s.rows ?? []) {
       const lines = wrap(value || "-", regular, 10, width - 150);
-      need(lines.length * 13 + 2);
+      // Keep short values together; a long one (a full day's notes) flows on to the next page line by line.
+      need(Math.min(lines.length, 4) * 13 + 2);
       text(label, PAGE.margin, 10, bold);
-      for (const l of lines) {
+      lines.forEach((l, i) => {
+        if (i > 0 && y - 13 < PAGE.margin + 24) {
+          newPage();
+          text(`${label} (continued)`, PAGE.margin, 10, bold, MUTED);
+        }
         text(l, PAGE.margin + 150, 10, regular);
         y -= 13;
-      }
+      });
       y -= 2;
     }
     for (const p of s.paragraphs ?? []) {
@@ -125,19 +130,26 @@ export async function renderPdf(input: PdfDocInput): Promise<Uint8Array> {
       const widths = s.table.widths ?? cols.map(() => width / cols.length);
       const drawRow = (cells: string[], font: PDFFont, color = INK) => {
         const wrapped = cells.map((c, i) => wrap(c || "", font, 9, widths[i]! - 6));
-        const h = Math.max(...wrapped.map((w) => w.length)) * 11 + 4;
-        need(h);
-        let x = PAGE.margin;
-        const top = y;
-        wrapped.forEach((lines, i) => {
-          let yy = top;
-          for (const l of lines) {
-            page.drawText(l, { x, y: yy, size: 9, font, color });
-            yy -= 11;
-          }
-          x += widths[i]!;
-        });
-        y = top - h;
+        const tall = Math.max(1, ...wrapped.map((w) => w.length));
+        need(Math.min(tall, 4) * 11 + 4);
+        // A row taller than what's left of the page continues on the next one instead of running off the bottom.
+        for (let from = 0; from < tall; ) {
+          if (from > 0) newPage();
+          const fit = Math.max(1, Math.floor((y - PAGE.margin - 24 - 4) / 11));
+          const to = Math.min(tall, from + fit);
+          let x = PAGE.margin;
+          const top = y;
+          wrapped.forEach((lines, i) => {
+            let yy = top;
+            for (const l of lines.slice(from, to)) {
+              page.drawText(l, { x, y: yy, size: 9, font, color });
+              yy -= 11;
+            }
+            x += widths[i]!;
+          });
+          y = top - (to - from) * 11 - 4;
+          from = to;
+        }
         page.drawLine({ start: { x: PAGE.margin, y: y + 6 }, end: { x: PAGE.w - PAGE.margin, y: y + 6 }, thickness: 0.4, color: RULE });
       };
       drawRow(cols, bold, MUTED);

@@ -74,7 +74,17 @@ function useUploadOne(projectId: string) {
   const folders = useQuery(trpc.files.folders.queryOptions({ projectId }));
   const up = useFileUpload(projectId);
   const folderId = folders.data?.folders.find((f) => f.name === "Construction")?.id ?? folders.data?.folders.find((f) => !f.gated && !f.isPhotos)?.id;
-  return { busy: up.busy, upload: async (file: File | null) => (file && folderId ? (await up.upload([file], { folderId })).lastFileId : null) };
+  // A picked file that can't be stored stops the save: a submittal logged without its file is worse than a retry.
+  return {
+    busy: up.busy,
+    upload: async (file: File | null): Promise<string | null> => {
+      if (!file) return null;
+      if (!folderId) throw new Error("There's no folder to file it in.");
+      const r = await up.upload([file], { folderId });
+      if (!r.lastFileId) throw new Error(r.errors[0] ?? "The file didn't upload. Try again.");
+      return r.lastFileId;
+    },
+  };
 }
 
 function SubmittalSheet({ projectId, s, canEdit, onClose }: { projectId: string; s: Submittal; canEdit: boolean; onClose: () => void }) {
@@ -102,6 +112,7 @@ function SubmittalSheet({ projectId, s, canEdit, onClose }: { projectId: string;
                     {r.fileName}
                   </a>
                 )}
+                {r.fileHidden && <span className="ml-2 text-[13px] text-muted">File in a folder not shared with you</span>}
                 {r.notes && <span className="mt-1 block text-[13px] text-muted">{r.notes}</span>}
               </span>
               {r.decision ? <StatusPill tone={STATUS[r.decision]!.tone}>{STATUS[r.decision]!.label}</StatusPill> : <StatusPill tone="attention">In review</StatusPill>}
@@ -128,7 +139,13 @@ function SubmittalSheet({ projectId, s, canEdit, onClose }: { projectId: string;
           <section className="flex flex-col gap-3">
             <h3 className="eyebrow">Resubmit</h3>
             <input type="file" aria-label="Revised file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
-            <Button className="self-end" variant="secondary" loading={resubmit.isPending || up.busy} onClick={async () => resubmit.mutate({ projectId, id: s.id, version: s.version, fileId: await up.upload(file) })}>
+            <Button className="self-end" variant="secondary" loading={resubmit.isPending || up.busy} onClick={async () => {
+                  try {
+                    resubmit.mutate({ projectId, id: s.id, version: s.version, fileId: await up.upload(file) });
+                  } catch (e) {
+                    onError(e);
+                  }
+                }}>
               Log revision {(s.revisions[0]?.revision ?? 0) + 1}
             </Button>
           </section>
@@ -159,7 +176,13 @@ function NewSubmittal({ projectId, onClose }: { projectId: string; onClose: () =
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     const s = (k: string) => String(f.get(k) ?? "").trim() || null;
-    create.mutate({ projectId, specSection: s("spec"), item: s("item") ?? "", submittedBy: s("by"), reviewerId: reviewer, reviewerName: reviewer ? null : s("reviewerName"), dueOn: s("due"), fileId: await up.upload(file) });
+    let fileId: string | null;
+    try {
+      fileId = await up.upload(file);
+    } catch (err) {
+      return toast("error", errorMessage(err));
+    }
+    create.mutate({ projectId, specSection: s("spec"), item: s("item") ?? "", submittedBy: s("by"), reviewerId: reviewer, reviewerName: reviewer ? null : s("reviewerName"), dueOn: s("due"), fileId });
   };
   return (
     <Dialog

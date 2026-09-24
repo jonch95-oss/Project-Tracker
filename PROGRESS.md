@@ -43,11 +43,46 @@
 
 ### Review
 
-REVIEW_PLACEHOLDER
+The independent review found 3 P1, 10 P2 and 10 P3 issues, and no P0. It checked the export routes and signed media links and found they apply the same access rules as the app. Every finding is fixed, with regression tests, except one P3 kept by design (below).
+
+The P1s were:
+
+- **The baseline covered only phases already begun.** Later phases' tasks had no dates yet, so the day Construction started, the card showed months of false slippage. Now every task in a phase that hasn't started gets a projected date: each phase starts the day after the one before it is projected to end. The baseline, the forecast and the Gantt cover the whole job, and projected bars are drawn lighter.
+- **Finished action items kept carrying forward.** An action item now counts as done once its task is done, wherever it was ticked off.
+- **Two people filing the same day's log could overwrite each other.** A second "new" log for a day that already has one is refused, with a prompt to reload.
+
+The P2s and P3s fixed:
+
+- **Earlier minutes rewritten:** carrying items forward marked them "Done" in the earlier minutes. They now read "Carried" there and are edited only in the new meeting.
+- **Hidden attachment names:** RFI and submittal attachments in folders the viewer can't open are no longer named. They see "in a folder not shared with you" instead.
+- **Punch photos:** an edit to a punch item can't attach another project's photo.
+- **Closed punch items:** a sub can't reopen an item the team closed. The dialog is read-only for them.
+- **RFI answers:** an RFI that's already answered or closed can't be answered again.
+- **PDF page breaks:** long notes and long table cells continue onto the next page instead of running off the bottom.
+- **Site-log PDF range:** a range over six months is refused, instead of silently stopping at 62 logs.
+- **Drawing versions:** each sheet now stores the file version it was issued with, so a later upload doesn't change an issued set or move its pins.
+- **Blank sheets on iPad:** the sheet viewer caps canvas size under iOS Safari's limit, so zoomed sheets no longer render blank.
+- **One current baseline:** there is exactly one current baseline per project. A shared lock covers every path that creates one, and a database index backs it up.
+- **Punch PDF filter:** the punch PDF now honours the status filter.
+- **Pin counts:** outsiders' open-pin counts include only their own items.
+- **Action item to note:** changing an action item to a note removes its task if the task hasn't started. Reopening an item reopens its task.
+- **Date range:** dates must fall between 2000 and 2100, so a mistyped year can't blow up the Gantt.
+- **Site-log photos:** they get a foreign key and an index, and punch sheets and meeting tasks get indexes.
+- **Portfolio slippage:** it loads in three queries in total instead of three per project.
+- **Outsider photos:** outsiders can't attach photos to internal site logs.
+- **Upload failures:** submittal and RFI upload failures now show an error instead of saving without the file.
+
+Kept by design: editing an open action item whose task was deleted creates the task again. An action item always has an owner, a date and a task.
 
 ### Test results
 
-TEST_PLACEHOLDER
+- 2,481 unit and integration tests pass. This milestone adds `tests/unit/schedule.test.ts`, `tests/unit/field.test.ts`, `tests/unit/pdf.test.ts`, `tests/integration/field.test.ts` (14 tests), projection tests in `tests/unit/templates.test.ts`, and permission-matrix rows for every new procedure.
+- 33 of 33 Playwright end-to-end tests pass, including `tests/e2e/construction.spec.ts`:
+  - the super files a log
+  - the owner checks the schedule against the baseline, issues a drawing set, drops a punch pin, filters punch and adds a meeting action item
+  - the outside architect answers an RFI
+- Lint and typecheck are clean.
+- Checked visually at desktop (1440px) and iPhone (390px) sizes on all seven Construction views, with no console errors and no sideways scrolling.
 
 ### Known limitations
 

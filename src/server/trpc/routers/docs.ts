@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
+import { planDate } from "../dates";
 import { clamp01, sheetNumberFromName } from "@/core/field";
 import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
@@ -12,7 +13,7 @@ import { projectProcedure, router, type AuthedContext, type ProjectAccess } from
 import { nextNumber, notifyMoneyApprovers } from "./financials";
 
 type Ctx = AuthedContext & { project: ProjectAccess };
-const date = z.iso.date();
+const date = planDate;
 const text = (max = 4000) => z.string().trim().max(max).nullish();
 const conflict = () => new TRPCError({ code: "CONFLICT", message: "Someone else just changed this. Reload to see the latest." });
 const notFound = (what: string) => new TRPCError({ code: "NOT_FOUND", message: `${what} not found` });
@@ -61,6 +62,8 @@ export const rfisRouter = router({
     const files = rows.length
       ? await ctx.db.select({ rfiId: schema.rfiAttachment.rfiId, fileId: schema.file.id, name: schema.file.name, folderId: schema.file.folderId }).from(schema.rfiAttachment).innerJoin(schema.file, eq(schema.file.id, schema.rfiAttachment.fileId)).where(inArray(schema.rfiAttachment.rfiId, rows.map((r) => r.id)))
       : [];
+    // Attachments in folders this person can't open (the gated Financial folder, unshared folders) aren't even named.
+    const seen = await visibleInFolders(ctx.db, c, files);
     return {
       rfis: rows.map((r) => ({
         ...r,
@@ -68,7 +71,8 @@ export const rfisRouter = router({
         fromLabel: r.fromUserId ? (names.get(r.fromUserId) ?? r.fromName) : r.fromName,
         toLabel: r.toUserId ? (names.get(r.toUserId) ?? r.toName) : r.toName,
         canAnswer: r.status === "open" && (r.toUserId === c.viewer.id || c.project.can("checklist.edit")),
-        files: files.filter((f) => f.rfiId === r.id).map((f) => ({ id: f.fileId, name: f.name })),
+        files: seen.filter((f) => f.rfiId === r.id).map((f) => ({ id: f.fileId, name: f.name })),
+        hiddenFiles: files.filter((f) => f.rfiId === r.id).length - seen.filter((f) => f.rfiId === r.id).length,
       })),
       access: { canEdit: c.project.can("checklist.edit"), canSeeCost: fin, canRaiseCo: c.project.can("financials.edit") },
     };
@@ -124,6 +128,7 @@ export const rfisRouter = router({
         if (!canSeeRfi(c, r)) throw notFound("RFI");
         if (r.toUserId !== c.viewer.id && !c.project.can("checklist.edit")) throw new TRPCError({ code: "FORBIDDEN", message: "Only the person it's addressed to answers this RFI." });
         if (r.version !== input.version) throw conflict();
+        if (r.status !== "open") throw new TRPCError({ code: "BAD_REQUEST", message: r.status === "answered" ? "This RFI is already answered." : "This RFI is closed." });
         await tx.update(schema.rfi).set({ answer: input.answer, answeredAt: new Date(), answeredById: c.viewer.id, status: "answered", version: r.version + 1, updatedAt: new Date() }).where(eq(schema.rfi.id, r.id));
         await recordAudit(tx, { actorId: c.viewer.id, actorName: c.viewer.name, action: "update", entityType: "rfi", entityId: r.id, projectId: input.projectId, summary: `${c.viewer.name} answered RFI #${r.number}`, ip: c.ip });
         const to = [r.createdById, r.fromUserId].filter((x): x is string => !!x);
@@ -193,13 +198,19 @@ export const submittalsRouter = router({
       .from(schema.submittal)
       .where(and(eq(schema.submittal.projectId, input.projectId), all ? undefined : eq(schema.submittal.reviewerId, c.viewer.id)))
       .orderBy(desc(schema.submittal.number));
-    const revs = rows.length ? await ctx.db.select({ rev: schema.submittalRevision, fileName: schema.file.name }).from(schema.submittalRevision).leftJoin(schema.file, eq(schema.file.id, schema.submittalRevision.fileId)).where(inArray(schema.submittalRevision.submittalId, rows.map((r) => r.id))).orderBy(desc(schema.submittalRevision.revision)) : [];
+    const revs = rows.length ? await ctx.db.select({ rev: schema.submittalRevision, fileName: schema.file.name, folderId: schema.file.folderId }).from(schema.submittalRevision).leftJoin(schema.file, eq(schema.file.id, schema.submittalRevision.fileId)).where(inArray(schema.submittalRevision.submittalId, rows.map((r) => r.id))).orderBy(desc(schema.submittalRevision.revision)) : [];
+    const okFolders = new Set((await visibleInFolders(ctx.db, c, revs.flatMap((r) => (r.folderId ? [{ folderId: r.folderId }] : [])))).map((r) => r.folderId));
     const reviewers = new Map((await ctx.db.select({ id: schema.user.id, name: schema.user.name }).from(schema.user).where(inArray(schema.user.id, rows.map((r) => r.reviewerId).filter((x): x is string => !!x).concat(["-"])))).map((u) => [u.id, u.name]));
     return {
       submittals: rows.map((s) => ({
         ...s,
         reviewerLabel: s.reviewerId ? (reviewers.get(s.reviewerId) ?? s.reviewerName) : s.reviewerName,
-        revisions: revs.filter((r) => r.rev.submittalId === s.id).map((r) => ({ ...r.rev, fileName: r.fileName })),
+        revisions: revs
+          .filter((r) => r.rev.submittalId === s.id)
+          .map((r) => {
+            const hidden = !!r.folderId && !okFolders.has(r.folderId);
+            return { ...r.rev, fileId: hidden ? null : r.rev.fileId, fileName: hidden ? null : r.fileName, fileHidden: hidden };
+          }),
         canDecide: s.status === "pending" && (s.reviewerId === c.viewer.id || c.project.can("checklist.edit")),
       })),
       canEdit: c.project.can("checklist.edit"),
@@ -273,7 +284,7 @@ const discipline = z.enum(["A", "S", "M", "E", "P", "FP"]);
 
 async function sheetsWithFiles(conn: DbOrTx, where: ReturnType<typeof and>) {
   return conn
-    .select({ sheet: schema.drawingSheet, set: schema.drawingSet, fileName: schema.file.name, folderId: schema.file.folderId, versionId: sql<string>`(select id from ${schema.fileVersion} v where v.file_id = ${schema.file.id} order by v.number desc limit 1)` })
+    .select({ sheet: schema.drawingSheet, set: schema.drawingSet, fileName: schema.file.name, folderId: schema.file.folderId, versionId: schema.drawingSheet.versionId })
     .from(schema.drawingSheet)
     .innerJoin(schema.drawingSet, eq(schema.drawingSet.id, schema.drawingSheet.setId))
     .innerJoin(schema.file, eq(schema.file.id, schema.drawingSheet.fileId))
@@ -281,8 +292,8 @@ async function sheetsWithFiles(conn: DbOrTx, where: ReturnType<typeof and>) {
     .orderBy(asc(schema.drawingSet.discipline), asc(schema.drawingSheet.sortOrder));
 }
 
-/** Sheets whose PDF lives in a folder this person can see. */
-async function visibleSheets<T extends { folderId: string }>(conn: DbOrTx, ctx: Ctx, rows: T[]): Promise<T[]> {
+/** Rows (sheets, attachments) whose file lives in a folder this person can see. */
+async function visibleInFolders<T extends { folderId: string }>(conn: DbOrTx, ctx: Ctx, rows: T[]): Promise<T[]> {
   const folders = [...new Set(rows.map((r) => r.folderId))];
   const ok = new Set<string>();
   for (const f of folders) if ((await canSeeFolderNow(conn, ctx.project.projectId, f, [ctx.viewer.id])).has(ctx.viewer.id)) ok.add(f);
@@ -293,9 +304,11 @@ export const drawingsRouter = router({
   /** "What's current": the current set per discipline, plus superseded sets as history. */
   list: projectProcedure().query(async ({ ctx, input }) => {
     const c = ctx as Ctx;
-    const rows = await visibleSheets(ctx.db, c, await sheetsWithFiles(ctx.db, eq(schema.drawingSheet.projectId, input.projectId)));
+    const rows = await visibleInFolders(ctx.db, c, await sheetsWithFiles(ctx.db, eq(schema.drawingSheet.projectId, input.projectId)));
     const sets = await ctx.db.select().from(schema.drawingSet).where(eq(schema.drawingSet.projectId, input.projectId)).orderBy(asc(schema.drawingSet.discipline), desc(schema.drawingSet.createdAt));
-    const pins = rows.length ? await ctx.db.select({ sheetId: schema.punchItem.sheetId, n: sql<number>`count(*)::int` }).from(schema.punchItem).where(and(eq(schema.punchItem.projectId, input.projectId), sql`${schema.punchItem.status} <> 'closed'`)).groupBy(schema.punchItem.sheetId) : [];
+    // Outsiders count only the items assigned to them, the same ones they see pinned.
+    const mine = c.project.can("task.viewAll") ? undefined : eq(schema.punchItem.assigneeId, c.viewer.id);
+    const pins = rows.length ? await ctx.db.select({ sheetId: schema.punchItem.sheetId, n: sql<number>`count(*)::int` }).from(schema.punchItem).where(and(eq(schema.punchItem.projectId, input.projectId), sql`${schema.punchItem.status} <> 'closed'`, mine)).groupBy(schema.punchItem.sheetId) : [];
     return {
       sets: sets
         .map((s) => ({
@@ -323,7 +336,15 @@ export const drawingsRouter = router({
         await tx.update(schema.drawingSet).set({ current: false, supersededAt: new Date() }).where(and(eq(schema.drawingSet.projectId, input.projectId), eq(schema.drawingSet.discipline, input.discipline), eq(schema.drawingSet.current, true)));
         const [set] = await tx.insert(schema.drawingSet).values({ projectId: input.projectId, discipline: input.discipline, name: input.name, issuedOn: input.issuedOn, current: true, createdById: c.viewer.id }).returning({ id: schema.drawingSet.id });
         files.sort((a, b) => sheetNumberFromName(a.name).localeCompare(sheetNumberFromName(b.name), undefined, { numeric: true }));
-        await tx.insert(schema.drawingSheet).values(files.map((f, i) => ({ setId: set!.id, projectId: input.projectId, number: sheetNumberFromName(f.name), title: f.name.replace(/\.pdf$/i, ""), fileId: f.id, sortOrder: i })));
+        // Pin each sheet to the version issued today; a later upload to the same file is a new set's business.
+        const versions = await tx
+          .selectDistinctOn([schema.fileVersion.fileId], { fileId: schema.fileVersion.fileId, id: schema.fileVersion.id })
+          .from(schema.fileVersion)
+          .where(inArray(schema.fileVersion.fileId, files.map((f) => f.id)))
+          .orderBy(schema.fileVersion.fileId, desc(schema.fileVersion.number));
+        const versionOf = new Map(versions.map((v) => [v.fileId, v.id]));
+        for (const f of files) if (!versionOf.has(f.id)) throw new TRPCError({ code: "BAD_REQUEST", message: `${f.name} hasn't finished uploading.` });
+        await tx.insert(schema.drawingSheet).values(files.map((f, i) => ({ setId: set!.id, projectId: input.projectId, number: sheetNumberFromName(f.name), title: f.name.replace(/\.pdf$/i, ""), fileId: f.id, versionId: versionOf.get(f.id)!, sortOrder: i })));
         await recordAudit(tx, { actorId: c.viewer.id, actorName: c.viewer.name, action: "create", entityType: "drawing_set", entityId: set!.id, projectId: input.projectId, summary: `${c.viewer.name} issued ${input.discipline} set "${input.name}" (${files.length} sheets)`, ip: c.ip });
         return { id: set!.id };
       });
@@ -334,7 +355,7 @@ export const drawingsRouter = router({
     .input(z.object({ sheetId: z.uuid() }))
     .query(async ({ ctx, input }) => {
       const c = ctx as Ctx;
-      const [row] = await visibleSheets(ctx.db, c, await sheetsWithFiles(ctx.db, and(eq(schema.drawingSheet.id, input.sheetId), eq(schema.drawingSheet.projectId, input.projectId))));
+      const [row] = await visibleInFolders(ctx.db, c, await sheetsWithFiles(ctx.db, and(eq(schema.drawingSheet.id, input.sheetId), eq(schema.drawingSheet.projectId, input.projectId))));
       if (!row) throw notFound("Sheet");
       const all = c.project.can("task.viewAll");
       const pins = await ctx.db
@@ -457,8 +478,13 @@ export const punchRouter = router({
         if (!team) {
           const allowed = Object.keys(fields).every((k) => k === "status") && (fields.status === "ready" || fields.status === "open");
           if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: "Mark it ready for review; the team closes it." });
+          if (p.status === "closed") throw new TRPCError({ code: "FORBIDDEN", message: "The team closed this item. Ask them to reopen it." });
         }
         if (fields.assigneeId !== undefined) await assertOnProject(tx, input.projectId, fields.assigneeId);
+        if (fields.photoId) {
+          const [ph] = await tx.select({ id: schema.projectPhoto.id }).from(schema.projectPhoto).where(and(eq(schema.projectPhoto.id, fields.photoId), eq(schema.projectPhoto.projectId, input.projectId)));
+          if (!ph) throw notFound("Photo");
+        }
         const set = {
           ...fields,
           ...(fields.status ? { closedAt: fields.status === "closed" ? new Date() : null } : {}),

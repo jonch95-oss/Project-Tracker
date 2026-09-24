@@ -74,6 +74,8 @@ export const photosRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertCanAddPhotos(ctx);
+      // Site logs are the internal team's record; only the team files photos on them.
+      if (input.siteLogId && !ctx.project.can("task.viewAll")) throw new TRPCError({ code: "FORBIDDEN", message: "This is for the project team." });
       await assertUploadBudget(input.fullBytes + input.thumbBytes, ctx.db);
       const ext = input.contentType === "image/webp" ? "webp" : "jpg";
       const full = objectPath(input.projectId, "photos", ext);

@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
+import { planDate } from "../dates";
 import { addBusinessDays } from "@/core/calendar";
 import { KEY_DATE_KINDS, keyDateLabel, upcomingKeyDates } from "@/core/key-dates";
 import { expiryLabel, FINANCIAL_EXPIRY } from "@/core/expiries";
@@ -435,7 +436,7 @@ export const tasksRouter = router({
         taskIds: z.array(z.uuid()).min(1).max(500),
         action: z.discriminatedUnion("kind", [
           z.object({ kind: z.literal("reassign"), assigneeId: z.string().min(1).max(64).nullable() }),
-          z.object({ kind: z.literal("redate"), dueOn: z.iso.date() }),
+          z.object({ kind: z.literal("redate"), dueOn: planDate }),
           z.object({ kind: z.literal("shift"), days: z.number().int().min(-365).max(365).refine((n) => n !== 0), unit: z.enum(["business", "calendar"]) }),
         ]),
       }),
@@ -637,7 +638,7 @@ export const keyDatesRouter = router({
   }),
 
   save: projectProcedure("checklist.edit")
-    .input(z.object({ id: z.uuid().optional(), kind: z.enum(kindKeys), label: z.string().trim().max(120).nullish(), date: z.iso.date(), done: z.boolean().default(false), notes: z.string().trim().max(1000).nullish() }))
+    .input(z.object({ id: z.uuid().optional(), kind: z.enum(kindKeys), label: z.string().trim().max(120).nullish(), date: planDate, done: z.boolean().default(false), notes: z.string().trim().max(1000).nullish() }))
     .mutation(async ({ ctx, input }) => {
       if (input.kind === "other" && !input.label) throw new TRPCError({ code: "BAD_REQUEST", message: "Name the date." });
       return ctx.db.transaction(async (tx) => {

@@ -33,7 +33,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/export/projects/
       {
         heading: "Action items",
         ...(actions.length
-          ? { table: { columns: ["Item", "Who", "Due", "Status"], widths: [250, 110, 80, 64], rows: actions.map((a) => [`${a.carriedFromId ? "(carried) " : ""}${a.text}`, a.assigneeName ?? "", a.dueOn ?? "", a.taskStatus === "done" || a.status === "closed" ? "Done" : "Open"]) } }
+          ? { table: { columns: ["Item", "Who", "Due", "Status"], widths: [250, 110, 80, 64], rows: actions.map((a) => [`${a.carriedFromId ? "(carried) " : ""}${a.text}`, a.assigneeName ?? "", a.dueOn ?? "", a.status === "closed" ? "Done" : a.status === "carried" ? "Carried" : "Open"]) } }
           : { paragraphs: ["None."] }),
       },
     ],

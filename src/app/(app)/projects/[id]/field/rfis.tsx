@@ -103,7 +103,8 @@ function RfiSheet({ projectId, rfi: r, access, onClose, onEdit }: { projectId: s
     if (!folderId) return toast("error", "No folder to file it in.");
     for (const file of files) {
       const res = await up.upload([file], { folderId });
-      if (res.lastFileId) await attach.mutateAsync({ projectId, id: r.id, fileId: res.lastFileId, on: true });
+      if (res.lastFileId) await attach.mutateAsync({ projectId, id: r.id, fileId: res.lastFileId, on: true }).catch(() => undefined);
+      else toast("error", res.errors[0] ?? `${file.name} didn't upload. Try again.`);
     }
   }
   return (
@@ -168,7 +169,8 @@ function RfiSheet({ projectId, rfi: r, access, onClose, onEdit }: { projectId: s
         </section>
         <section>
           <h3 className="eyebrow mb-2">Files</h3>
-          {r.files.length === 0 && <p className="text-[13px] text-muted">None attached.</p>}
+          {r.files.length === 0 && r.hiddenFiles === 0 && <p className="text-[13px] text-muted">None attached.</p>}
+          {r.hiddenFiles > 0 && <p className="text-[13px] text-muted">{r.hiddenFiles === 1 ? "1 file is" : `${r.hiddenFiles} files are`} in a folder not shared with you.</p>}
           <ul className="flex flex-col gap-1 text-sm">
             {r.files.map((f) => (
               <li key={f.id}>
@@ -181,7 +183,17 @@ function RfiSheet({ projectId, rfi: r, access, onClose, onEdit }: { projectId: s
           {access.canEdit && (
             <label className="mt-2 inline-flex cursor-pointer text-[13px] underline underline-offset-4">
               {up.busy ? "Uploading…" : "Attach a file"}
-              <input type="file" multiple className="sr-only" onChange={(e) => void addFiles([...(e.target.files ?? [])])} />
+              <input
+                type="file"
+                multiple
+                className="sr-only"
+                onChange={(e) => {
+                  const picked = [...(e.target.files ?? [])];
+                  // Reset so picking the same file again (after a failure) fires again.
+                  e.target.value = "";
+                  void addFiles(picked);
+                }}
+              />
             </label>
           )}
         </section>

@@ -34,6 +34,9 @@ export function parseOpenMeteo(body: unknown, date: string): { summary: string; 
 }
 
 /** Phases where the site is being worked on (a missing log gets a 5pm nudge on weekdays). */
+/** One site-log PDF covers at most this many days (a draw period or a claim, not the whole job at once). */
+export const MAX_LOG_RANGE_DAYS = 184;
+
 export const ACTIVE_SITE_PHASES = new Set(["construction", "pre_construction", "tco_co"]);
 
 export function isActiveSiteDay(phaseKey: string | null, date: string): boolean {
@@ -46,9 +49,18 @@ export function manpowerTotal(rows: readonly { count: number }[]): number {
   return rows.reduce((a, r) => a + (Number.isFinite(r.count) ? Math.max(0, Math.round(r.count)) : 0), 0);
 }
 
+/**
+ * An action item is done once its task is done, however the task got there
+ * (the Tasks tab, an approval, the checklist), so it's read, not synced.
+ */
+export function meetingItemStatus(i: { status: string; taskStatus?: string | null }): "open" | "closed" | "carried" {
+  if (i.status === "open" && i.taskStatus === "done") return "closed";
+  return i.status === "carried" ? "carried" : i.status === "closed" ? "closed" : "open";
+}
+
 /** Module G: open action items from the last meeting of the same type carry into the next. */
-export function carryForward<T extends { kind: string; status: string }>(previous: readonly T[]): T[] {
-  return previous.filter((i) => i.kind === "action" && i.status === "open");
+export function carryForward<T extends { kind: string; status: string; taskStatus?: string | null }>(previous: readonly T[]): T[] {
+  return previous.filter((i) => i.kind === "action" && meetingItemStatus(i) === "open");
 }
 
 export const MEETING_TYPES = [

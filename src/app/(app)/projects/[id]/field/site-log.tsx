@@ -6,8 +6,8 @@ import { ErrorState } from "@/components/ui/architecture";
 import { IconArrowLeft, IconChevronRight, IconPlus } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
 import { Button, buttonClass, Field, Input, Select, Skeleton, Textarea } from "@/components/ui/primitives";
-import { manpowerTotal } from "@/core/field";
-import { addDays, formatIsoDate, todayET } from "@/core/time";
+import { manpowerTotal, MAX_LOG_RANGE_DAYS } from "@/core/field";
+import { addDays, daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { photoUrl, uploadPhotos } from "@/lib/photo-upload";
 import { errorMessage, useTRPC, useTRPCClient, type RouterOutputs } from "@/lib/trpc";
@@ -289,9 +289,13 @@ function RecentLogs({ projectId, current, onDate }: { projectId: string; current
           <Input aria-label="From" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="num" />
           <Input aria-label="To" type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="num" />
         </div>
-        <a href={`/api/export/projects/${projectId}/site-logs?from=${from}&to=${to}`} className={buttonClass("secondary", "sm", "mt-3 w-full justify-center")}>
-          Download PDF
-        </a>
+        {from && to && from <= to && daysBetween(from, to) <= MAX_LOG_RANGE_DAYS ? (
+          <a href={`/api/export/projects/${projectId}/site-logs?from=${from}&to=${to}`} className={buttonClass("secondary", "sm", "mt-3 w-full justify-center")}>
+            Download PDF
+          </a>
+        ) : (
+          <p className="mt-3 text-[13px] text-attention-text">Pick a range of six months or less.</p>
+        )}
       </div>
     </aside>
   );

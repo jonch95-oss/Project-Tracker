@@ -140,6 +140,9 @@ function Gantt({ data, onEdit, onOpenTask }: { data: Data; onEdit?: (r: Row) => 
         <span className="inline-flex items-center gap-1.5">
           <span className="h-3 w-px bg-accent" /> Today
         </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-6 rounded-sm bg-text/70 opacity-40" /> Projected (phase not started)
+        </span>
       </div>
       <div className="overflow-x-auto rounded-card border border-border bg-surface">
         <div style={{ width: 220 + span * DAY_PX }} className="relative">
@@ -177,7 +180,7 @@ function Gantt({ data, onEdit, onOpenTask }: { data: Data; onEdit?: (r: Row) => 
                       type="button"
                       onClick={() => (onEdit ? onEdit(t) : onOpenTask(t.id))}
                       className={cn("sticky left-0 z-10 flex h-full w-[220px] shrink-0 items-center border-r border-border bg-surface px-3 text-left text-[13px] hover:bg-sunken", t.status === "done" && "text-muted line-through")}
-                      title={`${t.title}: ${d(t.planned?.start ?? null)} – ${d(t.planned?.finish ?? null)}${t.slack !== null ? `, ${t.slack} days slack` : ""}`}
+                      title={`${t.title}: ${d(t.planned?.start ?? null)} – ${d(t.planned?.finish ?? null)}${t.projected ? " (projected: its phase hasn't started)" : ""}${t.slack !== null ? `, ${t.slack} days slack` : ""}`}
                     >
                       <span className="truncate">{t.title}</span>
                     </button>
@@ -185,7 +188,7 @@ function Gantt({ data, onEdit, onOpenTask }: { data: Data; onEdit?: (r: Row) => 
                       {t.baseline?.start && t.baseline.finish && <span className="absolute top-[26px] h-1 rounded-sm bg-border" style={{ left: x(t.baseline.start), width: w(t.baseline.start, t.baseline.finish) }} />}
                       {t.planned && (
                         <span
-                          className={cn("absolute top-2.5 h-3 rounded-sm", t.status === "done" ? "bg-done/60" : t.critical ? "bg-blocked" : "bg-text/70", t.milestone && "h-3 rotate-45 rounded-none")}
+                          className={cn("absolute top-2.5 h-3 rounded-sm", t.status === "done" ? "bg-done/60" : t.critical ? "bg-blocked" : "bg-text/70", t.projected && "opacity-40", t.milestone && "h-3 rotate-45 rounded-none")}
                           style={t.milestone ? { left: x(t.planned.finish) - 2, width: 12 } : { left: x(t.planned.start), width: w(t.planned.start, t.planned.finish) }}
                         />
                       )}

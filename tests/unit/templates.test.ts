@@ -6,6 +6,7 @@ import {
   diffIsEmpty,
   generateChecklist,
   projectToTemplate,
+  projectDueDates,
   scheduleDueDates,
   slugKey,
   templateUpdateDiff,
@@ -417,5 +418,36 @@ describe("save-as-template keeps the source's conditional parts", async () => {
     // A conditional phase whose earlier neighbours are all missing goes first.
     const lone = mergeConditionalParts({ ...saved, phases: [{ key: "p2", name: "Two" }], tasks: [] }, { ...mini, phases: [{ key: "p0", name: "Zero", showIf: ["jv"] }, ...mini.phases] });
     expect(lone.phases[0]!.key).toBe("p0");
+  });
+});
+
+describe("projected dates for phases that haven't started", () => {
+  const rule = (days: number) => ({ days, unit: "calendar" as const, from: "phase_start" as const });
+  const tasks = [
+    { key: "a", phaseKey: "p1", due: rule(10), dueOn: null, dueManual: false, completedOn: null },
+    { key: "b", phaseKey: "p2", due: rule(20), dueOn: null, dueManual: false, completedOn: null },
+    { key: "c", phaseKey: "p3", due: rule(5), dueOn: null, dueManual: false, completedOn: null },
+    { key: "m", phaseKey: "p2", due: null, dueOn: "2026-12-01", dueManual: true, completedOn: null },
+  ];
+  it("each phase starts the day after the one before is projected to end", () => {
+    const out = projectDueDates(tasks, [
+      { key: "p1", status: "active", startedOn: "2026-09-01" },
+      { key: "p2", status: "pending", startedOn: null },
+      { key: "p3", status: "pending", startedOn: null },
+    ], "2026-09-02");
+    // p1 ends 09-11 (a); p2 starts 09-12, and its hand-set 12-01 date ends it; p3 starts 12-02.
+    expect(out.get("a")).toBe("2026-09-11");
+    expect(out.get("b")).toBe("2026-10-02");
+    expect(out.get("m")).toBe("2026-12-01");
+    expect(out.get("c")).toBe("2026-12-07");
+  });
+  it("a pending phase can't start in the past; skipped phases are left out", () => {
+    const out = projectDueDates(tasks, [
+      { key: "p1", status: "done", startedOn: "2026-01-01" },
+      { key: "p2", status: "skipped", startedOn: null },
+      { key: "p3", status: "pending", startedOn: null },
+    ], "2026-09-24");
+    expect(out.has("b")).toBe(false);
+    expect(out.get("c")).toBe("2026-09-29");
   });
 });

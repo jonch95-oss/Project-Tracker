@@ -527,7 +527,9 @@ const MATRIX: Record<string, Row | "public"> = {
     allowed: INTERNAL_ASSIGNED,
     call: async (c, f) => {
       const [set] = await db().insert(schema.drawingSet).values({ projectId: f.projectId, discipline: "E", name: "Matrix" }).returning();
-      const [sh] = await db().insert(schema.drawingSheet).values({ setId: set!.id, projectId: f.projectId, number: "E-1", fileId: await freshFile(f.projectId) }).returning();
+      const fileId = await freshFile(f.projectId);
+      const [v] = await db().select({ id: schema.fileVersion.id }).from(schema.fileVersion).where(eq(schema.fileVersion.fileId, fileId));
+      const [sh] = await db().insert(schema.drawingSheet).values({ setId: set!.id, projectId: f.projectId, number: "E-1", fileId, versionId: v!.id }).returning();
       return c.drawings.sheet({ projectId: f.projectId, sheetId: sh!.id });
     },
   },

@@ -2,17 +2,18 @@ import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { z } from "zod";
-import { carryForward, manpowerTotal } from "@/core/field";
+import { planDate } from "../dates";
+import { carryForward, manpowerTotal, MAX_LOG_RANGE_DAYS, meetingItemStatus } from "@/core/field";
 import { criticalPath, forecast, plannedSpan, slippageDays } from "@/core/schedule";
-import { todayET } from "@/core/time";
+import { daysBetween, todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import type { SiteWeather } from "../../db/schema/app";
 import { recordAudit } from "../../services/audit";
-import { currentBaseline, fetchWeather, loadScheduleTasks, lockBaseline, nextBaselineNumber } from "../../services/field";
+import { currentBaseline, fetchWeather, loadScheduleTasks, lockBaseline, lockBaselineMutex, nextBaselineNumber } from "../../services/field";
 import { notify, taskHref } from "../../services/tasks";
 import { projectProcedure, router, type ProjectAccess } from "../init";
 
-const date = z.iso.date();
+const date = planDate;
 const text = (max = 4000) => z.string().trim().max(max).nullish();
 
 function internal(access: ProjectAccess) {
@@ -93,18 +94,18 @@ export const siteLogsRouter = router({
       }));
     }),
 
-  /** Full logs for a date range (the dated PDF for lender draws and claims), at most about two months. */
+  /** Full logs for a date range (the dated PDF for lender draws and claims), at most six months. */
   range: projectProcedure()
     .input(z.object({ from: date, to: date }))
     .query(async ({ ctx, input }) => {
       internal(ctx.project);
       if (input.from > input.to) throw new TRPCError({ code: "BAD_REQUEST", message: "The range is backwards." });
+      if (daysBetween(input.from, input.to) > MAX_LOG_RANGE_DAYS) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick six months or less for one PDF." });
       const logs = await ctx.db
         .select()
         .from(schema.siteLog)
         .where(and(eq(schema.siteLog.projectId, input.projectId), sql`${schema.siteLog.date} between ${input.from} and ${input.to}`))
-        .orderBy(asc(schema.siteLog.date))
-        .limit(62);
+        .orderBy(asc(schema.siteLog.date));
       const authors = new Map((await ctx.db.select({ id: schema.user.id, name: schema.user.name }).from(schema.user).where(inArray(schema.user.id, logs.map((l) => l.updatedById).filter((x): x is string => !!x).concat(["-"])))).map((u) => [u.id, u.name]));
       const photos = logs.length ? await ctx.db.select({ siteLogId: schema.projectPhoto.siteLogId, n: sql<number>`count(*)::int` }).from(schema.projectPhoto).where(inArray(schema.projectPhoto.siteLogId, logs.map((l) => l.id))).groupBy(schema.projectPhoto.siteLogId) : [];
       return logs.map((l) => ({ ...l, author: l.updatedById ? (authors.get(l.updatedById) ?? null) : null, photos: photos.find((p) => p.siteLogId === l.id)?.n ?? 0 }));
@@ -135,7 +136,8 @@ export const siteLogsRouter = router({
       return ctx.db.transaction(async (tx) => {
         const [existing] = await tx.select().from(schema.siteLog).where(and(eq(schema.siteLog.projectId, input.projectId), eq(schema.siteLog.date, input.date))).for("update");
         if (existing) {
-          if (input.version !== undefined && existing.version !== input.version) throw conflict();
+          // A brand-new form (no version) meeting a log someone just filed must not overwrite it.
+          if (input.version === undefined || existing.version !== input.version) throw conflict();
           const [row] = await tx
             .update(schema.siteLog)
             .set({ ...values, weather: weather ?? existing.weather, version: existing.version + 1, updatedAt: new Date() })
@@ -187,10 +189,11 @@ export const scheduleRouter = router({
           milestone: t.milestone,
           version: version.get(t.id) ?? 1,
           startOn: t.startOn,
-          dueOn: t.dueOn,
+          dueOn: t.projected ? null : t.dueOn,
           startedOn: t.startedOn,
           completedOn: t.completedOn,
           planned: plannedSpan(t),
+          projected: t.projected,
           forecast: fc.byTask.get(t.id) ?? null,
           baseline: base.get(t.id) ?? null,
           critical: cp.critical.has(t.id),
@@ -225,7 +228,7 @@ export const scheduleRouter = router({
     .input(z.object({ reason: text(500) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`baseline:${input.projectId}`}))`);
+        await lockBaselineMutex(tx, input.projectId);
         if (await currentBaseline(tx, input.projectId)) throw new TRPCError({ code: "BAD_REQUEST", message: "A baseline is locked. Changing it needs the owner's approval: request a re-baseline." });
         const id = await lockBaseline(tx, input.projectId, { requestedById: ctx.viewer.id, approvedById: ctx.viewer.id, reason: input.reason || "Locked by hand" });
         await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: "create", entityType: "schedule_baseline", entityId: id, projectId: input.projectId, summary: `${ctx.viewer.name} locked the schedule baseline`, ip: ctx.ip });
@@ -238,7 +241,7 @@ export const scheduleRouter = router({
     .input(z.object({ reason: z.string().trim().min(3).max(500) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`baseline:${input.projectId}`}))`);
+        await lockBaselineMutex(tx, input.projectId);
         if (!(await currentBaseline(tx, input.projectId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Lock a first baseline instead." });
         const [open] = await tx.select({ id: schema.scheduleBaseline.id }).from(schema.scheduleBaseline).where(and(eq(schema.scheduleBaseline.projectId, input.projectId), eq(schema.scheduleBaseline.status, "requested")));
         if (open) throw new TRPCError({ code: "BAD_REQUEST", message: "A re-baseline request is already waiting for the owner." });
@@ -262,7 +265,7 @@ export const scheduleRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (ctx.actor.role !== "owner") throw new TRPCError({ code: "FORBIDDEN", message: "Only the owner approves a re-baseline." });
       return ctx.db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`baseline:${input.projectId}`}))`);
+        await lockBaselineMutex(tx, input.projectId);
         const [req] = await tx.select().from(schema.scheduleBaseline).where(and(eq(schema.scheduleBaseline.id, input.id), eq(schema.scheduleBaseline.projectId, input.projectId), eq(schema.scheduleBaseline.status, "requested")));
         if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "That request was already decided." });
         if (input.approve) await lockBaseline(tx, input.projectId, { requestedById: req.requestedById, approvedById: ctx.viewer.id, reason: req.reason, requestId: req.id });
@@ -289,15 +292,33 @@ async function loadMeeting(tx: DbOrTx, projectId: string, id: string) {
 
 /** An action item becomes (or updates) an assigned task with a due date. */
 async function syncActionTask(tx: DbOrTx, projectId: string, m: { type: string; number: number }, item: typeof schema.meetingItem.$inferSelect, actor: { id: string; name: string }) {
-  if (item.kind !== "action") return;
+  if (item.kind !== "action") {
+    // Turned into a note: its task goes too if nobody has started on it; started work stays on the list.
+    if (item.taskId) {
+      await tx.delete(schema.task).where(and(eq(schema.task.id, item.taskId), eq(schema.task.status, "not_started")));
+      await tx.update(schema.meetingItem).set({ taskId: null }).where(eq(schema.meetingItem.taskId, item.taskId));
+    }
+    return;
+  }
   const title = item.text.slice(0, 200);
   if (item.taskId) {
     const [t] = await tx.select().from(schema.task).where(eq(schema.task.id, item.taskId));
     if (t) {
       const assigneeChanged = t.assigneeId !== item.assigneeId;
+      const close = item.status === "closed" && t.status !== "done";
+      const reopen = item.status === "open" && t.status === "done";
       await tx
         .update(schema.task)
-        .set({ title, assigneeId: item.assigneeId, dueOn: item.dueOn, dueManual: !!item.dueOn, status: item.status === "closed" && t.status !== "done" ? "done" : t.status, completedOn: item.status === "closed" && t.status !== "done" ? todayET() : t.completedOn, version: sql`${schema.task.version} + 1`, updatedAt: new Date() })
+        .set({
+          title,
+          assigneeId: item.assigneeId,
+          dueOn: item.dueOn,
+          dueManual: !!item.dueOn,
+          ...(close ? { status: "done" as const, completedOn: todayET(), completedAt: new Date(), completedById: actor.id } : {}),
+          ...(reopen ? { status: "not_started" as const, completedOn: null, completedAt: null, completedById: null } : {}),
+          version: sql`${schema.task.version} + 1`,
+          updatedAt: new Date(),
+        })
         .where(eq(schema.task.id, t.id));
       if (assigneeChanged && item.assigneeId) await notify(tx, actor.id, [{ userId: item.assigneeId, kind: "assigned", title: `Assigned: “${title}”`, body: `From ${m.type.toUpperCase()} meeting #${m.number}`, projectId, taskId: t.id, href: taskHref(projectId, t.id) }]);
       return;
@@ -317,8 +338,9 @@ export const meetingsRouter = router({
     const rows = await ctx.db.select().from(schema.meeting).where(eq(schema.meeting.projectId, input.projectId)).orderBy(desc(schema.meeting.heldOn), desc(schema.meeting.number));
     const counts = rows.length
       ? await ctx.db
-          .select({ id: schema.meetingItem.meetingId, open: sql<number>`(count(*) filter (where ${schema.meetingItem.kind} = 'action' and ${schema.meetingItem.status} = 'open'))::int` })
+          .select({ id: schema.meetingItem.meetingId, open: sql<number>`(count(*) filter (where ${schema.meetingItem.kind} = 'action' and ${schema.meetingItem.status} = 'open' and ${schema.task.status} is distinct from 'done'))::int` })
           .from(schema.meetingItem)
+          .leftJoin(schema.task, eq(schema.task.id, schema.meetingItem.taskId))
           .where(inArray(schema.meetingItem.meetingId, rows.map((r) => r.id)))
           .groupBy(schema.meetingItem.meetingId)
       : [];
@@ -337,7 +359,7 @@ export const meetingsRouter = router({
         .leftJoin(schema.task, eq(schema.task.id, schema.meetingItem.taskId))
         .where(eq(schema.meetingItem.meetingId, m.id))
         .orderBy(asc(schema.meetingItem.sortOrder), asc(schema.meetingItem.createdAt));
-      return { meeting: m, items: items.map((i) => ({ ...i.item, assigneeName: i.assigneeName, taskStatus: i.taskStatus })), canEdit: ctx.project.can("checklist.edit") };
+      return { meeting: m, items: items.map((i) => ({ ...i.item, status: meetingItemStatus({ status: i.item.status, taskStatus: i.taskStatus }), assigneeName: i.assigneeName, taskStatus: i.taskStatus })), canEdit: ctx.project.can("checklist.edit") };
     }),
 
   /** A new meeting carries the open action items of the last meeting of the same type forward. */
@@ -352,11 +374,17 @@ export const meetingsRouter = router({
           .values({ projectId: input.projectId, type: input.type, number: (last?.number ?? 0) + 1, heldOn: input.heldOn, title: input.title || null, attendees: last?.attendees ?? [], createdById: ctx.viewer.id })
           .returning();
         if (last) {
-          const open = carryForward(await tx.select().from(schema.meetingItem).where(eq(schema.meetingItem.meetingId, last.id)).orderBy(asc(schema.meetingItem.sortOrder)));
+          const previous = await tx
+            .select({ item: schema.meetingItem, taskStatus: schema.task.status })
+            .from(schema.meetingItem)
+            .leftJoin(schema.task, eq(schema.task.id, schema.meetingItem.taskId))
+            .where(eq(schema.meetingItem.meetingId, last.id))
+            .orderBy(asc(schema.meetingItem.sortOrder));
+          const open = carryForward(previous.map((r) => ({ ...r.item, taskStatus: r.taskStatus })));
           if (open.length) {
             await tx.insert(schema.meetingItem).values(open.map((i, n) => ({ meetingId: m!.id, kind: i.kind, text: i.text, assigneeId: i.assigneeId, dueOn: i.dueOn, taskId: i.taskId, carriedFromId: i.id, status: "open" as const, sortOrder: n })));
-            // The earlier meeting's copies are closed there: the item lives on in the new minutes.
-            await tx.update(schema.meetingItem).set({ status: "closed" }).where(inArray(schema.meetingItem.id, open.map((i) => i.id)));
+            // The earlier minutes keep the item, marked as carried to this meeting (not done).
+            await tx.update(schema.meetingItem).set({ status: "carried" }).where(inArray(schema.meetingItem.id, open.map((i) => i.id)));
           }
         }
         await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: "create", entityType: "meeting", entityId: m!.id, projectId: input.projectId, summary: `${ctx.viewer.name} started ${input.type.toUpperCase()} meeting #${m!.number}`, ip: ctx.ip });
@@ -390,6 +418,8 @@ export const meetingsRouter = router({
         const values = { kind: input.kind, text: input.text, assigneeId: input.kind === "action" ? input.assigneeId : null, dueOn: input.kind === "action" ? input.dueOn : null, status: input.status };
         let item: typeof schema.meetingItem.$inferSelect;
         if (input.id) {
+          const [was] = await tx.select({ status: schema.meetingItem.status }).from(schema.meetingItem).where(and(eq(schema.meetingItem.id, input.id), eq(schema.meetingItem.meetingId, m.id)));
+          if (was?.status === "carried") throw new TRPCError({ code: "BAD_REQUEST", message: "This item moved on to the next meeting. Edit it there." });
           const [row] = await tx.update(schema.meetingItem).set(values).where(and(eq(schema.meetingItem.id, input.id), eq(schema.meetingItem.meetingId, m.id))).returning();
           if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
           item = row;

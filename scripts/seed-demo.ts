@@ -220,7 +220,11 @@ async function main() {
       for (const [i, t] of constr.slice(0, 8).entries()) {
         await db.update(schema.task).set({ startOn: addDays(today, -20 + i * 12), dueOn: addDays(today, -10 + i * 12) }).where(eq(schema.task.id, t.id));
       }
-      await db.insert(schema.scheduleBaseline).values({ projectId: pid, number: 1, finishOn: addDays(today, 70), items: [], reason: "Locked at the start of Pre-Construction", status: "current", lockedAt: new Date(Date.now() - 90 * 86_400_000) });
+      // Locked the way the app locks it (the whole job, projected), then set as if the plan was 6 days tighter back then.
+      const { lockBaseline } = await import("../src/server/services/field");
+      const baselineId = await lockBaseline(db as never, pid, { requestedById: ids["jon@demo.test"]!, approvedById: ids["jon@demo.test"]!, reason: "Locked at the start of Pre-Construction" });
+      const [locked] = await db.select().from(schema.scheduleBaseline).where(eq(schema.scheduleBaseline.id, baselineId));
+      await db.update(schema.scheduleBaseline).set({ finishOn: addDays(locked!.finishOn ?? today, -6), lockedAt: new Date(Date.now() - 90 * 86_400_000) }).where(eq(schema.scheduleBaseline.id, baselineId));
       await db.insert(schema.rfi).values([
         { projectId: pid, number: 1, subject: "Beam depth at grid C/4", question: "Can the W12 at grid C/4 go to W14 to clear the duct run?", fromName: "Brick & Beam Builders", toUserId: ids["architect@demo.test"]!, dueOn: addDays(today, 2), costImpactCents: 1_850_000, scheduleImpactDays: 2, status: "open", createdById: ids["jon@demo.test"]! },
         { projectId: pid, number: 2, subject: "Window sill height, units A", question: "Confirm 18\" sill height at A-line bedrooms.", fromName: "Brick & Beam Builders", toUserId: ids["architect@demo.test"]!, answer: "Confirmed: 18\" AFF, per A-401.", answeredAt: new Date(), status: "answered", createdById: ids["jon@demo.test"]! },

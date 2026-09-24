@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { planDate } from "../dates";
 import { cyclePath, unmetDependencies } from "@/core/deps";
 import type { ProjectTypeKey } from "@/core/labels";
 import { phaseKeyFor } from "@/core/phases";
@@ -217,7 +218,7 @@ export const checklistRouter = router({
     }),
 
   addTask: projectProcedure("checklist.edit")
-    .input(z.object({ phaseKey: z.string().min(1).max(60), title: z.string().trim().min(1).max(200), role: z.string().trim().min(1).max(60).default("PM"), dueOn: z.iso.date().nullish(), description: z.string().trim().max(4000).nullish() }))
+    .input(z.object({ phaseKey: z.string().min(1).max(60), title: z.string().trim().min(1).max(200), role: z.string().trim().min(1).max(60).default("PM"), dueOn: planDate.nullish(), description: z.string().trim().max(4000).nullish() }))
     .mutation(async ({ ctx, input }) => {
       const c = ctx as Ctx;
       return ctx.db.transaction(async (tx) => {
@@ -242,7 +243,7 @@ export const checklistRouter = router({
         role: z.string().trim().min(1).max(60).optional(),
         phaseKey: z.string().min(1).max(60).optional(),
         /** A date sets it by hand; null clears it and goes back to the rule. */
-        dueOn: z.iso.date().nullish(),
+        dueOn: planDate.nullish(),
         dueRule: dueRuleSchema.nullish(),
         requiresApproval: z.boolean().optional(),
         approverRole: z.string().trim().max(60).nullish(),

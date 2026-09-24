@@ -234,8 +234,8 @@ function ItemsSection({ projectId, meetingId, items, canEdit, onOpenTask }: { pr
         <ul className="divide-y divide-border rounded-card border border-border bg-surface">
           {[...actions, ...notes].map((i) => (
             <li key={i.id} className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center sm:gap-4">
-              <button type="button" disabled={!canEdit} onClick={() => setEditing(i)} className="min-w-0 flex-1 text-left">
-                <span className={cn("block text-[15px]", (i.status === "closed" || i.taskStatus === "done") && "text-muted line-through")}>
+              <button type="button" disabled={!canEdit || i.status === "carried"} onClick={() => setEditing(i)} className="min-w-0 flex-1 text-left">
+                <span className={cn("block text-[15px]", i.status === "closed" && "text-muted line-through", i.status === "carried" && "text-muted")}>
                   {i.kind === "note" ? "Note: " : ""}
                   {i.text}
                 </span>
@@ -244,6 +244,7 @@ function ItemsSection({ projectId, meetingId, items, canEdit, onOpenTask }: { pr
                     {i.assigneeName ?? "—"}
                     {i.dueOn ? ` · due ${formatIsoDate(i.dueOn, { month: "short", day: "numeric" })}` : ""}
                     {i.carriedFromId ? " · carried forward" : ""}
+                    {i.status === "carried" ? " · moved to the next meeting" : ""}
                   </span>
                 )}
               </button>

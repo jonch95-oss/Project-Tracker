@@ -8,6 +8,7 @@ import { createCaller } from "@/server/trpc/root";
 export async function GET(req: Request, ctx: RouteContext<"/api/export/projects/[id]/punch">) {
   const { id } = await ctx.params;
   const c = await authedContextFrom(req);
+  const STATUSES = ["open", "ready", "closed"] as const;
   if (!c) return new Response("Sign in again", { status: 401 });
   const q = new URL(req.url).searchParams;
   const pick = (k: string) => q.get(k) || undefined;
@@ -15,7 +16,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/export/projects/
   try {
     const caller = createCaller(c);
     project = await caller.projects.get({ projectId: id });
-    data = await caller.punch.list({ projectId: id, vendor: pick("vendor"), trade: pick("trade"), floor: pick("floor"), unit: pick("unit") });
+    data = await caller.punch.list({ projectId: id, vendor: pick("vendor"), trade: pick("trade"), floor: pick("floor"), unit: pick("unit"), status: STATUSES.find((x) => x === q.get("status")) });
   } catch (e) {
     if (e instanceof TRPCError) return new Response("Not found", { status: 404 });
     throw e;

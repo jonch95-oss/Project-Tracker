@@ -9,7 +9,7 @@ import { offsetDate, type OffsetUnit } from "./calendar";
 import { findCycle } from "./deps";
 import type { ProjectTypeKey } from "./labels";
 import { conditionsMet, type Conditions } from "./toggles";
-import { daysBetween } from "./time";
+import { addDays, daysBetween } from "./time";
 
 export type DueFrom = "phase_start" | { task: string };
 
@@ -222,6 +222,44 @@ export function scheduleDueDates(tasks: readonly SchedulableTask[], phaseStarts:
     if (d && d !== t.dueOn) changed.set(t.key, d);
   }
   return changed;
+}
+
+export interface ProjectedPhase {
+  key: string;
+  status: "pending" | "active" | "done" | "skipped";
+  startedOn: string | null;
+}
+
+/**
+ * Every task's date as far as the plan can see: real due dates where they're
+ * known, and, for phases that haven't started, the dates their rules give if
+ * each phase starts the day after the one before it is projected to end (and
+ * not before today). This is what a baseline locks and what the forecast is
+ * measured over, so a later phase's work isn't "new delay" the day it starts.
+ * `phases` must be in phase order. Returns key → date for every task that has one.
+ */
+export function projectDueDates(tasks: readonly SchedulableTask[], phases: readonly ProjectedPhase[], today: string): Map<string, string> {
+  const starts = new Map<string, string>();
+  let lastEnd: string | null = null;
+  let dates = new Map<string, string>();
+  const resolve = () => {
+    const changed = scheduleDueDates(tasks, starts);
+    return new Map(tasks.flatMap((t) => { const d = changed.get(t.key) ?? t.dueOn; return d ? [[t.key, d] as const] : []; }));
+  };
+  for (const p of phases) {
+    if (p.status === "skipped") continue;
+    let start: string = p.startedOn && p.status !== "pending" ? p.startedOn : lastEnd ? addDays(lastEnd, 1) : today;
+    if (p.status === "pending" && start < today) start = today;
+    starts.set(p.key, start);
+    dates = resolve();
+    let end: string = start;
+    for (const t of tasks) {
+      const d = t.phaseKey === p.key ? (t.completedOn ?? dates.get(t.key)) : undefined;
+      if (d && d > end) end = d;
+    }
+    if (!lastEnd || end > lastEnd) lastEnd = end;
+  }
+  return phases.length ? dates : resolve();
 }
 
 /* ------------------------------------------------------------------ */

@@ -89,11 +89,12 @@ export function useFileUpload(projectId: string) {
   const patch = (key: string, p: Partial<UploadItem>) => setItems((cur) => cur.map((i) => (i.key === key ? { ...i, ...p } : i)));
 
   const upload = useCallback(
-    async (files: File[], target: { folderId?: string; fileId?: string; taskId?: string; note?: string }): Promise<{ ok: number; failed: number; lastFileId: string | null }> => {
+    async (files: File[], target: { folderId?: string; fileId?: string; taskId?: string; note?: string }): Promise<{ ok: number; failed: number; lastFileId: string | null; errors: string[] }> => {
       const queued = files.map((f) => ({ file: f, key: `${f.name}-${f.size}-${Math.random().toString(36).slice(2, 7)}` }));
       setItems((cur) => [...cur.filter((i) => i.state === "uploading"), ...queued.map((q) => ({ key: q.key, name: q.file.name, size: q.file.size, progress: 0, state: "uploading" as const }))]);
       let ok = 0;
       let lastFileId: string | null = null;
+      const errors: string[] = [];
       for (const { file, key } of queued) {
         try {
           if (file.size > MAX_FILE_BYTES) throw new UploadError(sizeLimitMessage(file));
@@ -117,10 +118,12 @@ export function useFileUpload(projectId: string) {
           patch(key, { progress: 1, state: "done" });
           ok++;
         } catch (e) {
-          patch(key, { state: "error", error: e instanceof UploadError ? e.message : errorMessage(e) });
+          const error = e instanceof UploadError ? e.message : errorMessage(e);
+          errors.push(error);
+          patch(key, { state: "error", error });
         }
       }
-      return { ok, failed: queued.length - ok, lastFileId };
+      return { ok, failed: queued.length - ok, lastFileId, errors };
     },
     [begin, complete, projectId],
   );

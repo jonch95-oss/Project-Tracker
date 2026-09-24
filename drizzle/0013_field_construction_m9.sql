@@ -17,6 +17,7 @@ CREATE TABLE "drawing_sheet" (
 	"number" text NOT NULL,
 	"title" text,
 	"file_id" uuid NOT NULL,
+	"version_id" uuid NOT NULL,
 	"sort_order" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -179,6 +180,7 @@ ALTER TABLE "drawing_set" ADD CONSTRAINT "drawing_set_created_by_id_user_id_fk" 
 ALTER TABLE "drawing_sheet" ADD CONSTRAINT "drawing_sheet_set_id_drawing_set_id_fk" FOREIGN KEY ("set_id") REFERENCES "public"."drawing_set"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "drawing_sheet" ADD CONSTRAINT "drawing_sheet_project_id_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."project"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "drawing_sheet" ADD CONSTRAINT "drawing_sheet_file_id_file_id_fk" FOREIGN KEY ("file_id") REFERENCES "public"."file"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "drawing_sheet" ADD CONSTRAINT "drawing_sheet_version_id_file_version_id_fk" FOREIGN KEY ("version_id") REFERENCES "public"."file_version"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "meeting" ADD CONSTRAINT "meeting_project_id_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."project"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "meeting" ADD CONSTRAINT "meeting_created_by_id_user_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "meeting_item" ADD CONSTRAINT "meeting_item_meeting_id_meeting_id_fk" FOREIGN KEY ("meeting_id") REFERENCES "public"."meeting"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -213,11 +215,16 @@ CREATE INDEX "drawing_set_idx" ON "drawing_set" USING btree ("project_id","disci
 CREATE INDEX "drawing_sheet_set_idx" ON "drawing_sheet" USING btree ("set_id","sort_order");--> statement-breakpoint
 CREATE UNIQUE INDEX "meeting_number_idx" ON "meeting" USING btree ("project_id","type","number");--> statement-breakpoint
 CREATE INDEX "meeting_item_meeting_idx" ON "meeting_item" USING btree ("meeting_id","sort_order");--> statement-breakpoint
+CREATE INDEX "meeting_item_task_idx" ON "meeting_item" USING btree ("task_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "punch_number_idx" ON "punch_item" USING btree ("project_id","number");--> statement-breakpoint
 CREATE INDEX "punch_filter_idx" ON "punch_item" USING btree ("project_id","status");--> statement-breakpoint
+CREATE INDEX "punch_sheet_idx" ON "punch_item" USING btree ("sheet_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "rfi_number_idx" ON "rfi" USING btree ("project_id","number");--> statement-breakpoint
 CREATE INDEX "rfi_status_idx" ON "rfi" USING btree ("project_id","status");--> statement-breakpoint
 CREATE UNIQUE INDEX "schedule_baseline_number_idx" ON "schedule_baseline" USING btree ("project_id","number");--> statement-breakpoint
+CREATE UNIQUE INDEX "schedule_baseline_current_idx" ON "schedule_baseline" USING btree ("project_id") WHERE "schedule_baseline"."status" = 'current';--> statement-breakpoint
 CREATE UNIQUE INDEX "site_log_day_idx" ON "site_log" USING btree ("project_id","date");--> statement-breakpoint
 CREATE UNIQUE INDEX "submittal_number_idx" ON "submittal" USING btree ("project_id","number");--> statement-breakpoint
-CREATE UNIQUE INDEX "submittal_revision_idx" ON "submittal_revision" USING btree ("submittal_id","revision");
+CREATE UNIQUE INDEX "submittal_revision_idx" ON "submittal_revision" USING btree ("submittal_id","revision");--> statement-breakpoint
+ALTER TABLE "project_photo" ADD CONSTRAINT "project_photo_site_log_id_site_log_id_fk" FOREIGN KEY ("site_log_id") REFERENCES "public"."site_log"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "project_photo_site_log_idx" ON "project_photo" USING btree ("site_log_id");

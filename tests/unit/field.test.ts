@@ -28,3 +28,19 @@ describe("field helpers", () => {
     expect(clamp01(-2)).toBe(0);
   });
 });
+
+describe("meeting items read their task", () => {
+  it("an open item whose task is done is closed; carried items stay carried and never carry again", async () => {
+    const { meetingItemStatus } = await import("@/core/field");
+    expect(meetingItemStatus({ status: "open", taskStatus: "done" })).toBe("closed");
+    expect(meetingItemStatus({ status: "open", taskStatus: "in_progress" })).toBe("open");
+    expect(meetingItemStatus({ status: "carried", taskStatus: "done" })).toBe("carried");
+    const items = [
+      { id: "a", kind: "action", status: "open", taskStatus: "not_started" },
+      { id: "b", kind: "action", status: "open", taskStatus: "done" },
+      { id: "c", kind: "action", status: "carried", taskStatus: null },
+      { id: "d", kind: "note", status: "open", taskStatus: null },
+    ];
+    expect(carryForward(items).map((i) => i.id)).toEqual(["a"]);
+  });
+});

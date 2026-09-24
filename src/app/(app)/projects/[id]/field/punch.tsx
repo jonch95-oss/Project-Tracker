@@ -93,7 +93,7 @@ export function PunchView({ projectId, onOpenSheet }: { projectId: string; onOpe
           ))}
         </ul>
       )}
-      {draft && <PunchDialog projectId={projectId} draft={draft} onClose={() => setDraft(null)} />}
+      {draft && <PunchDialog projectId={projectId} draft={draft} team={canEdit} onClose={() => setDraft(null)} />}
     </div>
   );
 }
@@ -118,14 +118,14 @@ function FacetSelect({ label: l, value, options, labels, onChange }: { label: st
 }
 
 /** Create or edit a punch item: pinned (from the sheet viewer) or free; photo straight from the camera. */
-export function PunchDialog({ projectId, draft, onClose }: { projectId: string; draft: PunchDraft; onClose: () => void }) {
+export function PunchDialog({ projectId, draft, team, onClose }: { projectId: string; draft: PunchDraft; team: boolean; onClose: () => void }) {
   const trpc = useTRPC();
   const client = useTRPCClient();
   const qc = useQueryClient();
   const toast = useToast();
   const item = draft.item;
-  const teamQ = useQuery(trpc.punch.list.queryOptions({ projectId }));
-  const team = teamQ.data?.canEdit ?? false;
+  // A sub can mark their item ready; once the team closes it, it's theirs to reopen, not the sub's.
+  const readOnly = !!item && !team && item.status === "closed";
   const [assignee, setAssignee] = useState<string | null>(item?.assigneeId ?? null);
   const [status, setStatus] = useState<string>(item?.status ?? "open");
   const [photoId, setPhotoId] = useState<string | null>(item?.photoId ?? null);
@@ -176,9 +176,11 @@ export function PunchDialog({ projectId, draft, onClose }: { projectId: string; 
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" form="punch-form" loading={create.isPending || update.isPending}>
-            Save
-          </Button>
+          {!readOnly && (
+            <Button type="submit" form="punch-form" loading={create.isPending || update.isPending}>
+              Save
+            </Button>
+          )}
         </>
       }
     >
@@ -213,7 +215,8 @@ export function PunchDialog({ projectId, draft, onClose }: { projectId: string; 
         ) : (
           <p className="text-[15px] sm:col-span-2">{item.title}</p>
         )}
-        {item && (
+        {readOnly && <p className="text-[13px] text-muted sm:col-span-2">Closed by the team. Ask them to reopen it if the work needs another look.</p>}
+        {item && !readOnly && (
           <Field label="Status" htmlFor="pi-status">
             <Select id="pi-status" value={status} onChange={(e) => setStatus(e.target.value)}>
               {PUNCH_STATUSES.filter((s) => team || s.key !== "closed").map((s) => (
