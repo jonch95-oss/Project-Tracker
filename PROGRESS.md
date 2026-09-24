@@ -1,5 +1,60 @@
 # Progress
 
+## Milestone 9 — Field and construction (done)
+
+**Live:** https://ariel-dev-projects.vercel.app (each project's Construction tab: Daily log, Schedule, RFIs, Submittals, Drawings, Punch, Meetings)
+
+### What shipped
+
+- **Daily site log (Module D)**, internal team only.
+  - **Weather:** filled in automatically from Open-Meteo, which is free and needs no key.
+  - **Crew:** manpower by trade, with "Same crew as yesterday" to carry it forward in one tap.
+  - **The day's record:** work done, inspections, delays, deliveries, visitors, safety incidents and notes.
+  - **Photos:** straight from the phone camera, linked to the day's log.
+  - **Nudge:** a reminder at 5pm New York time on active site days (weekdays in pre-construction, construction and TCO/CO) if no log has been filed.
+  - **PDF:** any date range as one file, for a lender draw or a claim.
+- **Schedule and baseline (Module E).**
+  - **Gantt:** planned dates, the critical path (the chain with no slack), forecast bars and baseline bars. Phases that are fully done fold away.
+  - **Forecast:** work that has started uses its real start date, and overdue work finishes today at the earliest.
+  - **Baseline:** locked automatically when a project enters pre-construction. The locked finish is the forecast at that moment, so a fresh baseline reads "On baseline".
+  - **Re-baselining:** team members request it with a reason and the owner approves. The owner's own request is approved at once, and every baseline is numbered and kept.
+  - **Slippage:** "N days behind" shows on the tab and as a chip on the portfolio card.
+- **RFIs (Module F).**
+  - **Numbering:** numbered per project, with from/to, due date, discipline and attachments.
+  - **Answering:** answered in place; an outside architect or engineer can answer the RFIs addressed to them.
+  - **Change orders:** "Convert to change order" carries the RFI into Financials and notifies the money approvers.
+  - **Cost:** cost impact is hidden from anyone without financial access.
+- **Submittals:** revision history (Rev 0, 1, 2 …), with decisions of approved, approved as noted, revise and resubmit, or rejected. A resubmission opens the next revision.
+- **Drawings.**
+  - **Sets:** issued as sets of PDF sheets; the sheet number is read from the file name.
+  - **Superseding:** a new set supersedes the discipline's current set, and superseded sheets are stamped SUPERSEDED.
+  - **Viewer:** built in (PDF.js legacy build, so older iPhones work), with zoom and pages.
+  - **Punch pins:** drop a pin straight onto a sheet.
+- **Punch list (Module K).**
+  - **Items:** each has a pin or not, a photo from the camera, floor, unit, trade, sub, assignee and due date.
+  - **Filters and PDF:** filter by floor, unit, trade, sub or status, and download a PDF per sub.
+  - **Subs:** an outside sub sees only the items assigned to them. They can mark them "Ready for review", and only the team can close.
+- **Meeting minutes (Module G).**
+  - **Meetings:** OAC, subcontractor, safety and internal meetings are numbered per type, with attendees (team members plus guests).
+  - **Items:** discussion items and action items; an action item becomes an assigned task with a due date.
+  - **Carry forward:** a new meeting brings in the last meeting's open items.
+  - **Minutes:** download as a PDF.
+- **Outside collaborators** see RFIs, submittals, drawings and punch, and not the daily log, schedule or meetings.
+
+### Review
+
+REVIEW_PLACEHOLDER
+
+### Test results
+
+TEST_PLACEHOLDER
+
+### Known limitations
+
+- Weather is Open-Meteo's modelled data for the site (free, no key), filled in on the first save when the project has map coordinates. It is not a certified weather record for a claim, and it isn't editable on screen yet.
+- The Gantt uses each task's own dates and its "blocked by" links (from Milestone 4). There's no drag-to-reschedule; tap a task to set its dates.
+- A drawing's sheet number comes from the file name (for example "A-201 Level 2 plan.pdf"). To fix a wrong number, rename the file and issue it again.
+
 ## Milestone 8 — Public records watch, expiries and violations (done)
 
 **Live:** https://ariel-dev-projects.vercel.app (each project's Public Records tab; Dates & Expiries tab; red flags on cards and the Needs-you rail)
