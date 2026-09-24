@@ -35,6 +35,12 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   return (
     <TRPCReactProvider>
       <AcceptInviteForm token={token} email={invite.email} defaultName={invite.name} roleLabel={ROLE_LABEL[invite.role]} />
+      <p className="mt-8 border-t border-border pt-6 text-[14px] text-muted">
+        On iPhone? After you set your password, add Project Command to your Home Screen for notifications and Face ID.{" "}
+        <Link href="/install" className="font-medium text-text underline underline-offset-4">
+          See the 1-minute install guide
+        </Link>
+      </p>
     </TRPCReactProvider>
   );
 }

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { signIn } from "./helpers";
+import path from "node:path";
 
 test.use({ viewport: { width: 393, height: 852 } });
 
@@ -46,4 +47,26 @@ test("iPhone: checklist one-tap complete and task sheet", async ({ page }) => {
   await expect(page.getByRole("dialog")).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
+});
+
+test("iPhone: take a photo straight into the project's photos", async ({ page }) => {
+  await signIn(page, "jon@demo.test");
+  await page.goto("/portfolio");
+  await page.getByRole("heading", { name: "Sterling Place Townhouse" }).click();
+  await expect(page.getByRole("button", { name: "Take photo" })).toBeVisible();
+  const before = await page.getByRole("button", { name: /^Open photo/ }).count();
+  await page.getByLabel("Take a photo").setInputFiles(path.join(__dirname, "fixtures", "site.png"));
+  await expect(page.getByText("Photo added")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: /^Open photo/ })).toHaveCount(before + 1);
+  // Taken just now, so it carries today's capture time.
+  await expect(page.getByRole("button", { name: /^Open photo taken/ }).first()).toBeVisible();
+});
+
+test("iPhone: approve a request from My Tasks", async ({ page }) => {
+  await signIn(page, "jon@demo.test");
+  await page.goto("/tasks");
+  const approve = page.getByRole("button", { name: "Approve" }).first();
+  await expect(approve).toBeVisible();
+  await approve.click();
+  await expect(page.getByText("Approved")).toBeVisible();
 });

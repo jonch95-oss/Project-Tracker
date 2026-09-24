@@ -24,7 +24,7 @@ export default defineConfig({
   projects: [
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], launchOptions: executablePath ? { executablePath } : {} } },
     // Mobile WebKit (iPhone) runs in CI where WebKit is installed.
-    ...(process.env.E2E_WEBKIT === "1" ? [{ name: "iphone-webkit", use: { ...devices["iPhone 15 Pro"] }, testMatch: /mobile\.spec\.ts/ }] : []),
+    ...(process.env.E2E_WEBKIT === "1" ? [{ name: "iphone-webkit", use: { ...devices["iPhone 15 Pro"] }, testMatch: /(mobile|offline)\.spec\.ts/ }] : []),
   ],
   webServer: {
     command: process.env.CI ? `npm run start -- -p ${PORT}` : `npx next dev -p ${PORT}`,

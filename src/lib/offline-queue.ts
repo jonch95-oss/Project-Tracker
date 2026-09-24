@@ -341,8 +341,10 @@ export function flushQueue(
   if (running) return running;
   running = (async () => {
     let sent = 0;
-    for (const op of readQueue()) {
-      if (op.state !== "pending") continue;
+    for (const { id } of readQueue()) {
+      // Read it fresh: an earlier send may have moved its version on (or removed it).
+      const op = readQueue().find((o) => o.id === id);
+      if (!op || op.state !== "pending") continue;
       if (!viewerId || op.userId !== viewerId) {
         removeOp(op.id);
         continue;
