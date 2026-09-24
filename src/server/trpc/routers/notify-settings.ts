@@ -40,7 +40,7 @@ export const notifySettingsRouter = router({
       const prefs = Object.fromEntries(
         Object.entries(input.prefs).map(([k, v]) => {
           const emails = NOTIFY_EVENTS.find((e) => e.kind === k)?.email;
-          return [k, { ...(v.push !== undefined ? { push: v.push } : {}), ...(emails && v.email !== undefined ? { email: v.email } : {}) }];
+          return [k, { ...(v?.push !== undefined ? { push: v!.push } : {}), ...(emails && v?.email !== undefined ? { email: v!.email } : {}) }];
         }),
       );
       const values = { prefs, quietStart: input.quietStart, quietEnd: input.quietEnd, digest: input.digest };
