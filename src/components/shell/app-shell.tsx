@@ -14,6 +14,7 @@ import {
   IconSettings,
   IconSignOut,
   IconSystem,
+  IconTemplate,
   IconTasks,
   IconTeam,
 } from "../ui/icons";
@@ -38,6 +39,7 @@ const ALL: GlobalRole[] = ["owner", "admin", "member", "external"];
 const NAV: NavItem[] = [
   { href: "/portfolio", label: "Portfolio", icon: IconPortfolio, roles: ALL, mobile: true },
   { href: "/tasks", label: "My Tasks", icon: IconTasks, roles: ALL, mobile: true },
+  { href: "/templates", label: "Templates", icon: IconTemplate, roles: ["owner", "admin"], mobile: false },
   { href: "/team", label: "Team", icon: IconTeam, roles: ["owner"], mobile: false },
   { href: "/audit", label: "Audit log", icon: IconLedger, roles: ["owner"], mobile: false },
   { href: "/system", label: "System", icon: IconSystem, roles: ["owner"], mobile: false },

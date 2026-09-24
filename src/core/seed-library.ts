@@ -267,7 +267,7 @@ const TYPE_NAMES: Record<ProjectTypeKey, string> = {
 /** The default template for a project type, assembled from the library. */
 export function defaultTemplate(type: ProjectTypeKey): TemplateDef {
   const phaseKeys = PHASE_ORDER[type];
-  const phases = phaseKeys.map((k) => LIBRARY_PHASES[k]!);
+  const phases = phaseKeys.map((k) => ({ ...LIBRARY_PHASES[k]! }));
   const inPhase = new Set(phaseKeys);
   const tasks = LIBRARY_TASKS.filter((k) => inPhase.has(k.phaseKey) && (!k.types || k.types.includes(type)))
     // Library order within each phase, phases in track order.
@@ -286,7 +286,7 @@ export function defaultTemplate(type: ProjectTypeKey): TemplateDef {
     description: `Default checklist for ${TYPE_NAMES[type].toLowerCase()} projects.`,
     phases,
     tasks: clean,
-    folders: DEFAULT_FOLDERS,
+    folders: [...DEFAULT_FOLDERS],
   };
 }
 

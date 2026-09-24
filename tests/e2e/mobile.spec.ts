@@ -30,3 +30,20 @@ test("iPhone: portfolio cards, phase track and project page", async ({ page }) =
   const overflow2 = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow2).toBeLessThanOrEqual(0);
 });
+
+test("iPhone: checklist one-tap complete and task sheet", async ({ page }) => {
+  await signIn(page, "elias@demo.test");
+  await page.goto("/portfolio");
+  await page.getByText("Sterling Place Townhouse").click();
+  await page.getByRole("tab", { name: "Checklist" }).click();
+  const open = page.getByRole("checkbox", { name: /^Complete: / }).first();
+  const label = (await open.getAttribute("aria-label"))!.replace(/^Complete: /, "").replace(/ \(waiting on other tasks\)$/, "");
+  if ((await open.getAttribute("aria-disabled")) !== "true") {
+    await open.click();
+    await expect(page.getByRole("checkbox", { name: `Reopen: ${label}` })).toBeVisible();
+  }
+  await page.getByRole("button", { name: label }).first().click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});

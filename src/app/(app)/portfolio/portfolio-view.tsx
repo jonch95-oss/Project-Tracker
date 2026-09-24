@@ -1,22 +1,20 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { readProjectForm, ProjectFormFields } from "@/components/project/project-form";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SegmentedControl } from "@/components/project/visuals";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconClose, IconPlus, IconSearch } from "@/components/ui/icons";
-import { Dialog, useToast } from "@/components/ui/overlay";
 import { Button, Input, PageHeader, Select, Skeleton } from "@/components/ui/primitives";
-import { FieldError } from "@/core/forms";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
 import { DEFAULT_PHASES, FLIP_PHASES, AUCTION_PHASES, currentPhase } from "@/core/phases";
 import { activeFilterCount, filterProjects, filtersFromParams, PROJECT_STATUS_LABEL, PROJECT_STATUSES, type PortfolioFilters } from "@/core/portfolio";
-import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
+import { useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { PortfolioCards } from "./portfolio-cards";
 import { PortfolioTable } from "./portfolio-table";
+import { NewProjectDialog } from "./new-project-dialog";
 import { PortfolioTimeline } from "./portfolio-timeline";
 
 export type PortfolioProject = RouterOutputs["projects"]["list"]["projects"][number];
@@ -285,83 +283,5 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
         ))}
       </Select>
     </div>
-  );
-}
-
-function NewProjectDialog({ open, onClose, showHeadline }: { open: boolean; onClose: () => void; showHeadline: boolean }) {
-  const trpc = useTRPC();
-  const qc = useQueryClient();
-  const router = useRouter();
-  const toast = useToast();
-  const companies = useQuery({ ...trpc.companies.list.queryOptions(), enabled: open });
-  const [fieldError, setFieldError] = useState<FieldError | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Bumped after each create so the next open starts with an empty form.
-  const [formKey, setFormKey] = useState(0);
-  const create = useMutation(
-    trpc.projects.create.mutationOptions({
-      onSuccess: async ({ id }) => {
-        setFormKey((k) => k + 1);
-        await qc.invalidateQueries({ queryKey: trpc.projects.list.queryKey() });
-        toast("success", "Project created");
-        onClose();
-        router.push(`/projects/${id}`);
-      },
-      onError: (e) => setError(errorMessage(e)),
-    }),
-  );
-
-  function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
-    setFieldError(null);
-    try {
-      const v = readProjectForm(e.currentTarget);
-      create.mutate({
-        name: v.name,
-        address: v.address,
-        borough: v.borough,
-        bbl: v.bbl,
-        type: v.type,
-        companyId: v.companyId,
-        facts: v.facts,
-        headline: showHeadline ? v.headline : undefined,
-      });
-    } catch (err) {
-      if (err instanceof FieldError) setFieldError(err);
-      else throw err;
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title="New project"
-      description="The property first. Checklists arrive with templates; you can add photos and the team right after."
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" form="new-project" disabled={!companies.data} loading={create.isPending}>
-            Create project
-          </Button>
-        </>
-      }
-    >
-      {!companies.data ? (
-        <Skeleton className="h-64 rounded-panel" />
-      ) : (
-        <form key={formKey} id="new-project" onSubmit={onSubmit}>
-          <ProjectFormFields idPrefix="np" mode="create" companies={companies.data} fieldError={fieldError} showHeadline={showHeadline} />
-          {error && (
-            <p role="alert" className="mt-4 text-[13px] text-blocked-text">
-              {error}
-            </p>
-          )}
-        </form>
-      )}
-    </Dialog>
   );
 }

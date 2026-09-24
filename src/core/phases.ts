@@ -202,3 +202,10 @@ export function phaseKeyFor(name: string, existing: Iterable<string>): string {
     if (!taken.has(k)) return k;
   }
 }
+
+/** Progress with task completion inside the current phase credited (counts per phase key). */
+export function projectProgressBps(phases: readonly PhaseState[], counts: Readonly<Record<string, { total: number; done: number }>>): number {
+  const cur = currentPhase(phases);
+  const c = cur ? counts[cur.key] : undefined;
+  return phaseProgressBps(phases, c && c.total > 0 ? Math.round((c.done / c.total) * 10_000) : 0);
+}

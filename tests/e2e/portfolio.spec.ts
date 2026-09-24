@@ -75,21 +75,23 @@ test.describe("portfolio", () => {
     await dialog.getByLabel("Project type").selectOption("contract_flip");
     await dialog.getByRole("button", { name: /Key facts/ }).click();
     await dialog.getByLabel("Residential FAR").fill("2.4.1");
-    await dialog.getByRole("button", { name: "Create project" }).click();
+    await dialog.getByRole("button", { name: "Next", exact: true }).click();
     await expect(dialog.getByText(/up to two decimals/)).toBeVisible();
     await dialog.getByLabel("Residential FAR").fill("2.43");
     await dialog.getByLabel("Units").fill("4");
     await dialog.getByRole("button", { name: /Headline financials/ }).click();
     await dialog.getByLabel("Purchase price").fill("1,150,000");
-    await dialog.getByRole("button", { name: "Create project" }).click();
+    await dialog.getByRole("button", { name: "Next", exact: true }).click();
+    await page.getByRole("dialog", { name: "Site conditions" }).getByRole("button", { name: "Create project" }).click();
 
     await expect(page).toHaveURL(/\/projects\//);
+    await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Putnam Avenue Flip" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Marketing to End Buyers/ })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Phases" }).getByRole("button", { name: /Marketing to End Buyers/ })).toBeVisible();
     await expect(page.getByText("2.43")).toBeVisible();
 
     // Advance the phase.
-    await page.getByRole("button", { name: /Under Contract/ }).click();
+    await page.getByRole("region", { name: "Phases" }).getByRole("button", { name: /Under Contract/ }).click();
     await page.getByRole("button", { name: "Make this the current phase" }).click();
     await expect(page.getByText("Phase updated")).toBeVisible();
     await expect(page.getByText(/In Under Contract/)).toBeVisible();

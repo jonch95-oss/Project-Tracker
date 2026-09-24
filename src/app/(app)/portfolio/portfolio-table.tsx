@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ProjectImage, pct } from "@/components/project/visuals";
 import { formatMoneyCompact } from "@/core/money";
 import { PROJECT_TYPE_SHORT, type ProjectTypeKey } from "@/core/labels";
-import { currentPhase, daysInPhase, phaseProgressBps } from "@/core/phases";
+import { currentPhase, daysInPhase, projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
 import { todayET } from "@/core/time";
 import type { PortfolioProject } from "./portfolio-view";
@@ -68,7 +68,7 @@ export function PortfolioTable({ projects }: { projects: PortfolioProject[] }) {
                 </td>
                 <td className="px-3 py-3">{currentPhase(p.phases)?.name ?? "Complete"}</td>
                 <td className="num px-3 py-3 text-right">{d ?? "—"}</td>
-                <td className="num px-3 py-3 text-right">{pct(phaseProgressBps(p.phases))}</td>
+                <td className="num px-3 py-3 text-right">{pct(projectProgressBps(p.phases, p.taskCounts))}</td>
                 <td className="px-3 py-3">{PROJECT_TYPE_SHORT[p.type as ProjectTypeKey]}</td>
                 <td className="px-3 py-3">{p.companyShort}</td>
                 <td className="num px-3 py-3 text-right">{p.units ?? "—"}</td>

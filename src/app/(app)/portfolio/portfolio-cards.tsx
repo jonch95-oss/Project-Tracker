@@ -4,7 +4,7 @@ import Link from "next/link";
 import { HeadlineFigures, PhaseTrack, ProjectImage, pct } from "@/components/project/visuals";
 import { Badge, StatusPill } from "@/components/ui/primitives";
 import { PROJECT_TYPE_SHORT, type ProjectTypeKey } from "@/core/labels";
-import { daysInPhase, phaseProgressBps } from "@/core/phases";
+import { daysInPhase, projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
 import { todayET } from "@/core/time";
 import type { PortfolioProject } from "./portfolio-view";
@@ -45,7 +45,7 @@ export function PortfolioCards({ projects }: { projects: PortfolioProject[] }) {
                 <dl className="mt-4 grid grid-cols-3 gap-3 text-[13px]">
                   <div>
                     <dt className="text-muted">Complete</dt>
-                    <dd className="num font-medium">{pct(phaseProgressBps(p.phases))}</dd>
+                    <dd className="num font-medium">{pct(projectProgressBps(p.phases, p.taskCounts))}</dd>
                   </div>
                   <div>
                     <dt className="text-muted">In phase</dt>

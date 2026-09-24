@@ -15,7 +15,21 @@ import { errorMessage, useTRPC } from "@/lib/trpc";
  * who can edit the project pick a phase to make it current, or skip / restore
  * it. The checklist for a phase opens here once templates arrive (M3).
  */
-export function PhaseStepper({ projectId, phases, version, canEdit }: { projectId: string; phases: PhaseState[]; version: number; canEdit: boolean }) {
+export function PhaseStepper({
+  projectId,
+  phases,
+  taskCounts,
+  version,
+  canEdit,
+  onOpenChecklist,
+}: {
+  projectId: string;
+  phases: PhaseState[];
+  taskCounts: Record<string, { total: number; done: number }>;
+  version: number;
+  canEdit: boolean;
+  onOpenChecklist: (phaseKey: string) => void;
+}) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const toast = useToast();
@@ -101,6 +115,11 @@ export function PhaseStepper({ projectId, phases, version, canEdit }: { projectI
               <span className="num text-[11px] text-muted">{String(i + 1).padStart(2, "0")}</span>
               <span className={cn("text-[13px] leading-tight", p.status === "active" && "font-medium", p.status === "skipped" && "line-through")}>{p.name}</span>
               <span className="text-[11px] text-muted">
+                {taskCounts[p.key] && p.status !== "skipped" && p.status !== "pending" ? (
+                  <span className="num mr-1">
+                    {taskCounts[p.key]!.done}/{taskCounts[p.key]!.total} ·
+                  </span>
+                ) : null}
                 {p.status === "done" ? (
                   <span className="inline-flex items-center gap-1">
                     <IconCheck size={12} /> Done
@@ -162,7 +181,22 @@ export function PhaseStepper({ projectId, phases, version, canEdit }: { projectI
             <StatusPill tone={selected.status === "active" ? "accent" : selected.status === "done" ? "done" : "neutral"}>
               {selected.status === "active" ? "Current phase" : selected.status === "done" ? "Done" : selected.status === "skipped" ? "Skipped" : "Upcoming"}
             </StatusPill>
-            <p className="text-muted">This phase&apos;s checklist appears here once project templates are set up.</p>
+            <p className="text-muted">
+              {taskCounts[selected.key]
+                ? `${taskCounts[selected.key]!.done} of ${taskCounts[selected.key]!.total} tasks done.`
+                : "No tasks in this phase."}{" "}
+              <button
+                type="button"
+                className="font-medium text-text underline underline-offset-4"
+                onClick={() => {
+                  const k = selected.key;
+                  setSelected(null);
+                  onOpenChecklist(k);
+                }}
+              >
+                Open its checklist
+              </button>
+            </p>
             {canEdit && selected.status === "pending" && selIdx > activeIdx + 1 && activeIdx >= 0 && (
               <p className="text-muted">Jumping ahead marks the phases in between as done today.</p>
             )}

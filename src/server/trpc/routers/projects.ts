@@ -110,6 +110,28 @@ async function loadPhases(conn: DbOrTx, projectIds: string[]) {
   return out;
 }
 
+/** Task totals per phase, for "% complete" (counts only; no task content). */
+async function loadTaskCounts(conn: DbOrTx, projectIds: string[]) {
+  const out = new Map<string, Record<string, { total: number; done: number }>>();
+  if (projectIds.length === 0) return out;
+  const rows = await conn
+    .select({
+      projectId: schema.task.projectId,
+      phaseKey: schema.task.phaseKey,
+      total: sql<number>`count(*)::int`,
+      done: sql<number>`(count(*) filter (where ${schema.task.status} = 'done'))::int`,
+    })
+    .from(schema.task)
+    .where(inArray(schema.task.projectId, projectIds))
+    .groupBy(schema.task.projectId, schema.task.phaseKey);
+  for (const r of rows) {
+    const m = out.get(r.projectId) ?? {};
+    m[r.phaseKey] = { total: r.total, done: r.done };
+    out.set(r.projectId, m);
+  }
+  return out;
+}
+
 /** Hero photo per project: the pinned one, else the newest. */
 async function loadHeroes(conn: DbOrTx, projects: { id: string; heroPhotoId: string | null }[]) {
   const out = new Map<string, { id: string; width: number; height: number }>();
@@ -240,7 +262,7 @@ export const projectsRouter = router({
       .where(inArray(schema.project.id, ids))
       .orderBy(asc(schema.project.name));
 
-    const [phases, heroes, mine] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids)]);
+    const [phases, heroes, mine, counts] = await Promise.all([loadPhases(ctx.db, ids), loadHeroes(ctx.db, rows), membershipsOf(ctx.db, ctx.actor.userId, ids), loadTaskCounts(ctx.db, ids)]);
     const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
     const headlines = finIds.length ? await ctx.db.select().from(schema.projectHeadline).where(inArray(schema.projectHeadline.projectId, finIds)) : [];
 
@@ -259,6 +281,7 @@ export const projectsRouter = router({
       projects: rows.map((p) => ({
         ...p,
         phases: phases.get(p.id) ?? [],
+        taskCounts: counts.get(p.id) ?? {},
         hero: heroes.get(p.id) ?? null,
         memberIds: members.filter((m) => m.projectId === p.id).map((m) => m.userId),
         headline: finIds.includes(p.id) ? (headlineOrNull(headlines.find((h) => h.projectId === p.id)) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
@@ -298,12 +321,13 @@ export const projectsRouter = router({
       .innerJoin(schema.company, eq(schema.company.id, schema.project.companyId))
       .where(eq(schema.project.id, input.projectId));
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-    const [phases, heroes] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p])]);
+    const [phases, heroes, counts] = await Promise.all([loadPhases(ctx.db, [p.id]), loadHeroes(ctx.db, [p]), loadTaskCounts(ctx.db, [p.id])]);
     const canFin = ctx.project.can("financials.view");
     const [h] = canFin ? await ctx.db.select().from(schema.projectHeadline).where(eq(schema.projectHeadline.projectId, p.id)) : [];
     return {
       ...p,
       phases: phases.get(p.id) ?? [],
+      taskCounts: counts.get(p.id) ?? {},
       hero: heroes.get(p.id) ?? null,
       headline: canFin ? (headlineOrNull(h) ?? { purchasePriceCents: null, totalBudgetCents: null, projectedSelloutCents: null }) : null,
       access: {
@@ -317,6 +341,7 @@ export const projectsRouter = router({
         canUploadPhotos: ctx.project.can("photos.upload"),
         canManagePhotos: ctx.project.can("photos.manage"),
         canViewActivity: ctx.project.can("activity.view"),
+        canSaveTemplate: ctx.project.can("checklist.edit") && (ctx.actor.role === "owner" || ctx.actor.role === "admin"),
       },
     };
   }),

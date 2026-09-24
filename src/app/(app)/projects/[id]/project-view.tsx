@@ -12,10 +12,11 @@ import { Badge, Button, Skeleton, StatusPill } from "@/components/ui/primitives"
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { formatMoney } from "@/core/money";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
-import { phaseProgressBps } from "@/core/phases";
+import { projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { ActivityTab } from "./activity-tab";
+import { ChecklistTab } from "./checklist-tab";
 import { EditProjectDialog } from "./edit-dialog";
 import { PhaseStepper } from "./phase-stepper";
 import { PhotoGallery } from "./photos";
@@ -71,7 +72,12 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
     ...(p.access.canViewActivity ? [{ key: "activity" as const, label: "Activity" }] : []),
   ];
   const tab: TabKey = tabs.some((t) => t.key === requested) ? (requested as TabKey) : "overview";
-  const setTab = (next: TabKey) => router.replace(next === "overview" ? pathname : `${pathname}?tab=${next}`, { scroll: false });
+  const setTab = (next: TabKey, phase?: string) =>
+    router.replace(next === "overview" ? pathname : `${pathname}?tab=${next}${phase ? `&phase=${encodeURIComponent(phase)}` : ""}`, { scroll: false });
+  const openChecklist = (phase: string) => {
+    setTab("checklist", phase);
+    requestAnimationFrame(() => document.getElementById(`phase-${phase}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   return (
     <article>
@@ -107,13 +113,15 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
         </div>
       </header>
 
-      <PhaseStepper projectId={p.id} phases={p.phases} version={p.version} canEdit={p.access.canEdit && !p.archivedAt} />
+      <PhaseStepper projectId={p.id} phases={p.phases} taskCounts={p.taskCounts} version={p.version} canEdit={p.access.canEdit && !p.archivedAt} onOpenChecklist={openChecklist} />
 
-      <Tabs<TabKey> idBase="project-tabs" label="Project sections" className="mt-10" value={tab} onChange={setTab} items={tabs} />
+      <Tabs<TabKey> idBase="project-tabs" label="Project sections" className="mt-10" value={tab} onChange={(k) => setTab(k)} items={tabs} />
 
       <TabPanel idBase="project-tabs" tab={tab} className="mt-8 focus-visible:outline-offset-8">
         {tab === "overview" ? (
           <Overview project={p} viewerId={viewerId} />
+        ) : tab === "checklist" ? (
+          <ChecklistTab projectId={projectId} canSaveTemplate={p.access.canSaveTemplate} focusPhase={params.get("phase")} />
         ) : tab === "team" ? (
           <TeamTab projectId={projectId} canManage={p.access.canManageMembers} />
         ) : tab === "financials" && p.access.canViewFinancials ? (
@@ -165,8 +173,8 @@ function Overview({ project: p, viewerId }: { project: Project; viewerId: string
         <div>
           <h2 className="serif mb-4 text-heading">Progress</h2>
           <div className="rounded-card border border-border bg-surface p-6">
-            <p className="serif num text-display leading-none">{pct(phaseProgressBps(p.phases))}</p>
-            <p className="mt-2 text-[13px] text-muted">Of the phase track complete. Task progress counts here once checklists arrive.</p>
+            <p className="serif num text-display leading-none">{pct(projectProgressBps(p.phases, p.taskCounts))}</p>
+            <p className="mt-2 text-[13px] text-muted">Finished phases, plus the share of the current phase&apos;s checklist that&apos;s done.</p>
             {p.headline && <HeadlineFigures headline={p.headline} className="mt-6 border-t border-border pt-5" />}
           </div>
         </div>
@@ -216,7 +224,6 @@ function FinancialsTab({ project: p, onEdit }: { project: Project; onEdit?: () =
 }
 
 const UPCOMING: Record<string, { title: string; body: string }> = {
-  checklist: { title: "Checklists come with templates", body: "Each phase gets its checklist from the project type's template and the site's conditions (landmarked, occupied, excavation and more)." },
   dates: { title: "Key dates come with tasks", body: "DD expiry, closing, TOE, TCO expiry, loan maturity, 1031 deadlines and auction dates, each with reminders." },
   files: { title: "Files are next", body: "Folders for acquisition, legal, title, design, DOB, construction and more, with versions and previews. Photos are already on the Overview tab." },
   records: { title: "Public records are on the way", body: "Nightly DOB, HPD, ECB, ACRIS and tax checks for this BBL, with alerts when anything changes." },

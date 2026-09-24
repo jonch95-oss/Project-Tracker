@@ -60,8 +60,8 @@ export function irrelevantToggles(type: ProjectTypeKey): ToggleKey[] {
  * (or `showIf` is empty), and hidden when any `hideIf` toggle is on.
  */
 export interface Conditions {
-  showIf?: readonly string[];
-  hideIf?: readonly string[];
+  showIf?: string[];
+  hideIf?: string[];
 }
 
 export function conditionsMet(c: Conditions, on: ReadonlySet<string>): boolean {

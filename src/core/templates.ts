@@ -39,8 +39,8 @@ export interface TemplateTaskDef extends Conditions {
   due: DueRule;
   requiresApproval?: boolean;
   approverRole?: string | null;
-  dependsOn?: readonly string[];
-  subItems?: readonly string[];
+  dependsOn?: string[];
+  subItems?: string[];
   requiredAttachment?: string | null;
   recurrence?: Recurrence | null;
   /** A pipeline check that can kill the deal on its own. */
@@ -52,10 +52,10 @@ export interface TemplateDef {
   name: string;
   projectType: ProjectTypeKey;
   description?: string | null;
-  phases: readonly TemplatePhaseDef[];
-  tasks: readonly TemplateTaskDef[];
+  phases: TemplatePhaseDef[];
+  tasks: TemplateTaskDef[];
   /** Default folders for Files (brief §14). */
-  folders?: readonly string[];
+  folders?: string[];
 }
 
 export interface GeneratedPhase {

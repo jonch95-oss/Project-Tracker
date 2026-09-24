@@ -168,3 +168,45 @@ export const IconPhone = (p: IconProps) => (
     <path d="M11 18.5h2" />
   </Icon>
 );
+export const IconLock = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="5" y="10.5" width="14" height="10" rx="1.5" />
+    <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" />
+  </Icon>
+);
+export const IconRepeat = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M17 3l3 3-3 3M20 6H8a4 4 0 0 0-4 4v1M7 21l-3-3 3-3M4 18h12a4 4 0 0 0 4-4v-1" />
+  </Icon>
+);
+export const IconFlag = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
+  </Icon>
+);
+export const IconGrip = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" strokeWidth={2.5} />
+  </Icon>
+);
+export const IconArrowUp = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 19V5M6 11l6-6 6 6" />
+  </Icon>
+);
+export const IconArrowDown = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 5v14M6 13l6 6 6-6" />
+  </Icon>
+);
+export const IconPaperclip = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.3 8.3a1.7 1.7 0 0 1-2.4-2.4L15 7" />
+  </Icon>
+);
+export const IconTemplate = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" />
+    <path d="M3.5 9h17M9 9v11.5" />
+  </Icon>
+);

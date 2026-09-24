@@ -44,7 +44,9 @@ async function main() {
   const companies = await db.select().from(schema.company);
   const ariel = companies.find((c) => c.shortName === "Ariel")!;
   const lian = companies.find((c) => c.shortName === "Lian JV")!;
-  const { initialPhases, phasesForType, setCurrentPhase } = await import("../src/core/phases");
+  const { setCurrentPhase } = await import("../src/core/phases");
+  const { buildProjectChecklist, defaultTemplateFor, reschedule } = await import("../src/server/services/checklist");
+  const { and, inArray, ne } = await import("drizzle-orm");
   const { addDays, todayET } = await import("../src/core/time");
   const today = todayET();
   const projects = [
@@ -73,9 +75,29 @@ async function main() {
     const existing = await db.select({ id: schema.project.id }).from(schema.project).where(eq(schema.project.name, p.name));
     if (existing.length) continue;
     const [row] = await db.insert(schema.project).values({ ...p, createdById: ids["jon@demo.test"] }).returning();
-    let phases = initialPhases(phasesForType(p.type), addDays(today, -path[0]![1]));
+    // A real checklist from the default template, as if the project started path[0] days ago…
+    const toggles = p.type === "ground_up_condo" ? ["construction_loan", "excavation", "jv"] : p.type === "gut_renovation" ? ["landmarked", "occupied"] : [];
+    const tpl = await defaultTemplateFor(db as never, p.type);
+    await buildProjectChecklist(db as never, { projectId: row!.id, type: p.type, template: tpl, chosenToggles: toggles, today: addDays(today, -path[0]![1]), userId: ids["jon@demo.test"]! });
+    // …then walked through its phases on the recorded dates.
+    const stored = await db.select().from(schema.projectPhase).where(eq(schema.projectPhase.projectId, row!.id));
+    let phases = stored.map((x) => ({ key: x.key, name: x.name, sortOrder: x.sortOrder, status: x.status, startedOn: x.startedOn, completedOn: x.completedOn }));
     for (const [key, ago] of path.slice(1)) phases = setCurrentPhase(phases, key, addDays(today, -ago));
-    await db.insert(schema.projectPhase).values(phases.map((ph) => ({ ...ph, projectId: row!.id })));
+    for (const ph of phases) await db.update(schema.projectPhase).set({ status: ph.status, startedOn: ph.startedOn, completedOn: ph.completedOn }).where(and(eq(schema.projectPhase.projectId, row!.id), eq(schema.projectPhase.key, ph.key)));
+    // Tasks in finished phases are done; the current phase is partly done.
+    const donePhases = phases.filter((x) => x.status === "done").map((x) => x.key);
+    if (donePhases.length) {
+      for (const ph of phases.filter((x) => x.status === "done")) {
+        await db.update(schema.task).set({ status: "done", completedOn: ph.completedOn, completedAt: new Date(`${ph.completedOn}T16:00:00Z`) }).where(and(eq(schema.task.projectId, row!.id), eq(schema.task.phaseKey, ph.key)));
+      }
+    }
+    const current = phases.find((x) => x.status === "active");
+    if (current) {
+      const inPhase = await db.select({ id: schema.task.id }).from(schema.task).where(and(eq(schema.task.projectId, row!.id), eq(schema.task.phaseKey, current.key), ne(schema.task.status, "done")));
+      const half = inPhase.slice(0, Math.floor(inPhase.length / 3)).map((t) => t.id);
+      if (half.length) await db.update(schema.task).set({ status: "done", completedOn: addDays(today, -3), completedAt: new Date() }).where(inArray(schema.task.id, half));
+    }
+    await reschedule(db as never, row!.id);
     if (Object.values(headline).some((v) => v != null)) await db.insert(schema.projectHeadline).values({ projectId: row!.id, ...headline });
     await db.insert(schema.projectMember).values([
       { projectId: row!.id, userId: ids["jon@demo.test"]!, projectRole: "Principal", canViewFinancials: true, canEditChecklist: true, canApprove: true },

@@ -84,6 +84,7 @@ test.describe("owner flows", () => {
     await page.getByLabel("Project name").fill("Halsey Street Conversion");
     await page.getByLabel("Address").fill("301 Halsey Street");
     await page.getByLabel("Project type").selectOption("condo_conversion");
+    await page.getByRole("button", { name: "Next", exact: true }).click();
     await page.getByRole("button", { name: "Create project" }).click();
     await expect(page.getByRole("heading", { name: "Halsey Street Conversion" })).toBeVisible();
 
