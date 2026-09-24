@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-or
 import { z } from "zod";
 import { addBusinessDays } from "@/core/calendar";
 import { KEY_DATE_KINDS, keyDateLabel, upcomingKeyDates } from "@/core/key-dates";
+import { expiryLabel, FINANCIAL_EXPIRY } from "@/core/expiries";
 import { commentPlainText, mentionedIds } from "@/core/mentions";
 import { canGlobal, canProject, type Membership } from "@/core/permissions";
 import { canSetStatus, MY_TASK_SECTIONS, myTaskSection, shiftDate, TASK_STATUS_LABEL, type MyTaskSection, type TaskStatus } from "@/core/tasks";
@@ -553,7 +554,7 @@ export const tasksRouter = router({
   needsYou: protectedProcedure.query(async ({ ctx }) => {
     const { projectIds, memberships } = await accessibleProjects(ctx);
     const today = todayET();
-    const empty = { counts: { approvals: 0, blocked: 0 }, approvals: [], blocked: [], overdueByPerson: [], keyDates: [], recordAlerts: [] as { id: string; title: string }[] };
+    const empty = { counts: { approvals: 0, blocked: 0 }, approvals: [], blocked: [], overdueByPerson: [], keyDates: [], recordAlerts: [] as RailAlert[], expired: [] as RailExpiry[] };
     if (projectIds.length === 0) return empty;
     const full = projectIds.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "task.viewAll"));
     const approvable = projectIds.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "task.approve"));
@@ -580,6 +581,26 @@ export const tasksRouter = router({
         : Promise.resolve([]),
       full.length ? ctx.db.select().from(schema.keyDate).where(and(inArray(schema.keyDate.projectId, full), eq(schema.keyDate.done, false), sql`${schema.keyDate.date} >= ${today}`)) : Promise.resolve([]),
     ]);
+    // Public-record alerts from the last two weeks (orders in force first) and expired items (Module B).
+    const alerts = full.length
+      ? await ctx.db
+          .select({ id: schema.recordAlert.id, projectId: schema.recordAlert.projectId, title: schema.recordAlert.title, critical: schema.recordAlert.critical, createdAt: schema.recordAlert.createdAt })
+          .from(schema.recordAlert)
+          .where(and(inArray(schema.recordAlert.projectId, full), isNull(schema.recordAlert.dismissedAt), sql`${schema.recordAlert.createdAt} > now() - interval '14 days'`))
+          .orderBy(desc(schema.recordAlert.critical), desc(schema.recordAlert.createdAt))
+          .limit(20)
+      : [];
+    const fin = new Set(full.filter((id) => canProject(ctx.actor, memberships.get(id) ?? null, "financials.view")));
+    const expired = full.length
+      ? (
+          await ctx.db
+            .select({ id: schema.expiryItem.id, projectId: schema.expiryItem.projectId, category: schema.expiryItem.category, label: schema.expiryItem.label, vendorName: schema.expiryItem.vendorName, expiresOn: schema.expiryItem.expiresOn })
+            .from(schema.expiryItem)
+            .where(and(inArray(schema.expiryItem.projectId, full), isNull(schema.expiryItem.closedAt), lt(schema.expiryItem.expiresOn, today)))
+            .orderBy(asc(schema.expiryItem.expiresOn))
+            .limit(50)
+        ).filter((e) => !FINANCIAL_EXPIRY.has(e.category) || fin.has(e.projectId))
+      : [];
     const people = new Map<string, string>();
     const ids = [...new Set([...approvals, ...blocked].map((t) => t.assigneeId).filter((x): x is string => !!x))];
     if (ids.length) for (const u of await ctx.db.select({ id: schema.user.id, name: schema.user.name }).from(schema.user).where(inArray(schema.user.id, ids))) people.set(u.id, u.name);
@@ -589,8 +610,8 @@ export const tasksRouter = router({
       blocked: blocked.map((t) => ({ ...t, projectName: names.get(t.projectId)!, assigneeName: t.assigneeId ? (people.get(t.assigneeId) ?? null) : null })),
       overdueByPerson: overdue.map((o) => ({ userId: o.assigneeId, name: o.name ?? "Unassigned", count: o.count, oldest: o.oldest })).sort((a, b) => b.count - a.count),
       keyDates: upcomingKeyDates(dates, today, 14).map((d) => ({ id: d.id, projectId: d.projectId, projectName: names.get(d.projectId)!, label: keyDateLabel(d.kind, d.label), date: d.date })),
-      // Public-record alerts arrive with Milestone 8.
-      recordAlerts: [] as { id: string; title: string }[],
+      recordAlerts: alerts.map((a) => ({ ...a, projectName: names.get(a.projectId)! })) as RailAlert[],
+      expired: expired.map((e) => ({ id: e.id, projectId: e.projectId, projectName: names.get(e.projectId)!, label: expiryLabel(e.category, e.vendorName ?? e.label), expiresOn: e.expiresOn })) as RailExpiry[],
     };
   }),
 });
@@ -600,6 +621,9 @@ export const tasksRouter = router({
 /* ------------------------------------------------------------------ */
 
 const kindKeys = KEY_DATE_KINDS.map((k) => k.key) as [string, ...string[]];
+
+type RailAlert = { id: string; projectId: string; projectName: string; title: string; critical: boolean; createdAt: Date };
+type RailExpiry = { id: string; projectId: string; projectName: string; label: string; expiresOn: string };
 
 export const keyDatesRouter = router({
   list: projectProcedure("task.viewAll").query(async ({ ctx, input }) => {

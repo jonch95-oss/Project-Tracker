@@ -11,6 +11,7 @@ import { daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { useInvalidateTaskViews } from "@/lib/task-cache";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
+import { ExpiriesSection } from "./expiries-section";
 
 type KeyDate = RouterOutputs["keyDates"]["list"]["dates"][number];
 
@@ -56,6 +57,7 @@ export function KeyDatesTab({ projectId }: { projectId: string }) {
           )}
         </div>
       )}
+      <ExpiriesSection projectId={projectId} />
       {editing && <KeyDateDialog projectId={projectId} date={editing === "new" ? null : editing} onClose={() => setEditing(null)} onChanged={refresh} />}
     </section>
   );

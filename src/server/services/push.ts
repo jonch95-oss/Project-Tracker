@@ -124,7 +124,7 @@ function absolute(href: string | null): string {
   return `${env().APP_URL}${href ?? "/notifications"}`;
 }
 
-type Claimed = { id: string; userId: string; kind: string; title: string; body: string | null; href: string | null; projectId: string | null; readAt: Date | null; createdAt: Date };
+type Claimed = { id: string; userId: string; kind: string; title: string; body: string | null; href: string | null; projectId: string | null; readAt: Date | null; createdAt: Date; critical: boolean };
 
 const claimedColumns = {
   id: schema.notification.id,
@@ -136,6 +136,7 @@ const claimedColumns = {
   projectId: schema.notification.projectId,
   readAt: schema.notification.readAt,
   createdAt: schema.notification.createdAt,
+  critical: schema.notification.critical,
 };
 
 /** Rows a batch push covers: up to this many are pushed one by one; more become one summary. */
@@ -210,9 +211,20 @@ export async function dispatchPending(limit = 100, now = new Date()): Promise<{ 
   for (const r of rows) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
   for (const [userId, list] of byUser) {
     const s = settings.get(userId)!;
-    for (const r of list) if (EMAILED_KINDS.has(r.kind) && channelOn(s.prefs, r.kind, "email")) await emailNotification(r);
-    const skip = list.filter((r) => !enabled || !withDevice.has(userId) || !channelOn(s.prefs, r.kind, "push") || !visible.has(r.id) || now.getTime() - r.createdAt.getTime() > STALE_MS);
-    const go = list.filter((r) => !skip.includes(r));
+    for (const r of list) {
+      if (r.critical) await emailNotification(r, { critical: true });
+      else if (EMAILED_KINDS.has(r.kind) && channelOn(s.prefs, r.kind, "email")) await emailNotification(r);
+    }
+    // Critical orders go straight out, whatever the preferences and quiet hours (brief §10).
+    const critical = list.filter((r) => r.critical && enabled && withDevice.has(userId));
+    for (const r of critical) {
+      const ok = (await pushToUser(conn, userId, { title: r.title, body: r.body ?? "", url: absolute(r.href), tag: r.id })) > 0;
+      await finish([r.id], ok ? "sent" : "skipped", now);
+      tally[ok ? "sent" : "skipped"]++;
+    }
+    const rest = list.filter((r) => !critical.includes(r));
+    const skip = rest.filter((r) => !enabled || !withDevice.has(userId) || !channelOn(s.prefs, r.kind, "push") || !visible.has(r.id) || now.getTime() - r.createdAt.getTime() > STALE_MS);
+    const go = rest.filter((r) => !skip.includes(r));
     await finish(skip.map((r) => r.id), "skipped", now);
     tally.skipped += skip.length;
     if (go.length === 0) continue;
@@ -269,11 +281,11 @@ export async function releaseHeld(now = new Date()): Promise<{ released: number;
   return { released, dropped };
 }
 
-async function emailNotification(r: { userId: string; title: string; body: string | null; href: string | null }) {
+async function emailNotification(r: { userId: string; title: string; body: string | null; href: string | null }, opts: { critical?: boolean } = {}) {
   const [u] = await db().select({ email: schema.user.email }).from(schema.user).where(eq(schema.user.id, r.userId));
   if (!u) return;
   const content = renderEmail({ preheader: safeOutsideText(r.title), heading: r.title, paragraphs: r.body ? [r.body] : [], cta: { label: "Open in Project Command", url: absolute(r.href) } });
-  await sendEmail({ to: u.email, subject: `Project Command: ${safeOutsideText(r.title)}`.slice(0, 200), ...content, category: "approval", urgent: true });
+  await sendEmail({ to: u.email, subject: `Project Command: ${safeOutsideText(r.title)}`.slice(0, 200), ...content, category: opts.critical ? "system" : "approval", urgent: true, critical: opts.critical });
 }
 
 /**

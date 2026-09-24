@@ -85,6 +85,13 @@
       "when": 1790221692885,
       "tag": "0011_notifications_m7",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790247953557,
+      "tag": "0012_records_expiries_m8",
+      "breakpoints": true
     }
   ]
 }

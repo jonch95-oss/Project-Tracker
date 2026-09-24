@@ -23,7 +23,7 @@ test.describe("tasks", () => {
 
     // Key dates tab.
     await card.click();
-    await page.getByRole("tab", { name: "Key Dates" }).click();
+    await page.getByRole("tab", { name: "Dates & Expiries" }).click();
     await page.getByRole("button", { name: "Add date" }).click();
     const d = page.getByRole("dialog");
     await d.getByLabel("What").selectOption("closing");

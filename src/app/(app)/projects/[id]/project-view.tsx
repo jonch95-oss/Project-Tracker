@@ -18,6 +18,7 @@ import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { ActivityTab } from "./activity-tab";
 import { ChecklistTab } from "./checklist-tab";
 import { FilesTab } from "./files-tab";
+import { RecordsTab } from "./records-tab";
 import { FinancialsTab } from "./financials-tab";
 import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
@@ -68,10 +69,10 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
     { key: "overview", label: "Overview" },
     { key: "checklist", label: "Checklist" },
     { key: "team", label: "Team" },
-    ...(p.access.canSeeAllTasks ? [{ key: "dates" as const, label: "Key Dates" }] : []),
+    ...(p.access.canSeeAllTasks ? [{ key: "dates" as const, label: "Dates & Expiries" }] : []),
     ...(p.access.canViewFinancials ? [{ key: "financials" as const, label: "Financials" }] : []),
     { key: "files", label: "Files" },
-    { key: "records", label: "Public Records" },
+    ...(p.access.canSeeAllTasks ? [{ key: "records" as const, label: "Public Records" }] : []),
     ...(p.access.canViewActivity ? [{ key: "activity" as const, label: "Activity" }] : []),
   ];
   const tab: TabKey = tabs.some((t) => t.key === requested) ? (requested as TabKey) : "overview";
@@ -142,9 +143,9 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
           <FinancialsTab projectId={projectId} />
         ) : tab === "activity" ? (
           <ActivityTab projectId={projectId} />
-        ) : (
-          <Upcoming tab={tab} />
-        )}
+        ) : tab === "records" ? (
+          <RecordsTab projectId={projectId} onOpenTask={(id) => setTab("checklist", undefined, id)} />
+        ) : null}
       </TabPanel>
 
       {p.access.canEdit && <EditProjectDialog project={p} open={editing} onClose={() => setEditing(false)} />}
@@ -236,15 +237,6 @@ function Overview({ project: p, viewerId, onOpenTask, onOpenDates }: { project: 
   );
 }
 
-
-const UPCOMING: Record<string, { title: string; body: string }> = {
-  records: { title: "Public records are on the way", body: "Nightly DOB, HPD, ECB, ACRIS and tax checks for this BBL, with alerts when anything changes." },
-};
-
-function Upcoming({ tab }: { tab: string }) {
-  const u = UPCOMING[tab] ?? { title: "Coming soon", body: "" };
-  return <EmptyState title={u.title} body={u.body} />;
-}
 
 function ArchivedBanner({ project }: { project: Project }) {
   const trpc = useTRPC();

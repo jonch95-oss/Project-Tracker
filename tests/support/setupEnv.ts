@@ -20,3 +20,16 @@ setGeocoderForTests({
   },
 });
 setStorageForTests(memoryStorage());
+
+// Never call NYC Open Data from tests: every dataset has its columns and no rows unless a test says otherwise.
+import { SOURCES } from "@/core/records";
+import { setRecordsClientForTests } from "@/server/services/records";
+
+setRecordsClientForTests({
+  async meta(dataset) {
+    return { columns: new Set(SOURCES.filter((s) => s.dataset === dataset).flatMap((s) => s.columns)), rowsUpdatedAt: new Date("2026-09-01T00:00:00Z") };
+  },
+  async rows() {
+    return [];
+  },
+});

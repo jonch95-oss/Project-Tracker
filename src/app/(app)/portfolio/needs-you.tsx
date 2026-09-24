@@ -3,7 +3,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { IconAlert, IconBlocked, IconCalendar, IconCheckCircle } from "@/components/ui/icons";
+import { IconAlert, IconBlocked, IconCalendar, IconCheckCircle, IconClock, IconFlag } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
 import { Button } from "@/components/ui/primitives";
 import { daysBetween, formatIsoDate, todayET } from "@/core/time";
@@ -32,7 +32,7 @@ export function NeedsYouRail() {
   if (!q.data) return null;
   const d = q.data;
   const today = todayET();
-  const empty = !d.approvals.length && !d.blocked.length && !d.overdueByPerson.length && !d.keyDates.length && !d.recordAlerts.length;
+  const empty = !d.approvals.length && !d.blocked.length && !d.overdueByPerson.length && !d.keyDates.length && !d.recordAlerts.length && !d.expired.length;
   if (empty) {
     return (
       <p className="mb-8 flex items-center gap-2 text-[13px] text-muted">
@@ -46,6 +46,33 @@ export function NeedsYouRail() {
         Needs you
       </h2>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {d.recordAlerts.length > 0 && (
+          <Box title="Public records" count={d.recordAlerts.length} icon={<IconFlag size={16} className={d.recordAlerts.some((a) => a.critical) ? "text-blocked-text" : undefined} />}>
+            {d.recordAlerts.slice(0, 5).map((a) => (
+              <li key={a.id} className="py-2">
+                <Link href={`/projects/${a.projectId}?tab=records`} className="block">
+                  <span className={`block truncate text-sm font-medium ${a.critical ? "text-blocked-text" : ""}`}>{a.title}</span>
+                  <span className="block truncate text-[12px] text-muted">{a.projectName}</span>
+                </Link>
+              </li>
+            ))}
+          </Box>
+        )}
+        {d.expired.length > 0 && (
+          <Box title="Expired" count={d.expired.length} icon={<IconClock size={16} className="text-blocked-text" />}>
+            {d.expired.slice(0, 5).map((e) => (
+              <li key={e.id} className="py-2">
+                <Link href={`/projects/${e.projectId}?tab=dates`} className="flex items-center justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-blocked-text">{e.label}</span>
+                    <span className="block truncate text-[12px] text-muted">{e.projectName}</span>
+                  </span>
+                  <span className="num shrink-0 text-[12px] text-blocked-text">{daysBetween(e.expiresOn, today)}d ago</span>
+                </Link>
+              </li>
+            ))}
+          </Box>
+        )}
         {d.approvals.length > 0 && (
           <Box title="Waiting on your approval" count={d.counts.approvals} icon={<IconCheckCircle size={16} />}>
             {d.approvals.slice(0, 5).map((t) => (

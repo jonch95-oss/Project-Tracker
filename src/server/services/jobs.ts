@@ -12,6 +12,8 @@ import { purgeTrashJob } from "./files";
 import { followUpJob, keyDateReminderJob } from "./tasks";
 import { closeStalePending, dispatchPending, releaseHeld } from "./push";
 import { digestJob, dueTomorrowJob, overdueNudgeJob } from "./notifications";
+import { expiryReminderJob } from "./expiries";
+import { recordsSyncJob } from "./records";
 
 export type JobResult = Record<string, unknown>;
 
@@ -163,6 +165,7 @@ const DAILY: { job: string; hourET: number; fn: () => Promise<JobResult> }[] = [
   { job: "daily-digest", hourET: 7, fn: () => digestJob() },
   { job: "due-tomorrow", hourET: 9, fn: () => dueTomorrowJob() },
   { job: "overdue-nudges", hourET: 9, fn: () => overdueNudgeJob() },
+  { job: "expiry-reminders", hourET: 8, fn: () => expiryReminderJob() },
 ];
 
 /** Push: send anything the per-request dispatch missed, release quiet-hours holds, close out stale rows. */
@@ -206,7 +209,9 @@ export async function tickJob(now = new Date()): Promise<JobResult> {
     for (const d of DAILY) {
       if (hourET(now) >= d.hourET && !(await ranToday(d.job, now))) await attempt(d.job, d.fn);
     }
-    // Last, so today's reminders and digest go out on this tick.
+    // Public records: nightly per project (1–6am New York), failed sources retried with backoff.
+    await attempt("records-sync", () => recordsSyncJob(now, 150_000));
+    // Last, so today's reminders, digest and record alerts go out on this tick.
     await attempt("push", () => pushJob(now));
     if (failed.length) throw new Error(`Jobs failed: ${failed.join(", ")}`);
     return { ran, staleRunsClosed: stale };

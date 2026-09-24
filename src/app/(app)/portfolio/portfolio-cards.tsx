@@ -7,7 +7,7 @@ import { PROJECT_TYPE_SHORT, type ProjectTypeKey } from "@/core/labels";
 import { daysInPhase, projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
 import { formatIsoDate, todayET } from "@/core/time";
-import { IconAlert, IconBlocked, IconCalendar } from "@/components/ui/icons";
+import { IconAlert, IconBlocked, IconCalendar, IconClock, IconFlag, IconShield } from "@/components/ui/icons";
 import type { PortfolioProject } from "./portfolio-view";
 
 /** Tall photo cards (brief §7.1). */
@@ -67,8 +67,29 @@ export function PortfolioCards({ projects }: { projects: PortfolioProject[] }) {
                   ) : (
                     <p className="mt-0.5 text-muted">Nothing open</p>
                   )}
-                  {(p.facts.blocked > 0 || p.facts.overdue > 0 || p.facts.nextKeyDate) && (
+                  {(p.facts.blocked > 0 || p.facts.overdue > 0 || p.facts.nextKeyDate || p.facts.expired > 0 || p.facts.ordersInForce > 0 || p.facts.coiFlags.length > 0 || p.facts.openViolations > 0) && (
                     <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+                      {p.facts.ordersInForce > 0 && (
+                        <span className="inline-flex items-center gap-1 font-semibold text-blocked-text">
+                          <IconAlert size={14} /> {p.facts.ordersInForce === 1 ? "Stop-work or vacate order" : `${p.facts.ordersInForce} stop-work / vacate orders`}
+                        </span>
+                      )}
+                      {p.facts.expired > 0 && (
+                        <span className="num inline-flex items-center gap-1 font-medium text-blocked-text">
+                          <IconClock size={14} /> {p.facts.expired} expired
+                        </span>
+                      )}
+                      {p.facts.coiFlags.length > 0 && (
+                        <span className="inline-flex items-center gap-1 font-medium text-blocked-text" title={p.facts.coiFlags.join(", ")}>
+                          <IconShield size={14} /> COI expired: {p.facts.coiFlags.slice(0, 2).join(", ")}
+                          {p.facts.coiFlags.length > 2 ? ` +${p.facts.coiFlags.length - 2}` : ""}
+                        </span>
+                      )}
+                      {p.facts.openViolations > 0 && (
+                        <span className="num inline-flex items-center gap-1 text-attention-text">
+                          <IconFlag size={14} /> {p.facts.openViolations} open violation{p.facts.openViolations === 1 ? "" : "s"}
+                        </span>
+                      )}
                       {p.facts.blocked > 0 && (
                         <span className="num inline-flex items-center gap-1 font-medium text-blocked-text">
                           <IconBlocked size={14} /> {p.facts.blocked} blocked

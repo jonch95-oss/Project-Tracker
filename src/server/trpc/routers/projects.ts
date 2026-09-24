@@ -13,6 +13,7 @@ import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
+import { expiredCoiFlags, expiredCounts } from "../../services/expiries";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
 import { canSeePhotos, projectsWithSharedPhotos } from "../../services/files";
 import { cardHeadlines } from "../../services/financials";
@@ -134,6 +135,11 @@ export interface CardFacts {
   blocked: number;
   overdue: number;
   nextKeyDate: { label: string; date: string } | null;
+  /** Module B / §10 (internal team only): expired items, vendors with an expired COI, orders in force, open violations. */
+  expired: number;
+  coiFlags: string[];
+  ordersInForce: number;
+  openViolations: number;
 }
 
 /**
@@ -174,9 +180,43 @@ async function loadCardFacts(conn: DbOrTx, projectIds: string[], outsider: strin
       blocked: mine.filter((t) => t.status === "blocked").length,
       overdue: mine.filter((t) => t.dueOn && t.dueOn < today).length,
       nextKeyDate: kd ? { label: keyDateLabel(kd.kind, kd.label), date: kd.date } : null,
+      expired: 0,
+      coiFlags: [],
+      ordersInForce: 0,
+      openViolations: 0,
     });
   }
   return out;
+}
+
+/** Expiries, COI flags, orders in force and open violations for the internal team's cards (money expiries only with financial access). */
+async function addRiskFacts(conn: DbOrTx, ids: string[], fin: Set<string>, facts: Map<string, CardFacts>) {
+  const today = todayET();
+  const [expired, coi, risk] = await Promise.all([
+    expiredCounts(conn, ids, today, (id) => fin.has(id)),
+    expiredCoiFlags(conn, ids, today),
+    conn
+      .select({
+        projectId: schema.violationCase.projectId,
+        open: sql<number>`count(*)::int`,
+      })
+      .from(schema.violationCase)
+      .where(and(inArray(schema.violationCase.projectId, ids), notInArray(schema.violationCase.stage, ["dismissed", "paid", "resolved"])))
+      .groupBy(schema.violationCase.projectId),
+  ]);
+  const orders = await conn
+    .select({ projectId: schema.recordItem.projectId, n: sql<number>`count(*)::int` })
+    .from(schema.recordItem)
+    .where(and(inArray(schema.recordItem.projectId, ids), eq(schema.recordItem.critical, true)))
+    .groupBy(schema.recordItem.projectId);
+  for (const id of ids) {
+    const f = facts.get(id);
+    if (!f) continue;
+    f.expired = expired.get(id) ?? 0;
+    f.coiFlags = coi.get(id) ?? [];
+    f.ordersInForce = orders.find((o) => o.projectId === id)?.n ?? 0;
+    f.openViolations = risk.find((r) => r.projectId === id)?.open ?? 0;
+  }
 }
 
 async function loadTaskCounts(conn: DbOrTx, projectIds: string[], onlyAssignee: string | null = null) {
@@ -336,6 +376,7 @@ export const projectsRouter = router({
     const finIds = ids.filter((id) => canProject(ctx.actor, mine.get(id) ?? null, "financials.view"));
     // Computed: once a project has a budget or unit schedule, its card follows them.
     const headlines = await cardHeadlines(ctx.db, finIds);
+    if (!outsider) await addRiskFacts(ctx.db, ids, new Set(finIds), facts);
 
     const internal = ctx.actor.role !== "external";
     const members = internal

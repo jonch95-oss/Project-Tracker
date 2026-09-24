@@ -20,6 +20,8 @@ export const NOTIFY_EVENTS = [
   { kind: "unblocked", label: "A task I'm waiting on is done", email: false },
   { kind: "follow_up", label: "Follow up with third parties", email: false },
   { kind: "key_date", label: "Key dates approaching", email: false },
+  { kind: "record_change", label: "Public-record changes", email: false },
+  { kind: "expiry", label: "Permits, policies and COIs expiring", email: false },
   { kind: "file_added", label: "Files added to folders I watch", email: false },
   { kind: "digest", label: "Daily digest (7:00am)", email: true },
 ] as const;

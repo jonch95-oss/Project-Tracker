@@ -123,6 +123,43 @@ async function main() {
     if (active[3]) await db.update(schema.task).set({ status: "awaiting_approval", requiresApproval: true, approverRole: "Owner", approverId: ids["jon@demo.test"]!, approvalRequestedAt: new Date() }).where(eq(schema.task.id, active[3].id));
     const kd = p.type === "foreclosure_auction" ? [{ kind: "auction", date: addDays(today, 5) }] : p.type === "contract_flip" ? [{ kind: "closing", date: addDays(today, 12) }, { kind: "dd_expiry", date: addDays(today, 3) }] : [{ kind: "loan_maturity", date: addDays(today, 200) }, { kind: "tco_expiry", date: addDays(today, 45) }];
     await db.insert(schema.keyDate).values(kd.map((k) => ({ projectId: row!.id, ...k })));
+    // Public records and expiries for the townhouse: an ECB violation with a hearing, an old closed one, a DOB NOW job, a permit expiring soon, and an expired COI.
+    if (p.type === "gut_renovation") {
+      const pid = row!.id;
+      const run = new Date(Date.now() - 6 * 3600_000);
+      const url = "https://data.cityofnewyork.us/resource/6bgk-3dad.json?ecb_violation_number=39000123K";
+      await db.insert(schema.recordItem).values([
+        { projectId: pid, source: "ecb_violations", key: "39000123K", kind: "violation", title: "ECB violation 39000123K", status: "ACTIVE · PENDING", date: addDays(today, -12), open: true, url, hearingOn: addDays(today, 21), detail: { severity: "CLASS - 2", description: "Failure to maintain the sidewalk shed" } },
+        { projectId: pid, source: "dob_violations", key: "5512003", kind: "violation", title: "DOB violation 031519C01", status: "V*-DOB VIOLATION - DISMISSED", date: "2019-03-15", open: false, url: "https://a810-bisweb.nyc.gov/bisweb/PropertyProfileOverviewServlet?boro=3&block=01137&lot=00045", detail: {} },
+        { projectId: pid, source: "dobnow_jobs", key: "B01188420-I1", kind: "job", title: "DOB NOW Alteration B01188420-I1", status: "Approved", date: addDays(today, -60), open: true, url: "https://data.cityofnewyork.us/resource/w9ak-ipjd.json?job_filing_number=B01188420-I1", detail: { description: "Gut renovation of a 3-family townhouse" } },
+        { projectId: pid, source: "dobnow_permits", key: "B01188420-I1-GC#1", kind: "permit", title: "General Construction permit B01188420-I1-GC", status: "Permit Issued", date: addDays(today, -40), open: true, url: "https://data.cityofnewyork.us/resource/rbx6-tga4.json?work_permit=B01188420-I1-GC", expiresOn: addDays(today, 18), detail: { expires: addDays(today, 18) } },
+        { projectId: pid, source: "sr311", key: "61200011", kind: "sr311", title: "311: Noise - Residential (Banging/Pounding)", status: "Open", date: addDays(today, -1), open: true, url: "https://data.cityofnewyork.us/resource/erm2-nwe9.json?unique_key=61200011", detail: { agency: "NYPD" } },
+        { projectId: pid, source: "acris_master", key: "2026071500123001", kind: "recording", title: "Mortgage recorded", status: "MTGE", date: addDays(today, -70), open: false, url: "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026071500123001", detail: { docType: "MTGE" } },
+        { projectId: pid, source: "dof_charges", key: "arrears", kind: "tax", title: "No property charges past due", status: "current", date: null, open: false, url: "https://a836-pts-access.nyc.gov/care/search/commonsearch.aspx?mode=persprop", detail: { pastDueCents: 0 } },
+      ]);
+      await db.insert(schema.recordSync).values([
+        { projectId: pid, source: "_run", lastRunAt: run, lastSuccessAt: run },
+        ...["dobnow_jobs", "bis_jobs", "bis_permits", "dobnow_permits", "dob_violations", "ecb_violations", "dob_safety", "hpd_violations", "hpd_vacate", "fdny_vacate", "dob_complaints", "oath", "sr311", "tax_lien", "dof_charges", "acris_legals", "acris_master"].map((source) => ({
+          projectId: pid,
+          source,
+          lastRunAt: run,
+          lastSuccessAt: run,
+          dataAsOf: source.startsWith("acris") ? new Date(Date.now() - 50 * 86_400_000) : new Date(Date.now() - 86_400_000),
+          rows: 1,
+        })),
+      ]);
+      const [kd] = await db.insert(schema.keyDate).values({ projectId: pid, kind: "oath_hearing", label: "Hearing: ECB violation 39000123K", date: addDays(today, 21) }).returning();
+      await db.insert(schema.violationCase).values({ projectId: pid, source: "ecb_violations", itemKey: "39000123K", title: "ECB violation 39000123K", description: "Failure to maintain the sidewalk shed", url, issuedOn: addDays(today, -12), stage: "hearing", hearingOn: addDays(today, 21), keyDateId: kd!.id });
+      await db.insert(schema.recordAlert).values([
+        { projectId: pid, source: "ecb_violations", itemKey: "39000123K", kind: "new", title: "New violation: ECB violation 39000123K", url, dedupeKey: "ecb_violations:39000123K:new" },
+        { projectId: pid, source: "sr311", itemKey: "61200011", kind: "new", title: "New 311: Noise - Residential (Banging/Pounding)", url: "https://data.cityofnewyork.us/resource/erm2-nwe9.json?unique_key=61200011", dedupeKey: "sr311:61200011:new" },
+      ]);
+      await db.insert(schema.expiryItem).values([
+        { projectId: pid, category: "dob_permit", label: "General Construction permit B01188420-I1-GC", expiresOn: addDays(today, 18), recordRef: "dobnow_permits:B01188420-I1-GC#1" },
+        { projectId: pid, category: "builders_risk", label: "Policy BR-44120", expiresOn: addDays(today, 64) },
+        { projectId: pid, category: "vendor_coi_gl", vendorName: "Northside Scaffold", vendorKey: "northside scaffold", expiresOn: addDays(today, -3) },
+      ]);
+    }
     // Financial detail for the condo: a budget, contracts, invoices, a change order, a draw and a unit schedule.
     if (p.type === "ground_up_condo") {
       const L = async (category: string, name: string, dollars: number) =>

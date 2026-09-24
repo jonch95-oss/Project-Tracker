@@ -368,6 +368,49 @@ const MATRIX: Record<string, Row | "public"> = {
   "notifications.unreadCount": { allowed: ACTIVE, call: (c) => c.notifications.unreadCount() },
   "notifications.markRead": { allowed: ACTIVE, call: (c) => c.notifications.markRead({ ids: ["00000000-0000-4000-8000-000000000000"] }) },
   "notifications.markAllRead": { allowed: ACTIVE, call: (c) => c.notifications.markAllRead() },
+  "records.overview": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.records.overview({ projectId: f.projectId }) },
+  "records.syncNow": {
+    allowed: EDITORS,
+    // Allowed means "got past the permission check": no BBL or the cooldown answer with their own codes.
+    call: (c, f) => c.records.syncNow({ projectId: f.projectId }).catch((e: { code?: string }) => { if (e.code !== "BAD_REQUEST" && e.code !== "TOO_MANY_REQUESTS") throw e; }),
+  },
+  "records.dismissAlert": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [a] = await db().insert(schema.recordAlert).values({ projectId: f.projectId, source: "dob_violations", itemKey: uid(), kind: "new", title: "New violation", url: "https://x", dedupeKey: uid() }).returning();
+      return c.records.dismissAlert({ projectId: f.projectId, alertId: a!.id });
+    },
+  },
+  "records.createTask": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [a] = await db().insert(schema.recordAlert).values({ projectId: f.projectId, source: "dob_violations", itemKey: uid(), kind: "new", title: "New violation", url: "https://x", dedupeKey: uid() }).returning();
+      return c.records.createTask({ projectId: f.projectId, alertId: a!.id });
+    },
+  },
+  "records.updateViolation": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [v] = await db().insert(schema.violationCase).values({ projectId: f.projectId, source: "dob_violations", itemKey: uid(), title: "DOB violation", url: "https://x" }).returning();
+      return c.records.updateViolation({ projectId: f.projectId, id: v!.id, version: 1, stage: "fixed" });
+    },
+  },
+  "expiries.list": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.expiries.list({ projectId: f.projectId }) },
+  "expiries.save": { allowed: EDITORS, call: (c, f) => c.expiries.save({ projectId: f.projectId, category: "gl_policy", expiresOn: "2031-01-01" }) },
+  "expiries.close": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [e] = await db().insert(schema.expiryItem).values({ projectId: f.projectId, category: "gl_policy", expiresOn: "2031-01-01" }).returning();
+      return c.expiries.close({ projectId: f.projectId, id: e!.id, version: 1, closed: true });
+    },
+  },
+  "expiries.remove": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [e] = await db().insert(schema.expiryItem).values({ projectId: f.projectId, category: "gl_policy", expiresOn: "2031-01-01" }).returning();
+      return c.expiries.remove({ projectId: f.projectId, id: e!.id });
+    },
+  },
   "notifySettings.get": { allowed: ACTIVE, call: (c) => c.notifySettings.get() },
   "notifySettings.save": { allowed: ACTIVE, call: (c) => c.notifySettings.save({ prefs: {}, quietStart: null, quietEnd: null, digest: true }) },
   "push.config": { allowed: ACTIVE, call: (c) => c.push.config() },

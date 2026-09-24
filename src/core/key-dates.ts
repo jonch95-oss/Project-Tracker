@@ -13,13 +13,14 @@ export const KEY_DATE_KINDS = [
   { key: "exchange_1031_identify", label: "1031 identification deadline" },
   { key: "exchange_1031_close", label: "1031 closing deadline" },
   { key: "auction", label: "Auction date" },
+  { key: "oath_hearing", label: "OATH hearing" },
   { key: "other", label: "Other" },
 ] as const;
 
 export type KeyDateKind = (typeof KEY_DATE_KINDS)[number]["key"];
 
 export function keyDateLabel(kind: string, custom?: string | null): string {
-  if (kind === "other" && custom) return custom;
+  if ((kind === "other" || kind === "oath_hearing") && custom) return custom;
   return KEY_DATE_KINDS.find((k) => k.key === kind)?.label ?? kind;
 }
 

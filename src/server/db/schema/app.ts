@@ -546,6 +546,7 @@ export const NOTIFICATION_KINDS = [
   "key_date",
   "follow_up",
   "record_change",
+  "expiry",
   "file_added",
   "digest",
   "system",
@@ -574,6 +575,8 @@ export const notification = pgTable(
     /** Web push: pending = not yet decided; sending = claimed by a dispatcher; then sent, skipped (preference / no device) or held for quiet hours. */
     pushState: text("push_state", { enum: ["pending", "sending", "sent", "skipped", "held"] }).notNull().default("pending"),
     pushedAt: timestamp("pushed_at", { withTimezone: true }),
+    /** Stop-work / vacate orders: push and email straight away, through quiet hours and preferences (brief §10). */
+    critical: boolean("critical").notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [index("notification_user_idx").on(t.userId, t.readAt, t.createdAt), index("notification_push_idx").on(t.pushState, t.createdAt)],
@@ -910,4 +913,149 @@ export const projectSequence = pgTable(
     last: integer("last").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.kind] })],
+);
+
+/* ------------------------------------------------------------------ */
+/* Milestone 8: public records watch, violations, expiries             */
+/* ------------------------------------------------------------------ */
+
+/** The latest copy of one public record for a project's lot (brief §10), diffed nightly. */
+export const recordItem = pgTable(
+  "record_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    key: text("key").notNull(),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    status: text("status"),
+    /** ISO date the record is about. */
+    date: text("date"),
+    open: boolean("open").notNull().default(false),
+    critical: boolean("critical").notNull().default(false),
+    url: text("url").notNull(),
+    hearingOn: text("hearing_on"),
+    expiresOn: text("expires_on"),
+    detail: jsonb("detail").$type<Record<string, string | number | null>>().notNull().default({}),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("record_item_key_idx").on(t.projectId, t.source, t.key), index("record_item_kind_idx").on(t.projectId, t.kind, t.open)],
+);
+
+/** Sync health per project and source: last success, data freshness, failures. */
+export const recordSync = pgTable(
+  "record_sync",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    /** The dataset's own "rows updated" time: ACRIS lags live by 1–2 months. */
+    dataAsOf: timestamp("data_as_of", { withTimezone: true }),
+    rows: integer("rows").notNull().default(0),
+    failures: integer("failures").notNull().default(0),
+    error: text("error"),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.source] })],
+);
+
+/** A change worth telling people about, on the project's Public Records tab. */
+export const recordAlert = pgTable(
+  "record_alert",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    itemKey: text("item_key").notNull(),
+    kind: text("kind", { enum: ["new", "status", "critical", "resolved"] }).notNull(),
+    critical: boolean("critical").notNull().default(false),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    /** Stable per change: a re-run never raises the same alert twice. */
+    dedupeKey: text("dedupe_key").notNull(),
+    taskId: uuid("task_id").references(() => task.id, { onDelete: "set null" }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    dismissedById: text("dismissed_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("record_alert_dedupe_idx").on(t.projectId, t.dedupeKey), index("record_alert_project_idx").on(t.projectId, t.createdAt)],
+);
+
+/** A violation tracked through to closure (brief §10). */
+export const violationCase = pgTable(
+  "violation_case",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    itemKey: text("item_key").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    url: text("url").notNull(),
+    issuedOn: text("issued_on"),
+    stage: text("stage", { enum: ["issued", "hearing", "fixed", "correction_filed", "dismissed", "paid", "resolved"] }).notNull().default("issued"),
+    hearingOn: text("hearing_on"),
+    keyDateId: uuid("key_date_id").references(() => keyDate.id, { onDelete: "set null" }),
+    notes: text("notes"),
+    closedOn: text("closed_on"),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("violation_case_item_idx").on(t.projectId, t.source, t.itemKey), index("violation_case_stage_idx").on(t.projectId, t.stage)],
+);
+
+/** Module B: anything with an expiry date. Permits found in public records are added automatically. */
+export const expiryItem = pgTable(
+  "expiry_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    label: text("label"),
+    vendorName: text("vendor_name"),
+    /** Normalized vendor name, so one expired COI flags the vendor everywhere. */
+    vendorKey: text("vendor_key"),
+    expiresOn: text("expires_on").notNull(),
+    notes: text("notes"),
+    /** Set for items created from a public record ("source:key"); the sync keeps their dates current. */
+    recordRef: text("record_ref"),
+    /** Renewed or no longer relevant: stops reminders, keeps history. */
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("expiry_item_project_idx").on(t.projectId, t.expiresOn),
+    index("expiry_item_vendor_idx").on(t.vendorKey),
+    uniqueIndex("expiry_item_record_idx").on(t.projectId, t.recordRef),
+  ],
+);
+
+/** One row per expiry reminder sent (for this expiry date), so nothing double-sends. */
+export const expiryReminder = pgTable(
+  "expiry_reminder",
+  {
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => expiryItem.id, { onDelete: "cascade" }),
+    expiresOn: text("expires_on").notNull(),
+    mark: text("mark").notNull(),
+    sentAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.itemId, t.expiresOn, t.mark] })],
 );

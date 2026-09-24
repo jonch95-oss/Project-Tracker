@@ -52,6 +52,8 @@ export interface NotifyInput {
   projectId?: string | null;
   taskId?: string | null;
   href?: string | null;
+  /** Stop-work / vacate orders: through quiet hours and preferences, with email. */
+  critical?: boolean;
 }
 
 /**
@@ -78,7 +80,7 @@ export async function notify(tx: DbOrTx, actorId: string | null, rows: NotifyInp
     : new Set<string>();
   const values = out
     .filter((r) => active.has(r.userId) && (!r.projectId || active.get(r.userId) === "owner" || members.has(`${r.projectId}:${r.userId}`)))
-    .map((r) => ({ userId: r.userId, kind: r.kind, title: r.title.slice(0, 300), body: r.body?.slice(0, 1000) ?? null, projectId: r.projectId ?? null, taskId: r.taskId ?? null, href: r.href ?? null, actorId }));
+    .map((r) => ({ userId: r.userId, kind: r.kind, title: r.title.slice(0, 300), body: r.body?.slice(0, 1000) ?? null, projectId: r.projectId ?? null, taskId: r.taskId ?? null, href: r.href ?? null, actorId, critical: r.critical ?? false }));
   if (values.length) {
     await tx.insert(schema.notification).values(values);
     pushDirty = true;

@@ -7,6 +7,7 @@ import { companiesRouter, membersRouter, projectsRouter } from "./routers/projec
 import { auditRouter, systemRouter } from "./routers/system";
 import { keyDatesRouter, notificationsRouter, tasksRouter } from "./routers/tasks";
 import { notifySettingsRouter, pushRouter } from "./routers/notify-settings";
+import { expiriesRouter, recordsRouter } from "./routers/records";
 import { templatesRouter } from "./routers/templates";
 import { invitesRouter, meRouter, usersRouter } from "./routers/users";
 
@@ -27,6 +28,8 @@ export const appRouter = router({
   notifications: notificationsRouter,
   notifySettings: notifySettingsRouter,
   push: pushRouter,
+  records: recordsRouter,
+  expiries: expiriesRouter,
   audit: auditRouter,
   system: systemRouter,
 });
