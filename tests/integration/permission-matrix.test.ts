@@ -55,6 +55,23 @@ async function taskVersion(id: string): Promise<number> {
   return t!.version;
 }
 
+/** A file in the project's Design folder, added by the owner, straight into the database. */
+async function freshFile(projectId: string, opts: { trashed?: boolean } = {}): Promise<string> {
+  const [folder] = await db().select().from(schema.folder).where(and(eq(schema.folder.projectId, projectId), eq(schema.folder.name, "Design")));
+  const [owner] = await db().select().from(schema.user).where(eq(schema.user.role, "owner")).limit(1);
+  const [f] = await db()
+    .insert(schema.file)
+    .values({ projectId, folderId: folder!.id, name: `Matrix ${uid()}.pdf`, createdById: owner!.id, deletedAt: opts.trashed ? new Date() : null })
+    .returning({ id: schema.file.id });
+  await db().insert(schema.fileVersion).values({ fileId: f!.id, number: 1, objectKey: `matrix/${uid()}.pdf`, originalName: "m.pdf", contentType: "application/pdf", sizeBytes: 10 });
+  return f!.id;
+}
+
+async function folderId(projectId: string, name = "Design"): Promise<string> {
+  const [folder] = await db().select().from(schema.folder).where(and(eq(schema.folder.projectId, projectId), eq(schema.folder.name, name)));
+  return folder!.id;
+}
+
 /** A plain task on the project, so each call starts from a known state. */
 async function freshTask(projectId: string, extra: Partial<typeof schema.task.$inferInsert> = {}): Promise<string> {
   const [t] = await db().insert(schema.task).values({ projectId, phaseKey: "closed", title: `Matrix task ${uid()}`, ...extra }).returning({ id: schema.task.id });
@@ -70,6 +87,8 @@ interface Fixture {
   /** A task on the project with no prerequisites. */
   taskId: string;
   templateId: string;
+  /** An outside collaborator on the project (for folder sharing). */
+  externalId: string;
 }
 
 type Caller = Awaited<ReturnType<typeof callerFor>>;
@@ -336,6 +355,47 @@ const MATRIX: Record<string, Row | "public"> = {
   "notifications.markRead": { allowed: ACTIVE, call: (c) => c.notifications.markRead({ ids: ["00000000-0000-4000-8000-000000000000"] }) },
   "notifications.markAllRead": { allowed: ACTIVE, call: (c) => c.notifications.markAllRead() },
 
+  "files.folders": { allowed: ASSIGNED, call: (c, f) => c.files.folders({ projectId: f.projectId }) },
+  "files.list": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.list({ projectId: f.projectId, folderId: await folderId(f.projectId) }) },
+  "files.get": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.get({ projectId: f.projectId, fileId: await freshFile(f.projectId) }) },
+  "files.beginUpload": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => c.files.beginUpload({ projectId: f.projectId, folderId: await folderId(f.projectId), name: "a.pdf", contentType: "application/pdf", sizeBytes: 10 }),
+  },
+  "files.completeUpload": {
+    allowed: INTERNAL_ASSIGNED,
+    call: async (c, f) => {
+      const b = await c.files.beginUpload({ projectId: f.projectId, folderId: await folderId(f.projectId), name: "a.pdf", contentType: "application/pdf", sizeBytes: 10 });
+      for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(10), { contentType: o.contentType });
+      return c.files.completeUpload({ projectId: f.projectId, uploadId: b.uploadId });
+    },
+  },
+  "files.rename": { allowed: EDITORS, call: async (c, f) => c.files.rename({ projectId: f.projectId, fileId: await freshFile(f.projectId), version: 1, name: "Renamed.pdf" }) },
+  "files.move": { allowed: EDITORS, call: async (c, f) => c.files.move({ projectId: f.projectId, fileId: await freshFile(f.projectId), version: 1, folderId: await folderId(f.projectId, "Legal") }) },
+  "files.remove": { allowed: EDITORS, call: async (c, f) => c.files.remove({ projectId: f.projectId, fileId: await freshFile(f.projectId) }) },
+  "files.trash": { allowed: EDITORS, call: (c, f) => c.files.trash({ projectId: f.projectId }) },
+  "files.restore": { allowed: EDITORS, call: async (c, f) => c.files.restore({ projectId: f.projectId, fileId: await freshFile(f.projectId, { trashed: true }) }) },
+  "files.purge": { allowed: EDITORS, call: async (c, f) => c.files.purge({ projectId: f.projectId, fileId: await freshFile(f.projectId, { trashed: true }) }) },
+  "files.attach": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.attach({ projectId: f.projectId, taskId: f.taskId, fileId: await freshFile(f.projectId) }) },
+  "files.detach": { allowed: INTERNAL_ASSIGNED, call: async (c, f) => c.files.detach({ projectId: f.projectId, taskId: f.taskId, fileId: await freshFile(f.projectId) }) },
+  "files.forTask": { allowed: INTERNAL_ASSIGNED, call: (c, f) => c.files.forTask({ projectId: f.projectId, taskId: f.taskId }) },
+  "files.createFolder": { allowed: EDITORS, call: (c, f) => c.files.createFolder({ projectId: f.projectId, name: `Folder ${uid()}` }) },
+  "files.renameFolder": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [x] = await db().insert(schema.folder).values({ projectId: f.projectId, name: `R ${uid()}` }).returning();
+      return c.files.renameFolder({ projectId: f.projectId, folderId: x!.id, name: `R2 ${uid()}` });
+    },
+  },
+  "files.deleteFolder": {
+    allowed: EDITORS,
+    call: async (c, f) => {
+      const [x] = await db().insert(schema.folder).values({ projectId: f.projectId, name: `D ${uid()}` }).returning();
+      return c.files.deleteFolder({ projectId: f.projectId, folderId: x!.id });
+    },
+  },
+  "files.shareFolder": { allowed: EDITORS, call: async (c, f) => c.files.shareFolder({ projectId: f.projectId, folderId: await folderId(f.projectId), userId: f.externalId, on: true }) },
+
   "projects.create": {
     allowed: ["owner", "admin+fin", "admin", "admin-unassigned"],
     call: (c, f) => c.projects.create({ name: `M ${uid()}`, address: "1 Matrix Pl", type: "gut_renovation", companyId: f.companyId, bbl: null }),
@@ -404,6 +464,7 @@ describe("permission matrix", () => {
       users[role] = noFin.id;
       users[`${role}-unassigned`] = (await createUser(role)).id;
     }
+    fixture.externalId = users.external!;
     const d = await createUser("member");
     await addMember(p.id, d.id, { canViewFinancials: true });
     await deactivate(d.id);

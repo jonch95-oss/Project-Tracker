@@ -18,6 +18,7 @@ import { formatIsoDate, todayET } from "@/core/time";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
 import { ActivityTab } from "./activity-tab";
 import { ChecklistTab } from "./checklist-tab";
+import { FilesTab } from "./files-tab";
 import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
 import { PhaseStepper } from "./phase-stepper";
@@ -130,6 +131,8 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
             focusTask={params.get("task")}
             onFocusTask={(id) => setTab("checklist", params.get("phase") ?? undefined, id ?? undefined)}
           />
+        ) : tab === "files" ? (
+          <FilesTab projectId={projectId} onOpenPhotos={() => setTab("overview")} />
         ) : tab === "dates" ? (
           <KeyDatesTab projectId={projectId} />
         ) : tab === "team" ? (
@@ -265,7 +268,6 @@ function FinancialsTab({ project: p, onEdit }: { project: Project; onEdit?: () =
 }
 
 const UPCOMING: Record<string, { title: string; body: string }> = {
-  files: { title: "Files are next", body: "Folders for acquisition, legal, title, design, DOB, construction and more, with versions and previews. Photos are already on the Overview tab." },
   records: { title: "Public records are on the way", body: "Nightly DOB, HPD, ECB, ACRIS and tax checks for this BBL, with alerts when anything changes." },
 };
 

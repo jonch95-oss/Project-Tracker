@@ -4,6 +4,7 @@ import { addBusinessDays } from "@/core/calendar";
 import { defaultTemplate } from "@/core/seed-library";
 import { todayET } from "@/core/time";
 import { db, schema } from "@/server/db";
+import { storage } from "@/server/storage";
 import { addMember, callerFor, companyId, createUser } from "../support/fixtures";
 
 type Caller = Awaited<ReturnType<typeof callerFor>>;
@@ -17,6 +18,14 @@ async function newProject(c: Caller, opts: { type?: "gut_renovation" | "ground_u
     bbl: null,
     toggles: opts.toggles ?? [],
   });
+}
+
+/** Satisfy a task's required attachment (library tasks like "Contract signed" need one). */
+async function attach(c: Caller, projectId: string, taskId: string) {
+  const folders = await c.files.folders({ projectId });
+  const b = await c.files.beginUpload({ projectId, folderId: folders.folders[0]!.id, taskId, name: "evidence.pdf", contentType: "application/pdf", sizeBytes: 10 });
+  for (const o of b.objects) await storage().put(o.pathname, new Uint8Array(10), { contentType: o.contentType });
+  await c.files.completeUpload({ projectId, uploadId: b.uploadId });
 }
 
 const task = async (projectId: string, key: string) => {
@@ -69,6 +78,7 @@ describe("checklists from templates", () => {
     // Contract signed depends on "negotiated"; finish that first, then sign today.
     const negotiated = await task(id, "contract_negotiated");
     await c.checklist.setDone({ projectId: id, taskId: negotiated.id, done: true, version: negotiated.version });
+    await attach(c, id, signed.id);
     await c.checklist.setDone({ projectId: id, taskId: signed.id, done: true, version: signed.version });
     expect((await task(id, "deposit_wired")).dueOn).toBe(addBusinessDays(todayET(), 2));
     p = await c.projects.get({ projectId: id });
@@ -95,6 +105,7 @@ describe("checklists from templates", () => {
     const neg = await task(id, "contract_negotiated");
     await mc.checklist.setDone({ projectId: id, taskId: neg.id, done: true, version: neg.version });
     const signed = await task(id, "contract_signed");
+    await attach(c, id, signed.id);
     expect((await mc.checklist.setDone({ projectId: id, taskId: signed.id, done: true, version: signed.version })).status).toBe("awaiting_approval");
     const again = await task(id, "contract_signed");
     expect((await c.checklist.setDone({ projectId: id, taskId: again.id, done: true, version: again.version })).status).toBe("done");
@@ -407,8 +418,9 @@ describe("Milestone 3 review regressions", () => {
     // Owner approves a simple approval task; the member can't reopen it.
     const t = await task(id, "site_visit");
     await c.checklist.updateTask({ projectId: id, taskId: t.id, version: t.version, requiresApproval: true, approverRole: "Owner" });
+    await attach(c, id, t.id);
     const t2 = await task(id, "site_visit");
-    await c.checklist.setDone({ projectId: id, taskId: t2.id, done: true, version: t2.version });
+    expect((await c.checklist.setDone({ projectId: id, taskId: t2.id, done: true, version: t2.version })).status).toBe("done");
     const t3 = await task(id, "site_visit");
     await expect(mc.checklist.setDone({ projectId: id, taskId: t3.id, done: false, version: t3.version })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });

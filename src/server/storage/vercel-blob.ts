@@ -1,4 +1,4 @@
-import { BlobNotFoundError, del, get, head, list, put } from "@vercel/blob";
+import { BlobNotFoundError, del, get, head, issueSignedToken, list, presignUrl, put } from "@vercel/blob";
 import type { FileStorage, StoredObject } from "./types";
 
 /**
@@ -34,6 +34,13 @@ export function vercelBlobStorage(token: string): FileStorage {
     },
     async delete(pathnames) {
       if (pathnames.length) await del(pathnames, { token });
+    },
+    async signedGetUrl(pathname, ttlMs) {
+      // A delegation scoped to this one object and to reads only, expiring with the URL.
+      const validUntil = Date.now() + ttlMs;
+      const signed = await issueSignedToken({ token, pathname, operations: ["get"], validUntil });
+      const { presignedUrl } = await presignUrl(signed, { operation: "get", pathname, validUntil, access: "private" });
+      return presignedUrl;
     },
     async list(prefix) {
       const out: StoredObject[] = [];

@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { schema } from "@/server/db";
 import { authedContextFrom } from "@/server/request-context";
+import { canSeePhotos } from "@/server/services/files";
 import { bumpCounter } from "@/server/services/usage";
 import { storage } from "@/server/storage";
 import { projectAccess } from "@/server/trpc/init";
@@ -21,7 +22,8 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/photos/[id
   const [photo] = await c.db.select().from(schema.projectPhoto).where(eq(schema.projectPhoto.id, id));
   if (!photo) return new Response("Not found", { status: 404 });
   try {
-    await projectAccess(c, photo.projectId);
+    const access = await projectAccess(c, photo.projectId);
+    if (!(await canSeePhotos(c.db, access, c.viewer.id))) return new Response("Not found", { status: 404 });
   } catch (e) {
     if (e instanceof TRPCError) return new Response("Not found", { status: 404 });
     throw e;

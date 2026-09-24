@@ -4,11 +4,12 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import Link from "next/link";
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
-import { IconArrowDown, IconArrowLeft, IconArrowUp, IconFlag, IconGrip, IconPlus, IconRepeat } from "@/components/ui/icons";
+import { IconArrowDown, IconArrowLeft, IconArrowUp, IconClose, IconFlag, IconGrip, IconPlus, IconRepeat } from "@/components/ui/icons";
 import { ConfirmDialog, Dialog, useToast } from "@/components/ui/overlay";
 import { Badge, Button, Field, Input, Select, Skeleton, StatusPill, Switch, Textarea } from "@/components/ui/primitives";
 import { wouldCreateCycle } from "@/core/deps";
 import { PROJECT_TYPE_LABEL } from "@/core/labels";
+import { DEFAULT_FOLDERS } from "@/core/seed-library";
 import { RECURRENCE_FREQS, slugKey, validateTemplate, type TemplateDef, type TemplatePhaseDef, type TemplateTaskDef } from "@/core/templates";
 import { describeConditions, TOGGLES, toggleLabel } from "@/core/toggles";
 import { formatIsoDate, todayET } from "@/core/time";
@@ -146,6 +147,8 @@ export function TemplateEditor({ templateId }: { templateId: string }) {
       <Field label="Description" htmlFor="tpl-desc" className="mb-8 max-w-3xl">
         <Textarea id="tpl-desc" rows={2} maxLength={2000} value={def.description ?? ""} onChange={(e) => update((d) => ({ ...d, description: e.target.value || null }))} />
       </Field>
+
+      <FolderEditor folders={def.folders ?? [...DEFAULT_FOLDERS]} onChange={(folders) => update((d) => ({ ...d, folders }))} />
 
       <div className="grid gap-8 lg:grid-cols-[300px_1fr]">
         <section aria-labelledby="tpl-phases-h">
@@ -745,5 +748,48 @@ function ProjectsDialog({ templateId, version, dirty, onClose }: { templateId: s
         </ul>
       )}
     </Dialog>
+  );
+}
+
+/** Folders new projects get from this template (brief §14). Financial stays: it's the gated one. */
+function FolderEditor({ folders, onChange }: { folders: string[]; onChange: (f: string[]) => void }) {
+  const [text, setText] = useState("");
+  const add = () => {
+    const name = text.trim().slice(0, 80);
+    if (!name || folders.some((f) => f.toLowerCase() === name.toLowerCase())) return;
+    onChange([...folders, name]);
+    setText("");
+  };
+  return (
+    <section aria-labelledby="tpl-folders-h" className="mb-10 max-w-3xl">
+      <h2 id="tpl-folders-h" className="serif mb-1 text-subheading">
+        Folders
+      </h2>
+      <p className="mb-3 text-[13px] text-muted">New projects start with these folders. Financial is always restricted to people with financial access.</p>
+      <ul className="mb-3 flex flex-wrap gap-2">
+        {folders.map((f, i) => (
+          <li key={f} className="inline-flex h-9 items-center gap-1 rounded-full border border-border bg-surface pl-3 pr-1 text-[13px]">
+            {f}
+            <button type="button" disabled={i === 0} onClick={() => onChange(move(folders, i, i - 1))} className="rounded-full p-1.5 text-muted hover:bg-sunken disabled:opacity-30" aria-label={`Move ${f} earlier`}>
+              <IconArrowLeft size={12} />
+            </button>
+            {f !== "Financial" && f !== "Photos" && (
+              <button type="button" onClick={() => onChange(folders.filter((x) => x !== f))} className="rounded-full p-1.5 text-muted hover:bg-sunken hover:text-text" aria-label={`Remove ${f}`}>
+                <IconClose size={12} />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="flex max-w-sm gap-2">
+        <label htmlFor="tpl-folder-new" className="sr-only">
+          New folder
+        </label>
+        <Input id="tpl-folder-new" value={text} maxLength={80} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())} placeholder="Add a folder" className="h-10" />
+        <Button variant="secondary" size="sm" onClick={add}>
+          Add
+        </Button>
+      </div>
+    </section>
   );
 }

@@ -10,6 +10,7 @@ import { todayET } from "@/core/time";
 import { cn } from "@/lib/cn";
 import { errorMessage, useTRPC } from "@/lib/trpc";
 import { dueLabel, type Checklist, type ChecklistTask } from "./checklist-tab";
+import { TaskAttachments } from "./task-attachments";
 import { Comments, StatusChip, TaskWork, useTaskDetail, Watchers } from "./task-work";
 
 const ROLES = ["PM", "Acquisitions", "Legal", "Finance", "Construction", "Design", "Sales", "Owner", "Partner"];
@@ -31,6 +32,7 @@ export function TaskDialog({
   onClose,
   onChanged,
   onToggle,
+  focusAttachments,
 }: {
   projectId: string;
   task: ChecklistTask;
@@ -38,6 +40,8 @@ export function TaskDialog({
   onClose: () => void;
   onChanged: () => Promise<unknown>;
   onToggle: () => void;
+  /** Opened because "complete" needs an attachment first: point at that step. */
+  focusAttachments?: boolean;
 }) {
   const trpc = useTRPC();
   const toast = useToast();
@@ -170,7 +174,7 @@ export function TaskDialog({
             </span>
           </p>
         )}
-        {t.requiredAttachment && <p className="text-sm text-muted">Needs an attachment: {t.requiredAttachment}. File attachments arrive with Files.</p>}
+        <TaskAttachments projectId={projectId} taskId={t.id} required={isDone ? null : t.requiredAttachment} canWork={detail.data?.access.canWork ?? false} highlight={focusAttachments} />
 
         {canEdit ? (
           // Keyed on the task and explicit saves only, so ticking a sub-item doesn't wipe what's being typed.

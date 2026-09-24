@@ -33,6 +33,9 @@ export function memoryStorage(): FileStorage {
     async delete(pathnames) {
       for (const p of pathnames) objects.delete(p);
     },
+    async signedGetUrl() {
+      return null;
+    },
     async list(prefix) {
       return [...objects.values()].filter((o) => o.meta.pathname.startsWith(prefix)).map((o) => o.meta);
     },

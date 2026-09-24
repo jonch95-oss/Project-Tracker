@@ -43,6 +43,8 @@ export const FINANCIAL_ENTITY_TYPES = [
   "draw",
   "sale",
   "capital",
+  // Anything done to a file in the gated Financial folder (names included).
+  "financial_file",
 ] as const;
 
 export function isFinancialEntity(entityType: string): boolean {

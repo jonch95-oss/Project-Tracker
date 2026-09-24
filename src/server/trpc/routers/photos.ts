@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { MAX_COMPRESSED_PHOTO_BYTES, PHOTO_CONTENT_TYPES } from "@/core/images";
-import { schema } from "../../db";
+import { schema, type Database } from "../../db";
 import { storage } from "../../storage";
 import { recordAudit } from "../../services/audit";
 import {
@@ -15,7 +15,8 @@ import {
   openUpload,
   verifyUploadedObjects,
 } from "../../services/uploads";
-import { projectProcedure, router } from "../init";
+import { canSeePhotos } from "../../services/files";
+import { projectProcedure, router, type ProjectAccess } from "../init";
 
 const photoMeta = z.object({
   width: z.number().int().min(1).max(20_000),
@@ -24,8 +25,17 @@ const photoMeta = z.object({
   caption: z.string().trim().max(300).nullish(),
 });
 
+/** The team adds photos; outside collaborators too when the Photos folder is shared with them. */
+async function assertCanAddPhotos(ctx: { db: Database; project: ProjectAccess; viewer: { id: string } }) {
+  if (ctx.project.can("photos.upload")) return;
+  if (await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id)) return;
+  throw new TRPCError({ code: "FORBIDDEN" });
+}
+
 export const photosRouter = router({
   list: projectProcedure().query(async ({ ctx, input }) => {
+    // Outside collaborators see site photos only if the Photos folder is shared with them.
+    if (!(await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id))) return [];
     const rows = await ctx.db
       .select({
         id: schema.projectPhoto.id,
@@ -52,7 +62,7 @@ export const photosRouter = router({
    * write; the storage token issued for them is scoped to those paths, sizes
    * and types, and expires in minutes.
    */
-  beginUpload: projectProcedure("photos.upload")
+  beginUpload: projectProcedure()
     .input(
       photoMeta.extend({
         contentType: z.enum(PHOTO_CONTENT_TYPES),
@@ -61,6 +71,7 @@ export const photosRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertCanAddPhotos(ctx);
       await assertUploadBudget(input.fullBytes + input.thumbBytes, ctx.db);
       const ext = input.contentType === "image/webp" ? "webp" : "jpg";
       const full = objectPath(input.projectId, "photos", ext);
@@ -83,9 +94,10 @@ export const photosRouter = router({
     }),
 
   /** Step 2: the client says it's done; the server checks the stored objects before recording anything. */
-  completeUpload: projectProcedure("photos.upload")
+  completeUpload: projectProcedure()
     .input(z.object({ uploadId: z.uuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertCanAddPhotos(ctx);
       const row = await openUpload(ctx.db, input.uploadId, ctx.viewer.id);
       if (!row || row.projectId !== input.projectId || row.purpose !== "photo") {
         throw new TRPCError({ code: "NOT_FOUND", message: "This upload has expired. Try again." });
@@ -164,7 +176,7 @@ export const photosRouter = router({
         .from(schema.projectPhoto)
         .where(and(eq(schema.projectPhoto.id, input.photoId), eq(schema.projectPhoto.projectId, input.projectId)));
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-      const own = p.uploadedById === ctx.viewer.id && ctx.project.can("photos.upload");
+      const own = p.uploadedById === ctx.viewer.id && (ctx.project.can("photos.upload") || (await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id)));
       if (!own && !ctx.project.can("photos.manage")) throw new TRPCError({ code: "FORBIDDEN" });
       const removed = await ctx.db.transaction(async (tx) => {
         const gone = await tx.delete(schema.projectPhoto).where(eq(schema.projectPhoto.id, input.photoId)).returning({ id: schema.projectPhoto.id });

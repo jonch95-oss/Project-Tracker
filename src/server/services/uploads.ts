@@ -49,9 +49,15 @@ export function objectPath(projectId: string, kind: "photos", ext: string, suffi
   return `projects/${projectId}/${kind}/${randomUUID()}${suffix}.${ext}`;
 }
 
+/** Files keep their (cleaned) name as the last path part, so downloads save under a sensible name. */
+export function filePath(projectId: string, safeName: string): { dir: string; object: string } {
+  const dir = `projects/${projectId}/files/${randomUUID()}`;
+  return { dir, object: `${dir}/${safeName}` };
+}
+
 export async function createPendingUpload(
   conn: Database,
-  input: { userId: string; projectId: string; purpose: "photo"; objects: UploadObject[]; meta?: unknown },
+  input: { userId: string; projectId: string; purpose: "photo" | "file"; objects: UploadObject[]; meta?: unknown },
   now = new Date(),
 ): Promise<PendingUpload> {
   const [row] = await conn

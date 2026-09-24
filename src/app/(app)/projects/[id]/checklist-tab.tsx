@@ -47,6 +47,7 @@ export function ChecklistTab({
   const openTask = focusTask ?? null;
   const setOpenTask = onFocusTask;
   const [selecting, setSelecting] = useState(false);
+  const [attachFor, setAttachFor] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [hideDone, setHideDone] = useState(false);
@@ -64,8 +65,18 @@ export function ChecklistTab({
         if (prev) qc.setQueryData<Checklist>(key, { ...prev, tasks: prev.tasks.map((t) => (t.id === v.taskId ? { ...t, status: v.done ? (t.requiresApproval && !prev.access.canApprove ? "awaiting_approval" : "done") : "not_started" } : t)) });
         return { prev };
       },
-      onSuccess: (r) => {
+      onSuccess: (r, v) => {
+        // Take the server's new version at once, so a quick second tap isn't refused as stale.
+        const key = trpc.checklist.get.queryKey({ projectId });
+        const cur = qc.getQueryData<Checklist>(key);
+        if (cur && r.status !== "needs_attachment") qc.setQueryData<Checklist>(key, { ...cur, tasks: cur.tasks.map((t) => (t.id === v.taskId ? { ...t, status: r.status, version: r.version } : t)) });
         if (r.status === "awaiting_approval") toast("success", "Sent for approval");
+        if (r.status === "needs_attachment") {
+          // Route to the attach step instead (brief §6).
+          toast("error", `Attach ${"label" in r ? r.label : "the required file"} first.`);
+          setAttachFor(v.taskId);
+          setOpenTask(v.taskId);
+        }
       },
       onError: (e, _v, ctx) => {
         if (ctx?.prev) qc.setQueryData(trpc.checklist.get.queryKey({ projectId }), ctx.prev);
@@ -90,6 +101,8 @@ export function ChecklistTab({
   const current = cl.tasks.find((t) => t.id === openTask) ?? null;
 
   const toggle = (t: ChecklistTask) => {
+    // One change per task at a time: a second tap waits for the first to land.
+    if (setDone.isPending && setDone.variables?.taskId === t.id) return;
     if (t.status !== "done" && t.waitingOn.length) {
       toast("error", `Waiting on: ${t.waitingOn.map((w) => w.title).join("; ")}`);
       return;
@@ -252,7 +265,20 @@ export function ChecklistTab({
         </ol>
       )}
 
-      {current && <TaskDialog projectId={projectId} task={current} checklist={cl} onClose={() => setOpenTask(null)} onChanged={refresh} onToggle={() => toggle(current)} />}
+      {current && (
+        <TaskDialog
+          projectId={projectId}
+          task={current}
+          checklist={cl}
+          onClose={() => {
+            setAttachFor(null);
+            setOpenTask(null);
+          }}
+          onChanged={refresh}
+          onToggle={() => toggle(current)}
+          focusAttachments={attachFor === current.id}
+        />
+      )}
       {dialog === "toggles" && <TogglesDialog projectId={projectId} checklist={cl} onClose={() => setDialog(null)} onChanged={refresh} />}
       {dialog === "update" && <TemplateUpdateDialog projectId={projectId} onClose={() => setDialog(null)} onChanged={refresh} />}
       {dialog === "save" && <SaveAsTemplateDialog projectId={projectId} onClose={() => setDialog(null)} />}

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { cyclePath, unmetDependencies } from "@/core/deps";
 import type { ProjectTypeKey } from "@/core/labels";
@@ -157,6 +157,16 @@ export const checklistRouter = router({
             const hidden = unmet.length - named.length;
             const parts = [...named.map((u) => u.title), ...(hidden ? [`${hidden} other task${hidden === 1 ? "" : "s"} on the project`] : [])];
             throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Waiting on: ${parts.join("; ")}. Finish ${unmet.length === 1 ? "it" : "those"} first.` });
+          }
+          if (t.version !== input.version) throw taskConflict();
+          // A required attachment routes to the attach step instead (brief §6).
+          if (t.requiredAttachment) {
+            const [att] = await tx
+              .select({ n: sql<number>`count(*)::int` })
+              .from(schema.taskAttachment)
+              .innerJoin(schema.file, eq(schema.file.id, schema.taskAttachment.fileId))
+              .where(and(eq(schema.taskAttachment.taskId, t.id), isNull(schema.file.deletedAt)));
+            if ((att?.n ?? 0) === 0) return { status: "needs_attachment" as const, version: t.version, label: t.requiredAttachment };
           }
           const today = todayET();
           // Approval tasks: the tick is the approval only for the person who should approve (or the owner).

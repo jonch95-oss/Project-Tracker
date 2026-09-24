@@ -1,10 +1,11 @@
 import "server-only";
+import { ensureProjectFolders } from "./files";
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { edgesFrom, wouldCreateCycle } from "@/core/deps";
 import type { ProjectTypeKey } from "@/core/labels";
-import { DEFAULT_TEMPLATE_TYPES, defaultTemplate } from "@/core/seed-library";
+import { DEFAULT_FOLDERS, DEFAULT_TEMPLATE_TYPES, defaultTemplate } from "@/core/seed-library";
 import { parseTemplateDef } from "@/core/template-schema";
 import {
   generateChecklist,
@@ -184,6 +185,8 @@ export async function buildProjectChecklist(tx: DbOrTx, input: { projectId: stri
     gen.phases.map((p, i) => ({ projectId: input.projectId, key: p.key, name: p.name, sortOrder: i, status: i === 0 ? ("active" as const) : ("pending" as const), startedOn: i === 0 ? input.today : null })),
   );
   await insertGenerated(tx, input.projectId, gen.tasks, input.userId);
+  // Folders come from the template too (brief §14).
+  await ensureProjectFolders(tx, input.projectId, input.template.def.folders ?? DEFAULT_FOLDERS);
   await tx
     .update(schema.project)
     .set({ toggles: input.chosenToggles, templateId: input.template.row.id, templateVersion: input.template.row.version })

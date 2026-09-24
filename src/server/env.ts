@@ -27,6 +27,14 @@ const schema = z.object({
   /** Read-only Vercel token (billing read) for the Pro credit meter on the System page. */
   VERCEL_USAGE_TOKEN: z.string().optional(),
   VERCEL_TEAM_ID: z.string().optional(),
+  /**
+   * Virus-scan hook (brief §13). Optional: when set, every uploaded file's
+   * short-lived download link is POSTed here and the reply decides whether the
+   * file is kept. No free hosted scanner is wired in, so by default files are
+   * recorded as "not scanned".
+   */
+  VIRUS_SCAN_URL: z.url().optional(),
+  VIRUS_SCAN_TOKEN: z.string().optional(),
   /** NYC Open Data (Socrata) app token for the public-records watch. */
   SOCRATA_APP_TOKEN: z.string().optional(),
 });

@@ -8,6 +8,7 @@ import { drainOutbox, pruneOutbox, renderEmail, sendEmail } from "./email";
 import { logError } from "./errors";
 import { runUsageCheck } from "./usage";
 import { cleanupAbandonedUploads } from "./uploads";
+import { purgeTrashJob } from "./files";
 import { followUpJob, keyDateReminderJob } from "./tasks";
 
 export type JobResult = Record<string, unknown>;
@@ -188,6 +189,7 @@ export async function tickJob(now = new Date()): Promise<JobResult> {
     await attempt("usage-check", usageCheckJob);
     await attempt("email-outbox", outboxJob);
     await attempt("upload-cleanup", () => cleanupAbandonedUploads());
+    await attempt("trash-purge", () => purgeTrashJob());
     for (const d of DAILY) {
       if (hourET(now) >= d.hourET && !(await ranToday(d.job, now))) await attempt(d.job, d.fn);
     }

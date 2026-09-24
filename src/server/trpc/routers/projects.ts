@@ -1,8 +1,8 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { isFinancialEntity } from "@/core/audit";
+import { FINANCIAL_ENTITY_TYPES, isFinancialEntity } from "@/core/audit";
 import { canGlobal, canGrantFlags, canProject, canRemoveMember, defaultFlags, PROJECT_ROLES, type Membership } from "@/core/permissions";
 import { setCurrentPhase, setPhaseSkipped, type PhaseState } from "@/core/phases";
 import { isToggleKey } from "@/core/toggles";
@@ -14,6 +14,7 @@ import { schema, type DbOrTx } from "../../db";
 import { tryGeocode } from "../../geo";
 import { recordAudit } from "../../services/audit";
 import { buildProjectChecklist, defaultTemplateFor, loadTemplate, reschedule } from "../../services/checklist";
+import { canSeePhotos } from "../../services/files";
 import { releaseFromProject, rerouteApprovals } from "../../services/tasks";
 import { globalProcedure, projectProcedure, protectedProcedure, router, type AuthedContext } from "../init";
 
@@ -409,7 +410,7 @@ export const projectsRouter = router({
         canApprove: ctx.project.can("task.approve"),
         canEdit: ctx.project.can("project.edit"),
         canManageMembers: ctx.project.can("project.manageMembers"),
-        canUploadPhotos: ctx.project.can("photos.upload"),
+        canUploadPhotos: ctx.project.can("photos.upload") || (await canSeePhotos(ctx.db, ctx.project, ctx.viewer.id)),
         canManagePhotos: ctx.project.can("photos.manage"),
         canViewActivity: ctx.project.can("activity.view"),
         canSeeAllTasks: ctx.project.can("task.viewAll"),
@@ -641,7 +642,7 @@ export const projectsRouter = router({
       const canFin = ctx.project.can("financials.view");
       const filters = [eq(schema.auditLog.projectId, input.projectId)];
       if (input.cursor) filters.push(lt(schema.auditLog.seq, input.cursor));
-      if (!canFin) filters.push(sql`${schema.auditLog.entityType} not in ('project_headline','budget_line','commitment','invoice','change_order','draw','sale','capital')`);
+      if (!canFin) filters.push(notInArray(schema.auditLog.entityType, [...FINANCIAL_ENTITY_TYPES]));
       const rows = await ctx.db
         .select({
           seq: schema.auditLog.seq,

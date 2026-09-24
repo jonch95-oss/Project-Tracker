@@ -181,12 +181,14 @@ export async function undoRecurrence(tx: DbOrTx, t: TaskRow): Promise<void> {
 }
 
 /**
- * Someone leaves a project: their shares (watcher rows) go, their open tasks
+ * Someone leaves a project: their task and folder shares go, their open tasks
  * are unassigned, and approvals waiting on them are re-routed.
  */
 export async function releaseFromProject(tx: DbOrTx, projectId: string, userId: string, actorId: string | null): Promise<void> {
   const taskIds = tx.select({ id: schema.task.id }).from(schema.task).where(eq(schema.task.projectId, projectId));
   await tx.delete(schema.taskWatcher).where(and(eq(schema.taskWatcher.userId, userId), inArray(schema.taskWatcher.taskId, taskIds)));
+  const folderIds = tx.select({ id: schema.folder.id }).from(schema.folder).where(eq(schema.folder.projectId, projectId));
+  await tx.delete(schema.folderShare).where(and(eq(schema.folderShare.userId, userId), inArray(schema.folderShare.folderId, folderIds)));
   await tx.update(schema.task).set({ assigneeId: null, version: sql`${schema.task.version} + 1`, updatedAt: new Date() }).where(and(eq(schema.task.projectId, projectId), eq(schema.task.assigneeId, userId), ne(schema.task.status, "done")));
   await rerouteApprovals(tx, userId, actorId, projectId);
 }

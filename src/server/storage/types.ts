@@ -18,6 +18,11 @@ export interface FileStorage {
   /** Size and type of a stored object; null when it does not exist. */
   head(pathname: string): Promise<{ size: number; contentType: string } | null>;
   delete(pathnames: string[]): Promise<void>;
+  /**
+   * A short-lived URL that reads one private object directly from storage,
+   * or null when the backend can't sign (then the server streams it).
+   */
+  signedGetUrl(pathname: string, ttlMs: number): Promise<string | null>;
   /** List objects under a prefix (all pages). */
   list(prefix: string): Promise<StoredObject[]>;
 }

@@ -14,6 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
+import { sql } from "drizzle-orm";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -323,7 +324,7 @@ export const pendingUpload = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
-    purpose: text("purpose", { enum: ["photo"] }).notNull(),
+    purpose: text("purpose", { enum: ["photo", "file"] }).notNull(),
     /** Pathnames the client may write, with their byte limits and content types. */
     objects: jsonb("objects").$type<{ role: string; pathname: string; maxBytes: number; contentType: string }[]>().notNull(),
     meta: jsonb("meta"),
@@ -562,4 +563,108 @@ export const notification = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("notification_user_idx").on(t.userId, t.readAt, t.createdAt)],
+);
+
+/**
+ * Project folders (brief §14). Created from the template's folder list; the
+ * Financial folder is gated: only people with financial visibility on the
+ * project ever see it or anything in it.
+ */
+export const folder = pgTable(
+  "folder",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** Financial: visible only with canViewFinancials. */
+    gated: boolean("gated").notNull().default(false),
+    /** The Photos folder also holds the project's site photos. */
+    isPhotos: boolean("is_photos").notNull().default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("folder_project_idx").on(t.projectId, t.sortOrder), uniqueIndex("folder_project_name_idx").on(t.projectId, sql`lower(${t.name})`)],
+);
+
+/** Outside collaborators see only folders shared with them (brief §4). */
+export const folderShare = pgTable(
+  "folder_share",
+  {
+    folderId: uuid("folder_id")
+      .notNull()
+      .references(() => folder.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.folderId, t.userId] }), index("folder_share_user_idx").on(t.userId)],
+);
+
+/** A document in a folder. Its bytes live in versions; the newest is current. */
+export const file = pgTable(
+  "file",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    folderId: uuid("folder_id")
+      .notNull()
+      .references(() => folder.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    currentVersion: integer("current_version").notNull().default(1),
+    createdById: text("created_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    /** In the trash since; purged (bytes deleted) after 30 days. */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedById: text("deleted_by_id").references(() => user.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+  },
+  (t) => [index("file_folder_idx").on(t.folderId, t.deletedAt), index("file_project_idx").on(t.projectId, t.deletedAt)],
+);
+
+export const SCAN_STATUSES = ["pending", "clean", "infected", "not_scanned"] as const;
+
+export const fileVersion = pgTable(
+  "file_version",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    fileId: uuid("file_id")
+      .notNull()
+      .references(() => file.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    objectKey: text("object_key").notNull(),
+    /** Image thumbnail made on the device (images only). */
+    thumbKey: text("thumb_key"),
+    originalName: text("original_name").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    thumbBytes: bigint("thumb_bytes", { mode: "number" }).notNull().default(0),
+    /** Virus-scan hook result (see src/server/services/scan.ts). */
+    scanStatus: text("scan_status", { enum: SCAN_STATUSES }).notNull().default("not_scanned"),
+    note: text("note"),
+    uploadedById: text("uploaded_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("file_version_number_idx").on(t.fileId, t.number), uniqueIndex("file_version_object_idx").on(t.objectKey)],
+);
+
+/** Files attached to tasks: they live in a folder and show on the task too. */
+export const taskAttachment = pgTable(
+  "task_attachment",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => task.id, { onDelete: "cascade" }),
+    fileId: uuid("file_id")
+      .notNull()
+      .references(() => file.id, { onDelete: "cascade" }),
+    addedById: text("added_by_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.fileId] }), index("task_attachment_file_idx").on(t.fileId)],
 );

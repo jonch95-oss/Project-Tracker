@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ProjectImage } from "@/components/project/visuals";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconAlert, IconCheck, IconLock } from "@/components/ui/icons";
@@ -36,6 +37,7 @@ export function MyTasksView() {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const toast = useToast();
+  const router = useRouter();
   const q = useQuery(trpc.tasks.mine.queryOptions());
   const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
   const key = trpc.tasks.mine.queryKey();
@@ -48,7 +50,14 @@ export function MyTasksView() {
         if (prev) qc.setQueryData<Mine>(key, { ...prev, sections: prev.sections.map((s) => ({ ...s, groups: s.groups.map((g) => ({ ...g, tasks: g.tasks.filter((t) => t.id !== v.taskId) })).filter((g) => g.tasks.length) })) });
         return { prev };
       },
-      onSuccess: (r) => toast("success", r.status === "awaiting_approval" ? "Sent for approval" : "Done"),
+      onSuccess: (r, v) => {
+        if (r.status === "needs_attachment") {
+          toast("error", `Attach ${"label" in r ? r.label : "the required file"} first.`);
+          router.push(`/projects/${v.projectId}?tab=checklist&task=${v.taskId}`);
+          return;
+        }
+        toast("success", r.status === "awaiting_approval" ? "Sent for approval" : "Done");
+      },
       onError: (e, _v, ctx) => {
         if (ctx?.prev) qc.setQueryData(key, ctx.prev);
         toast("error", errorMessage(e));

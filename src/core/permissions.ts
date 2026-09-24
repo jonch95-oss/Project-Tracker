@@ -109,8 +109,8 @@ export function canProject(
     case "project.delete":
       return false;
     case "photos.upload":
-      // Outside parties see only folders shared with them (brief §4); photo
-      // sharing with them arrives with shared folders in Milestone 5.
+      // Outside parties see only folders shared with them (brief §4): they
+      // add photos when the Photos folder is shared (checked in the router).
       return actor.role !== "external";
     case "photos.manage":
       return actor.role === "admin";
