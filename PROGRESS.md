@@ -1,5 +1,68 @@
 # Progress
 
+## Milestone 13 — Reports, search, polish and launch (final QA in progress)
+
+**Live:** https://ariel-dev-projects.vercel.app · team guide at **/guide** · iPhone install guide at **/install**
+
+### What shipped
+
+- **⌘K search (brief §7.7):**
+  - Covers projects (name, address, **BBL** typed with or without dashes), tasks, files, people and the vendor directory.
+  - Open it with ⌘K, Ctrl+K or "/", or the new **Search** tab on the iPhone (Settings moved under More). With nothing typed it lists the places to go, so the whole app can be driven from the keyboard.
+  - **Permission-aware:** results are limited to what the person can open.
+    - Outside collaborators get only their own or shared tasks and shared folders, and no people.
+    - The Financial folder needs financial access; admins see every project but not its money files.
+    - Investors get nothing (they have their portal) and are never listed. Nothing financial is searched.
+    - Tested in `tests/integration/m13.test.ts` and the permission matrix.
+- **Weekly owner report (brief §7.8):**
+  - Built every **Monday from 7am New York** and kept as it stood then. "So far this week" gives the live picture.
+  - One section per project: phase and progress, days in phase, ahead/behind baseline, **what moved** (tasks finished and phases started or finished last week), **what's stuck** (blocked, overdue, awaiting approval, open violations, orders in force), the **next 2 weeks** (tasks and key dates), and **headline financials**.
+  - Web view plus **PDF** (a summary page, then one page per project). Owner only.
+  - The owner gets push, in-app and (once email is on) an email, with no figures in the text. The email follows the new "Weekly report" preference.
+  - A Monday with no runs is built on the next run that week. A failure while telling the owner is retried rather than lost.
+- **Team guide:** one page, in the app at `/guide` (no sign-in needed) and in `docs/TEAM-GUIDE.md`. It's linked from Settings, the invite page and the invitation message.
+- **README:** operations (the hourly job and its daily jobs), accounts, search and the load test.
+- **Production cut-over:** production started on an empty database at Milestone 1 (the first owner came from `/setup`). The demo seed refuses any database not named dev/test/demo, and the load seed anything not named load, so production has never held demo data. Nothing to wipe.
+
+### Pressure test (brief §13)
+
+- **Unit and integration:** 3,794 tests pass (unit coverage 99.2% lines / 95.9% branches). The permission matrix covers every procedure × role × financials flag × assigned/unassigned, including search and the report.
+- **End to end:** all 55 Playwright tests pass on a production build (Chromium), including search, the report, the guide, offline and iPhone-size flows. The iPhone WebKit profile runs in CI.
+- **Load:** a separate local database with **25 projects, 3,000 tasks, 5,000 files and 50 users** (`npm run seed:load`), production build, one server process.
+  - **Page loads in a real browser:** Portfolio median 0.35s (worst of 7: 0.51s); My Tasks median 0.19s (worst 0.30s). Target under 1s: **met**.
+  - **50 people at once, each opening a screen every 1.5–4.5s:** Portfolio data p50 76ms / p95 148ms / max 256ms; My Tasks p50 28ms / p95 87ms; a project p50 33ms / p95 78ms; **0 errors** in 994 requests.
+  - **Stress, 10× that pace** (every person every 0.25s, 39 requests/s on one process): 0 errors, Portfolio p50 1.4s. The single local process runs out of CPU here. On Vercel each request gets its own instance.
+  - **Fixes the load test led to:**
+    - Due-date forecasting cached its business-day math: schedule slip went from 62ms to 10ms.
+    - The Portfolio query runs its last lookups side by side (105ms to 70ms).
+    - The database pool size can be raised for a long-running server (`DB_POOL_MAX`; Vercel keeps 5 per instance).
+- **Lighthouse ≥ 90:** run on 22 screens × phone and desktop (the load data, production build).
+  - Performance is 92–100 on every screen.
+  - Accessibility 100 and best practices 100 everywhere.
+  - **SEO is 63 by design:** the app tells search engines not to index it (private property data), and `robots.txt` disallows everything. Allowing indexing is the only way to raise it; not done.
+  - **Fixes:**
+    - Portfolio, project, My Tasks, Team and the report now arrive with their data from the server, so there's no placeholder that jumps (Portfolio layout shift went from 0.64 to 0).
+    - Project tabs load their code when opened and are fetched quietly in the background, so they still work offline.
+    - The unused serif italic font was removed and the mono font is no longer preloaded.
+    - The System page's usage meter got its missing ARIA value.
+- **Concurrency, files, DST, security basics:** covered in earlier milestones and re-checked. Optimistic locking with a clear conflict message, 500MB uploads with a warning over 100MB, previews, the virus-scan hook, version history, DST/ET-today tests, auth rate limits, CSRF/origin checks, secrets only in env, the tamper-evident audit log, and the restore drill (M1).
+
+### Review
+The independent review found 1 P1 and 6 P2, all fixed:
+- **P1:** pages that now carry their data were being saved whole by the service worker, which would have put report money and the team list on the phone. Saved pages are now fetched as shells (the server leaves the data out when the service worker asks), and the old saved pages are dropped (`pc-pages-v3`). An e2e check confirms the live page has data and the saved copy has none.
+- **P2:**
+  - The weekly report retries telling the owners after a failure, and catches up a missed Monday.
+  - It has its own notification kind ("report"), so it can't suppress the daily digest, and it honours its email preference.
+  - The awaiting-approval total counts every approval, not just the 8 listed.
+  - Offline changes waiting to sync stay visible when the server re-sends a page's data.
+  - Project tab code is warmed from any page, and a tab that can't load offers a reload.
+  - ⌘K and "/" are left alone for investors, who have no search.
+
+### Known limitations
+- SEO stays below 90 on purpose (see above).
+- The weekly report email and PDF attachment wait for an email sender (email is off). The owner gets push and in-app, and downloads the PDF from the report page.
+- Load numbers are from one local server process against local Postgres. Production (Neon free, Vercel) adds network latency and a possible cold start on the first query after idle.
+
 ## Changes asked for after Milestone 12 (24 Sep)
 
 - **Sign-in by username:**
@@ -18,7 +81,7 @@
   - **Tests:** `tests/integration/accounts.test.ts` (8 tests). Unit, integration and account e2e tests all pass.
 - **Not done: an "invisible owner".** Jon asked for an owner who has full power but whose actions nobody else can see (shown as "Project Command", left out of people lists). This session's safety check blocked the change as audit/logging tampering, so it was left for Jon to decide.
 
-## Milestone 12 — iPhone home-screen app (built; real-iPhone check pending)
+## Milestone 12 — iPhone home-screen app (done; real-iPhone check passed after the offline-launch fix)
 
 **Live:** https://ariel-dev-projects.vercel.app (install it from Safari: Share → Add to Home Screen; the guide is at /install)
 
