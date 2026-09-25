@@ -1,9 +1,10 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { HeadlineFigures, ProjectImage, pct } from "@/components/project/visuals";
 import { EmptyState, ErrorState } from "@/components/ui/architecture";
 import { IconArrowLeft } from "@/components/ui/icons";
@@ -15,18 +16,43 @@ import { projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
 import { formatIsoDate, todayET } from "@/core/time";
 import { errorMessage, useTRPC, type RouterOutputs } from "@/lib/trpc";
-import { ActivityTab } from "./activity-tab";
-import { ChecklistTab } from "./checklist-tab";
-import { FilesTab } from "./files-tab";
-import { RecordsTab } from "./records-tab";
-import { FieldTab } from "./field/field-tab";
-import { UnitsTab } from "./units-tab";
-import { FinancialsTab } from "./financials-tab";
-import { KeyDatesTab } from "./key-dates-tab";
 import { EditProjectDialog } from "./edit-dialog";
 import { PhaseStepper } from "./phase-stepper";
 import { PhotoGallery } from "./photos";
-import { TeamTab } from "./team-tab";
+
+/**
+ * Each tab's code loads when the tab is first opened, so the project opens on
+ * Overview without waiting for the rest. Once the page is idle the rest is
+ * fetched quietly too, so every tab also works later with no signal.
+ */
+function TabLoading() {
+  return (
+    <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading">
+      <Skeleton className="h-10" />
+      <Skeleton className="h-40" />
+    </div>
+  );
+}
+const load = {
+  ActivityTab: () => import("./activity-tab"),
+  ChecklistTab: () => import("./checklist-tab"),
+  FilesTab: () => import("./files-tab"),
+  RecordsTab: () => import("./records-tab"),
+  FieldTab: () => import("./field/field-tab"),
+  UnitsTab: () => import("./units-tab"),
+  FinancialsTab: () => import("./financials-tab"),
+  KeyDatesTab: () => import("./key-dates-tab"),
+  TeamTab: () => import("./team-tab"),
+};
+const ActivityTab = dynamic(() => load.ActivityTab().then((m) => m.ActivityTab), { loading: TabLoading });
+const ChecklistTab = dynamic(() => load.ChecklistTab().then((m) => m.ChecklistTab), { loading: TabLoading });
+const FilesTab = dynamic(() => load.FilesTab().then((m) => m.FilesTab), { loading: TabLoading });
+const RecordsTab = dynamic(() => load.RecordsTab().then((m) => m.RecordsTab), { loading: TabLoading });
+const FieldTab = dynamic(() => load.FieldTab().then((m) => m.FieldTab), { loading: TabLoading });
+const UnitsTab = dynamic(() => load.UnitsTab().then((m) => m.UnitsTab), { loading: TabLoading });
+const FinancialsTab = dynamic(() => load.FinancialsTab().then((m) => m.FinancialsTab), { loading: TabLoading });
+const KeyDatesTab = dynamic(() => load.KeyDatesTab().then((m) => m.KeyDatesTab), { loading: TabLoading });
+const TeamTab = dynamic(() => load.TeamTab().then((m) => m.TeamTab), { loading: TabLoading });
 
 type Project = RouterOutputs["projects"]["get"];
 const UNIT_TYPES = new Set(["ground_up_condo", "condo_conversion", "gut_renovation"]);
@@ -40,6 +66,11 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
   const params = useSearchParams();
   const pathname = usePathname();
   const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    const warm = () => Object.values(load).forEach((l) => void l().catch(() => undefined));
+    const t = setTimeout(warm, 2500);
+    return () => clearTimeout(t);
+  }, []);
   const requested = params.get("tab");
 
   if (project.isPending) {

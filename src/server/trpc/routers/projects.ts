@@ -658,27 +658,32 @@ export const projectsRouter = router({
       const finIds = ids.filter((id) =>
         canProject(ctx.actor, mine.get(id) ?? null, "financials.view"),
       );
-      // Computed: once a project has a budget or unit schedule, its card follows them.
-      const headlines = await cardHeadlines(ctx.db, finIds);
-      if (!outsider) await addRiskFacts(ctx.db, ids, new Set(finIds), facts);
-
       const internal = isInternalRole(ctx.actor.role);
-      const members = internal
-        ? await ctx.db
-            .select({
-              projectId: schema.projectMember.projectId,
-              userId: schema.user.id,
-              name: schema.user.name,
-            })
-            .from(schema.projectMember)
-            .innerJoin(
-              schema.user,
-              eq(schema.user.id, schema.projectMember.userId),
-            )
-            .where(inArray(schema.projectMember.projectId, ids))
-        : [];
+      // Computed: once a project has a budget or unit schedule, its card follows them.
+      const [headlines, , members] = await Promise.all([
+        cardHeadlines(ctx.db, finIds),
+        outsider ? null : addRiskFacts(ctx.db, ids, new Set(finIds), facts),
+        internal
+          ? ctx.db
+              .select({
+                projectId: schema.projectMember.projectId,
+                userId: schema.user.id,
+                name: schema.user.name,
+              })
+              .from(schema.projectMember)
+              .innerJoin(
+                schema.user,
+                eq(schema.user.id, schema.projectMember.userId),
+              )
+              .where(inArray(schema.projectMember.projectId, ids))
+          : [],
+      ]);
       const people = new Map<string, string>();
-      for (const m of members) people.set(m.userId, m.name);
+      const membersOf = new Map<string, string[]>();
+      for (const m of members) {
+        people.set(m.userId, m.name);
+        membersOf.set(m.projectId, [...(membersOf.get(m.projectId) ?? []), m.userId]);
+      }
 
       return {
         projects: rows.map((p) => ({
@@ -687,9 +692,7 @@ export const projectsRouter = router({
           taskCounts: counts.get(p.id) ?? {},
           facts: facts.get(p.id)!,
           hero: heroes.get(p.id) ?? null,
-          memberIds: members
-            .filter((m) => m.projectId === p.id)
-            .map((m) => m.userId),
+          memberIds: membersOf.get(p.id) ?? [],
           headline: finIds.includes(p.id)
             ? (headlines.get(p.id) ?? {
                 purchasePriceCents: null,

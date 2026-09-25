@@ -17,6 +17,9 @@
     "bootstrap:owner": "tsx scripts/bootstrap-owner.ts",
     "format": "prettier --write .",
     "seed:demo": "DEMO_SEED=1 tsx --conditions=react-server scripts/seed-demo.ts",
+    "seed:load": "LOAD_SEED=1 tsx --conditions=react-server scripts/seed-load.ts",
+    "load:pages": "node scripts/load/page-timing.mjs",
+    "load:users": "node scripts/load/concurrent.mjs",
     "vercel-build": "node scripts/vercel-build.mjs"
   },
   "dependencies": {

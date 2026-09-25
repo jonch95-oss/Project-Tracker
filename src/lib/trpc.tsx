@@ -98,6 +98,8 @@ function makeQueryClient() {
         // Always reach the client: queued kinds are saved for later, others say they need a connection.
         networkMode: "always",
       },
+      // Answers a page brought with it from the server (see server/trpc/prefetch) are in superjson form.
+      hydrate: { deserializeData: superjson.deserialize },
       queries: {
         // Offline, reads wait (the copy saved on the phone stays on screen) and run when the connection is back.
         staleTime: 30_000,
@@ -118,19 +120,25 @@ export function TRPCReactProvider({ children }: { children: ReactNode }) {
     setTaskTitleLookup((id) => findTaskTitle(qc, id));
     return qc;
   });
-  // A change queued offline shows at once on everything already loaded (reads are paused while offline).
-  useEffect(
-    () =>
-      subscribeQueue(() => {
-        for (const q of queryClient.getQueryCache().getAll()) {
-          if (q.state.status !== "success") continue;
-          const { path, input } = keyParts(q.queryKey);
-          const next = overlayQueued(path, input, q.state.data);
-          if (next !== q.state.data) queryClient.setQueryData(q.queryKey, next);
-        }
-      }),
-    [queryClient],
-  );
+  // A change queued offline shows at once on everything already loaded (reads are paused while offline),
+  // and on answers a page brought with it from the server (they never pass through the link).
+  useEffect(() => {
+    const overlay = (q: { queryKey: readonly unknown[]; state: { status: string; data: unknown } }) => {
+      if (q.state.status !== "success") return;
+      const { path, input } = keyParts(q.queryKey);
+      const next = overlayQueued(path, input, q.state.data);
+      if (next !== q.state.data) queryClient.setQueryData(q.queryKey, next);
+    };
+    const offQueue = subscribeQueue(() => queryClient.getQueryCache().getAll().forEach(overlay));
+    const offCache = queryClient.getQueryCache().subscribe((e) => {
+      if (e.type === "added") queueMicrotask(() => overlay(e.query));
+    });
+    queryClient.getQueryCache().getAll().forEach(overlay);
+    return () => {
+      offQueue();
+      offCache();
+    };
+  }, [queryClient]);
   const [trpcClient] = useState(() =>
     createTRPCClient<AppRouter>({
       links: [

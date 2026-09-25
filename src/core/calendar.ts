@@ -70,12 +70,26 @@ export function nextBusinessDay(date: string): string {
   return d;
 }
 
+/** Answers already worked out (the schedule forecast asks the same questions many times over). */
+const memo = new Map<string, string>();
+const MEMO_MAX = 50_000;
+
 /**
  * Move `n` business days from `date` (negative goes back). Zero returns the
  * date rolled forward to a business day.
  */
 export function addBusinessDays(date: string, n: number): string {
   if (!isIsoDate(date)) throw new Error(`Not a date: ${date}`);
+  const k = `${date}|${n}`;
+  const hit = memo.get(k);
+  if (hit) return hit;
+  const out = walkBusinessDays(date, n);
+  if (memo.size >= MEMO_MAX) memo.clear();
+  memo.set(k, out);
+  return out;
+}
+
+function walkBusinessDays(date: string, n: number): string {
   if (n === 0) return nextBusinessDay(date);
   const step = n > 0 ? 1 : -1;
   let d = date;

@@ -18,7 +18,8 @@ export function db(): Database {
   if (globalForDb.__pcDb) return globalForDb.__pcDb;
   const pool = new Pool({
     connectionString: env().DATABASE_URL,
-    max: env().NODE_ENV === "production" ? 5 : 10,
+    // Small per serverless instance (Vercel runs many side by side); DB_POOL_MAX raises it for a single long-running server (load tests).
+    max: Number(process.env.DB_POOL_MAX) || (env().NODE_ENV === "production" ? 5 : 10),
     connectionTimeoutMillis: 15_000,
     idleTimeoutMillis: 30_000,
   });

@@ -281,7 +281,7 @@ export function Meter({ valueBps, tone, label }: { valueBps: number | null; tone
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={valueBps === null ? undefined : Math.round(pct)}
+      aria-valuenow={valueBps === null ? 0 : Math.round(pct)}
       aria-valuetext={valueBps === null ? "Not measured" : `${pct.toFixed(0)}%`}
       className="relative h-1.5 w-full overflow-hidden rounded-full bg-sunken"
     >

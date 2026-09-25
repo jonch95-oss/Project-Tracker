@@ -86,9 +86,11 @@ export async function saveSnapshot(
   qc: QueryClient,
   userId: string,
 ): Promise<void> {
+  // Kept as plain objects (IndexedDB stores dates and the like as they are).
   const state = dehydrate(qc, {
     shouldDehydrateQuery: (q) =>
       q.state.status === "success" && keepable(q.queryKey),
+    serializeData: (d) => d,
   });
   await run("readwrite", (s) =>
     s.put({ at: Date.now(), state }, `user:${userId}`),
@@ -125,7 +127,7 @@ export async function restoreSnapshot(
       };
     }),
   };
-  hydrate(qc, state);
+  hydrate(qc, state, { defaultOptions: { deserializeData: (d) => d } });
   return true;
 }
 

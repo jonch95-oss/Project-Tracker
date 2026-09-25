@@ -63,7 +63,10 @@ export function SearchPanel({ destinations, onNavigate, autoFocus = true }: { de
   const listRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
-    if (autoFocus) inputRef.current?.focus();
+    if (!autoFocus) return;
+    // After the dialog has opened (opening it moves focus to its first control).
+    const f = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(f);
   }, [autoFocus]);
 
   const rows: Row[] = useMemo(() => {

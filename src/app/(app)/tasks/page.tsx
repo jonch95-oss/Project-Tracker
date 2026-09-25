@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/ui/primitives";
 import { formatIsoDate, todayET } from "@/core/time";
 import { redirect } from "next/navigation";
 import { requireViewer } from "@/server/session";
+import { Prefetch } from "@/server/trpc/prefetch";
 import { MyTasksView } from "./my-tasks-view";
 
 export const metadata: Metadata = { title: "My Tasks" };
@@ -14,7 +15,9 @@ export default async function TasksPage() {
   return (
     <>
       <PageHeader eyebrow={formatIsoDate(todayET(), { weekday: "long", month: "long", day: "numeric", year: undefined })} title="My Tasks" description={`Good to see you, ${firstName}. This is everything you need to do, in order.`} />
-      <MyTasksView />
+      <Prefetch load={(trpc, qc) => [qc.prefetchQuery(trpc.tasks.mine.queryOptions())]}>
+        <MyTasksView />
+      </Prefetch>
     </>
   );
 }
