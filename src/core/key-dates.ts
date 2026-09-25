@@ -46,3 +46,9 @@ export function reminderDue(date: string, today: string): (typeof KEY_DATE_REMIN
   const d = daysBetween(today, date);
   return (KEY_DATE_REMINDERS as readonly number[]).includes(d) ? (d as 14 | 7 | 1) : null;
 }
+
+/** Key dates that are about money (a loan, a 1031 exchange): shown only to people who see the project's financials. */
+export const FINANCIAL_KEY_DATE_KINDS: ReadonlySet<string> = new Set(["loan_maturity", "exchange_1031_identify", "exchange_1031_close"]);
+export function isFinancialKeyDate(kind: string): boolean {
+  return FINANCIAL_KEY_DATE_KINDS.has(kind);
+}

@@ -39,6 +39,8 @@ export type QueuedOp = {
   label: string;
   state: "pending" | "conflict" | "failed";
   message?: string;
+  /** Times the server itself failed on it (not counting no-connection or a sign-in that ended). */
+  serverErrors?: number;
 } & ({ path: "checklist.setDone"; input: SetDoneInput } | { path: "tasks.addComment"; input: AddCommentInput });
 
 const KEY = "pc.offline.queue.v1";
@@ -132,7 +134,7 @@ export function enqueue(path: QueueablePath, input: unknown): QueuedOp {
   return op;
 }
 
-export function updateOp(id: string, patch: Partial<Pick<QueuedOp, "state" | "message">> & { input?: unknown }) {
+export function updateOp(id: string, patch: Partial<Pick<QueuedOp, "state" | "message" | "serverErrors">> & { input?: unknown }) {
   write(readQueue().map((o) => (o.id === id ? ({ ...o, ...patch } as QueuedOp) : o)));
 }
 
@@ -142,7 +144,7 @@ export function removeOp(id: string) {
 
 /** Put a held item back in line (Retry). */
 export function retryOp(id: string) {
-  updateOp(id, { state: "pending", message: undefined });
+  updateOp(id, { state: "pending", message: undefined, serverErrors: 0 });
 }
 
 /** Forget everything queued (sign-out). */
@@ -272,6 +274,8 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 let running: Promise<{ sent: number; left: number }> | null = null;
+/** Server failures on one change before it's held for the person instead of blocking the queue. */
+const MAX_SERVER_ERRORS = 3;
 
 /**
  * Send what's queued for the signed-in person, oldest first. Stops at the
@@ -302,7 +306,19 @@ export function flushQueue(client: QueueClient, message: (e: unknown) => string)
         removeOp(op.id);
         sent++;
       } catch (e) {
-        if (isTemporary(e)) break;
+        if (isTemporary(e)) {
+          // No connection or a sign-in that ended: everything waits. A server that keeps failing on
+          // this one change: after a few tries it's held for the person (Retry or Discard), and the
+          // rest go ahead instead of waiting behind it forever.
+          if (isNetworkError(e) || codeOf(e) === "UNAUTHORIZED") break;
+          const tries = (op.serverErrors ?? 0) + 1;
+          if (tries < MAX_SERVER_ERRORS) {
+            updateOp(op.id, { serverErrors: tries });
+            break;
+          }
+          updateOp(op.id, { state: "failed", serverErrors: tries, message: "The app couldn't save this change after several tries. Retry it, or copy it and discard." });
+          continue;
+        }
         if (op.path === "checklist.setDone" && codeOf(e) === "CONFLICT") updateOp(op.id, { state: "conflict", message: "Someone changed this task while you were offline." });
         else updateOp(op.id, { state: "failed", message: message(e) });
       }

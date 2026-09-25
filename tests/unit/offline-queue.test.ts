@@ -337,6 +337,31 @@ describe("offline queue", () => {
     });
   });
 
+  it("a change the server keeps failing on is held after 3 tries, and the ones behind it still go", async () => {
+    q.enqueue("tasks.addComment", { projectId: P, taskId: T1, body: "stuck" });
+    q.enqueue("tasks.addComment", { projectId: P, taskId: T2, body: "fine" });
+    const sent: string[] = [];
+    const client = {
+      setDone: async () => ({ status: "done", version: 2 }),
+      addComment: async (i: { body: string }) => {
+        if (i.body === "stuck") throw trpcError("INTERNAL_SERVER_ERROR");
+        sent.push(i.body);
+        return {};
+      },
+      latestVersion: async () => 1,
+    };
+    // Two failures: it stays in line and everything waits.
+    for (let i = 0; i < 2; i++) expect(await q.flushQueue(client as never, String)).toEqual({ sent: 0, left: 2 });
+    expect(q.readQueue()[0]).toMatchObject({ state: "pending", serverErrors: 2 });
+    // The third: held for the person, and the next one goes.
+    expect(await q.flushQueue(client as never, String)).toEqual({ sent: 1, left: 1 });
+    expect(sent).toEqual(["fine"]);
+    expect(q.readQueue()[0]).toMatchObject({ state: "failed", serverErrors: 3 });
+    q.retryOp(q.readQueue()[0]!.id);
+    expect(q.readQueue()[0]).toMatchObject({ state: "pending", serverErrors: 0 });
+    for (const o of q.readQueue()) q.removeOp(o.id);
+  });
+
   it("holds back ticks that need a file, keeps temporary failures queued, and retries on request", async () => {
     q.enqueue("checklist.setDone", {
       projectId: P,
@@ -423,5 +448,17 @@ describe("offline queue", () => {
     expect(q.isNetworkError(new Error("boom"))).toBe(false);
     (navigator as { onLine: boolean }).onLine = false;
     expect(q.isNetworkError(trpcError("CONFLICT"))).toBe(true);
+  });
+});
+
+describe("what's kept on the phone", () => {
+  it("never keeps an amount, even inside screens that are kept", async () => {
+    const { withoutMoney, keepable } = await import("@/lib/offline-cache");
+    const at = new Date("2026-09-25T12:00:00Z");
+    expect(
+      withoutMoney({ projects: [{ id: "p", name: "Bergen", headline: { purchasePriceCents: 5 }, facts: { overdue: 2 } }], rfis: [{ costImpactCents: 100, at }] }),
+    ).toEqual({ projects: [{ id: "p", name: "Bergen", headline: null, facts: { overdue: 2 } }], rfis: [{ costImpactCents: null, at }] });
+    for (const path of ["financials", "capital", "portal", "units", "directory", "records", "reports", "users", "audit"]) expect(keepable([[path, "get"]])).toBe(false);
+    expect(keepable([["checklist", "get"]])).toBe(true);
   });
 });

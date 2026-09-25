@@ -3,6 +3,7 @@ import { formatMoney } from "@/core/money";
 import { formatIsoDate, todayET } from "@/core/time";
 import { quarterBounds, quarterOf, type CapitalAccount } from "@/core/waterfall";
 import { authedContextFrom } from "@/server/request-context";
+import { recordAudit } from "@/server/services/audit";
 import { pdfResponse, renderPdf, type PdfSection } from "@/server/services/pdf";
 import { createCaller } from "@/server/trpc/root";
 
@@ -109,5 +110,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/export/projects/
     sections,
     footer: "Confidential. Prepared for the investors in this project.",
   });
+  // Every export is on the audit log (brief §4).
+  await recordAudit(c.db, { actorId: c.viewer.id, actorName: c.viewer.name, action: "export", entityType: "project_headline", entityId: id, projectId: id, summary: `${c.viewer.name} downloaded the ${quarter} investor report`, ip: c.ip }).catch(() => undefined);
   return pdfResponse(bytes, `${view.project.name}-${quarter}-report.pdf`);
 }

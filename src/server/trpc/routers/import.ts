@@ -14,7 +14,7 @@ import type { TemplateDef } from "@/core/templates";
 import { schema } from "../../db";
 import { recordAudit } from "../../services/audit";
 import { assertValidTemplate } from "../../services/checklist";
-import { projectAccess, protectedProcedure, router } from "../init";
+import { projectAccess, protectedProcedure, requireProject, router } from "../init";
 
 /** Validated rows, as validateRows leaves them: required fields present, optional ones present only when filled in. */
 type ProjectRow = {
@@ -146,7 +146,11 @@ export const importRouter = router({
           code: "BAD_REQUEST",
           message: "Choose the project.",
         });
-      if (intoProject) await projectAccess(ctx, intoProject);
+      if (intoProject) {
+        const access = await projectAccess(ctx, intoProject);
+        // Budget lines are money: nothing about them (not even which names exist) without the right to edit them.
+        if (input.kind === "budget") requireProject(access, "financials.edit");
+      }
       const { valid, rejected } = validateRows(
         input.kind,
         input.rows,

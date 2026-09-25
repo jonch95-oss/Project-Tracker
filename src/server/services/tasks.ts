@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, lte, ne, notInArray, sql } from "drizzle-orm";
 import { OUTSIDE_ROLES } from "@/core/permissions";
 import { addBusinessDays } from "@/core/calendar";
-import { KEY_DATE_REMINDERS, keyDateLabel } from "@/core/key-dates";
-import { nextOccurrence, type RecurrenceFreq } from "@/core/tasks";
+import { isFinancialKeyDate, KEY_DATE_REMINDERS, keyDateLabel } from "@/core/key-dates";
+import { nextInSeries, type RecurrenceFreq } from "@/core/tasks";
 import type { Recurrence } from "@/core/templates";
 import { addDays, daysBetween, formatIsoDate, todayET } from "@/core/time";
 import { db, schema, type DbOrTx } from "../db";
@@ -158,7 +158,11 @@ export async function afterCompleted(tx: DbOrTx, t: TaskRow, actorId: string, co
   const rec = t.recurrence as Recurrence | null;
   if (rec && t.dueOn) {
     nextId = randomUUID();
-    const due = nextOccurrence(t.dueOn, rec.freq as RecurrenceFreq, completedOn);
+    // The series keeps its own calendar, so a date rolled off a weekend or holiday doesn't shift the next ones.
+    const series = rec as Recurrence & { anchor?: string; at?: string };
+    const anchor = series.anchor ?? t.dueOn;
+    const next = nextInSeries({ anchor, at: series.at ?? t.dueOn, freq: rec.freq as RecurrenceFreq, completedOn });
+    const due = next.dueOn;
     await tx.insert(schema.task).values({
       id: nextId,
       projectId: t.projectId,
@@ -175,7 +179,7 @@ export async function afterCompleted(tx: DbOrTx, t: TaskRow, actorId: string, co
       approverRole: t.approverRole,
       requiredAttachment: t.requiredAttachment,
       subItems: t.subItems.map((s) => ({ ...s, done: false })),
-      recurrence: t.recurrence,
+      recurrence: { ...rec, anchor, at: next.at },
       seriesId: t.seriesId ?? t.id,
       sortOrder: t.sortOrder,
       createdById: actorId,
@@ -314,7 +318,7 @@ export async function keyDateReminderJob(now = new Date()): Promise<{ reminded: 
     const owners = await activeOwners(tx);
     const projectIds = [...new Set(dates.map((d) => d.projectId))];
     const members = await tx
-      .select({ projectId: schema.projectMember.projectId, userId: schema.projectMember.userId })
+      .select({ projectId: schema.projectMember.projectId, userId: schema.projectMember.userId, fin: schema.projectMember.canViewFinancials })
       .from(schema.projectMember)
       .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
       .where(and(inArray(schema.projectMember.projectId, projectIds), notInArray(schema.user.role, [...OUTSIDE_ROLES])));
@@ -326,7 +330,9 @@ export async function keyDateReminderJob(now = new Date()): Promise<{ reminded: 
       // Claim the thresholds first; if another run got there, send nothing.
       const claimed = await tx.insert(schema.keyDateReminder).values(due.map((threshold) => ({ keyDateId: d.id, date: d.date, threshold }))).onConflictDoNothing().returning();
       if (claimed.length === 0) continue;
-      const people = [...new Set([...owners, ...members.filter((m) => m.projectId === d.projectId).map((m) => m.userId)])];
+      // Loan and 1031 dates go only to people who see the project's money.
+      const money = isFinancialKeyDate(d.kind);
+      const people = [...new Set([...owners, ...members.filter((m) => m.projectId === d.projectId && (!money || m.fin)).map((m) => m.userId)])];
       reminded += await notify(
         tx,
         null,

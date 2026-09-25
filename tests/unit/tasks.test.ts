@@ -8,6 +8,7 @@ import {
   endOfWeek,
   myTaskSection,
   nextAction,
+  nextInSeries,
   nextOccurrence,
   shiftDate,
   TASK_STATUS_LABEL,
@@ -50,6 +51,21 @@ describe("recurrence", () => {
   it("monthly clamps to the month's last day", () => {
     expect(nextOccurrence("2026-01-31", "monthly", "2026-01-31")).toBe("2026-03-02"); // Feb 28 is a Saturday → Mon Mar 2
     expect(nextOccurrence("2026-12-15", "monthly", "2026-12-15")).toBe("2027-01-15");
+  });
+  it("a series keeps its own calendar: a date moved off a weekend or holiday doesn't shift the next ones", () => {
+    // Monthly on the 30th: Feb has no 30th (→ Sat 28th, due Mon Mar 2), and May 30 2026 is a Saturday (due Mon Jun 1), but the series stays on the 30th.
+    let s = { anchor: "2026-01-30", at: "2026-01-30" };
+    const dues: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const n = nextInSeries({ ...s, freq: "monthly", completedOn: s.at });
+      dues.push(n.dueOn);
+      s = { ...s, at: n.at };
+    }
+    expect(dues).toEqual(["2026-03-02", "2026-03-30", "2026-04-30", "2026-06-01", "2026-06-30"]);
+    // Weekly Mondays: Labor Day (Sep 7 2026) moves that one to Tuesday; the next is Monday again.
+    const labor = nextInSeries({ anchor: "2026-08-31", at: "2026-08-31", freq: "weekly", completedOn: "2026-08-31" });
+    expect(labor).toEqual({ at: "2026-09-07", dueOn: "2026-09-08" });
+    expect(nextInSeries({ anchor: "2026-08-31", at: labor.at, freq: "weekly", completedOn: "2026-09-08" }).dueOn).toBe("2026-09-14");
   });
   it("a late completion skips occurrences already past", () => {
     expect(nextOccurrence("2026-09-01", "weekly", "2026-09-20")).toBe("2026-09-22");

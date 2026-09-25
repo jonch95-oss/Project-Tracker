@@ -70,21 +70,38 @@ export function canSetStatus(from: TaskStatus, to: TaskStatus): boolean {
 
 export type RecurrenceFreq = "weekly" | "biweekly" | "monthly";
 
-/** The next due date after completing a recurring task, rolled to a business day. */
+/** The k-th date of a series that starts on `anchor` (monthly keeps the anchor's day, or the month's last day). */
+function occurrence(anchor: string, freq: RecurrenceFreq, k: number): string {
+  if (freq === "weekly") return addDays(anchor, 7 * k);
+  if (freq === "biweekly") return addDays(anchor, 14 * k);
+  const [y, m, day] = anchor.split("-").map(Number) as [number, number, number];
+  const months = m - 1 + k;
+  const ny = y + Math.floor(months / 12);
+  const nm = (months % 12) + 1;
+  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return `${ny}-${String(nm).padStart(2, "0")}-${String(Math.min(day, last)).padStart(2, "0")}`;
+}
+
+/**
+ * The next occurrence after completing one. The series keeps its own
+ * calendar (`anchor`, its first intended date): each date is counted from the
+ * anchor, not from the last due date, so a date rolled off a weekend or
+ * holiday never shifts the ones after it (a monthly task on the 30th stays on
+ * the 30th). `at` is the intended date of the occurrence just completed.
+ * Past occurrences are skipped so a late completion doesn't leave the next one
+ * already overdue. Returns the next intended date and its due date (rolled to
+ * a business day).
+ */
+export function nextInSeries(s: { anchor: string; at: string; freq: RecurrenceFreq; completedOn: string }): { at: string; dueOn: string } {
+  let k = 1;
+  let next = occurrence(s.anchor, s.freq, k);
+  while (next <= s.at || next <= s.completedOn) next = occurrence(s.anchor, s.freq, ++k);
+  return { at: next, dueOn: nextBusinessDay(next) };
+}
+
+/** The next due date after completing a recurring task whose series starts at its due date. */
 export function nextOccurrence(dueOn: string, freq: RecurrenceFreq, completedOn: string): string {
-  const step = (d: string) => {
-    if (freq === "weekly") return addDays(d, 7);
-    if (freq === "biweekly") return addDays(d, 14);
-    const [y, m, day] = d.split("-").map(Number) as [number, number, number];
-    const ny = m === 12 ? y + 1 : y;
-    const nm = m === 12 ? 1 : m + 1;
-    const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
-    return `${ny}-${String(nm).padStart(2, "0")}-${String(Math.min(day, last)).padStart(2, "0")}`;
-  };
-  // Skip past occurrences so a late completion doesn't leave the next one already overdue.
-  let next = step(dueOn);
-  while (next <= completedOn) next = step(next);
-  return nextBusinessDay(next);
+  return nextInSeries({ anchor: dueOn, at: dueOn, freq, completedOn }).dueOn;
 }
 
 /* ------------------------------------------------------------------ */

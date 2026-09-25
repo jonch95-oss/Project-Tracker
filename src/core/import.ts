@@ -207,9 +207,24 @@ const halves = (raw: string): Parsed => {
     ? bad("should be whole or half numbers, up to 20")
     : ok(n);
 };
+/**
+ * A spreadsheet number with more than two decimals (a formula's result, like
+ * 1080.0000000000002 or 12345.675) rounded half-up to cents, on the digits
+ * themselves (no floating point). Anything else is left as it is.
+ */
+export function roundToCents(raw: string): string {
+  const m = /^(-?)(\d+)\.(\d{3,})$/.exec(raw);
+  if (!m) return raw;
+  const [, sign, whole, frac] = m as unknown as [string, string, string, string];
+  let cents = BigInt(whole + frac.slice(0, 2));
+  if (Number(frac[2]) >= 5) cents += 1n;
+  const t = cents.toString().padStart(3, "0");
+  return `${sign}${t.slice(0, -2)}.${t.slice(-2)}`;
+}
+
 const money = (raw: string): Parsed => {
   try {
-    const c = parseMoney(raw.replace(/\s/g, ""));
+    const c = parseMoney(roundToCents(raw.replace(/\s/g, "")));
     return c < 0 ? bad("can't be negative") : ok(c);
   } catch (e) {
     return bad(e instanceof MoneyError ? "isn't an amount" : "isn't an amount");

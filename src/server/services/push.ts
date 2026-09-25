@@ -212,11 +212,14 @@ export async function dispatchPending(limit = 100, now = new Date()): Promise<{ 
   for (const [userId, list] of byUser) {
     const s = settings.get(userId)!;
     for (const r of list) {
-      if (r.critical) await emailNotification(r, { critical: true });
+      // Still on the project (and still allowed to see it) when it goes out, critical or not.
+      if (r.critical) {
+        if (visible.has(r.id)) await emailNotification(r, { critical: true });
+      }
       else if (EMAILED_KINDS.has(r.kind) && channelOn(s.prefs, r.kind, "email")) await emailNotification(r);
     }
     // Critical orders go straight out, whatever the preferences and quiet hours (brief §10).
-    const critical = list.filter((r) => r.critical && enabled && withDevice.has(userId));
+    const critical = list.filter((r) => r.critical && visible.has(r.id) && enabled && withDevice.has(userId));
     for (const r of critical) {
       const ok = (await pushToUser(conn, userId, { title: r.title, body: r.body ?? "", url: absolute(r.href), tag: r.id })) > 0;
       await finish([r.id], ok ? "sent" : "skipped", now);

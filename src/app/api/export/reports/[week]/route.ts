@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { formatMoney } from "@/core/money";
 import { formatIsoDate } from "@/core/time";
 import { authedContextFrom } from "@/server/request-context";
+import { recordAudit } from "@/server/services/audit";
 import { pdfResponse, renderPdf, type PdfSection } from "@/server/services/pdf";
 import type { ReportTask, WeeklyReportData } from "@/server/services/weekly-report";
 import { createCaller } from "@/server/trpc/root";
@@ -98,5 +99,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/export/reports/[
     sections,
     footer: "Project Command - confidential",
   });
+  // Every export is on the audit log (brief §4).
+  await recordAudit(c.db, { actorId: c.viewer.id, actorName: c.viewer.name, action: "export", entityType: "weekly_report", entityId: r.weekOf, summary: `${c.viewer.name} downloaded the weekly report (${week === "live" ? "so far this week" : `week of ${week}`}) as a PDF`, ip: c.ip }).catch(() => undefined);
   return pdfResponse(bytes, `weekly-report-${week === "live" ? r.weekOf : week}.pdf`);
 }

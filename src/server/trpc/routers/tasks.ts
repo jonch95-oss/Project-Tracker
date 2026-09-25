@@ -1,9 +1,9 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { planDate } from "../dates";
 import { addBusinessDays } from "@/core/calendar";
-import { KEY_DATE_KINDS, keyDateLabel, upcomingKeyDates } from "@/core/key-dates";
+import { FINANCIAL_KEY_DATE_KINDS, isFinancialKeyDate, KEY_DATE_KINDS, keyDateLabel, upcomingKeyDates } from "@/core/key-dates";
 import { expiryLabel, FINANCIAL_EXPIRY } from "@/core/expiries";
 import { commentPlainText, mentionedIds } from "@/core/mentions";
 import { canGlobal, canProject, type Membership, isInternalRole } from "@/core/permissions";
@@ -631,7 +631,11 @@ export const tasksRouter = router({
       approvals: approvals.map((t) => ({ ...t, projectName: names.get(t.projectId)!, assigneeName: t.assigneeId ? (people.get(t.assigneeId) ?? null) : null })),
       blocked: blocked.map((t) => ({ ...t, projectName: names.get(t.projectId)!, assigneeName: t.assigneeId ? (people.get(t.assigneeId) ?? null) : null })),
       overdueByPerson: overdue.map((o) => ({ userId: o.assigneeId, name: o.name ?? "Unassigned", count: o.count, oldest: o.oldest })).sort((a, b) => b.count - a.count),
-      keyDates: upcomingKeyDates(dates, today, 14).map((d) => ({ id: d.id, projectId: d.projectId, projectName: names.get(d.projectId)!, label: keyDateLabel(d.kind, d.label), date: d.date })),
+      keyDates: upcomingKeyDates(
+        dates.filter((d) => !isFinancialKeyDate(d.kind) || canProject(ctx.actor, memberships.get(d.projectId) ?? null, "financials.view")),
+        today,
+        14,
+      ).map((d) => ({ id: d.id, projectId: d.projectId, projectName: names.get(d.projectId)!, label: keyDateLabel(d.kind, d.label), date: d.date })),
       recordAlerts: alerts.map((a) => ({ ...a, projectName: names.get(a.projectId)! })) as RailAlert[],
       expired: expired.map((e) => ({ id: e.id, projectId: e.projectId, projectName: names.get(e.projectId)!, label: expiryLabel(e.category, e.vendorName ?? e.label), expiresOn: e.expiresOn })) as RailExpiry[],
     };
@@ -650,8 +654,10 @@ type RailExpiry = { id: string; projectId: string; projectName: string; label: s
 export const keyDatesRouter = router({
   list: projectProcedure("task.viewAll").query(async ({ ctx, input }) => {
     const rows = await ctx.db.select().from(schema.keyDate).where(eq(schema.keyDate.projectId, input.projectId)).orderBy(asc(schema.keyDate.date));
+    // Loan and 1031 dates are about money: only with financial access.
+    const fin = ctx.project.can("financials.view");
     return {
-      dates: rows.map((d) => ({ id: d.id, kind: d.kind, label: keyDateLabel(d.kind, d.label), customLabel: d.label, date: d.date, done: d.done, notes: d.notes })),
+      dates: rows.filter((d) => fin || !isFinancialKeyDate(d.kind)).map((d) => ({ id: d.id, kind: d.kind, label: keyDateLabel(d.kind, d.label), customLabel: d.label, date: d.date, done: d.done, notes: d.notes })),
       canEdit: ctx.project.can("checklist.edit"),
     };
   }),
@@ -660,17 +666,21 @@ export const keyDatesRouter = router({
     .input(z.object({ id: z.uuid().optional(), kind: z.enum(kindKeys), label: z.string().trim().max(120).nullish(), date: planDate, done: z.boolean().default(false), notes: z.string().trim().max(1000).nullish() }))
     .mutation(async ({ ctx, input }) => {
       if (input.kind === "other" && !input.label) throw new TRPCError({ code: "BAD_REQUEST", message: "Name the date." });
+      // Loan and 1031 dates are about money: only people who see the financials add or change them.
+      const fin = ctx.project.can("financials.view");
+      if (isFinancialKeyDate(input.kind) && !fin) throw new TRPCError({ code: "FORBIDDEN", message: "Only people who see this project's financials can set that date." });
+      const hideMoney = fin ? undefined : notInArray(schema.keyDate.kind, [...FINANCIAL_KEY_DATE_KINDS]);
       return ctx.db.transaction(async (tx) => {
         const values = { kind: input.kind, label: input.kind === "other" ? input.label! : (input.label ?? null), date: input.date, done: input.done, notes: input.notes ?? null };
         let id = input.id;
         if (id) {
-          const r = await tx.update(schema.keyDate).set({ ...values, updatedAt: new Date() }).where(and(eq(schema.keyDate.id, id), eq(schema.keyDate.projectId, input.projectId))).returning({ id: schema.keyDate.id });
+          const r = await tx.update(schema.keyDate).set({ ...values, updatedAt: new Date() }).where(and(eq(schema.keyDate.id, id), eq(schema.keyDate.projectId, input.projectId), hideMoney)).returning({ id: schema.keyDate.id });
           if (!r.length) throw new TRPCError({ code: "NOT_FOUND", message: "That date was removed." });
         } else {
           const [r] = await tx.insert(schema.keyDate).values({ ...values, projectId: input.projectId, createdById: ctx.viewer.id }).returning({ id: schema.keyDate.id });
           id = r!.id;
         }
-        await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: input.id ? "update" : "create", entityType: "key_date", entityId: id, projectId: input.projectId, summary: `${ctx.viewer.name} ${input.id ? "updated" : "added"} the key date ${keyDateLabel(input.kind, input.label)}: ${input.date}${input.done ? " (done)" : ""}`, ip: ctx.ip });
+        await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: input.id ? "update" : "create", entityType: isFinancialKeyDate(input.kind) ? "financial_key_date" : "key_date", entityId: id, projectId: input.projectId, summary: `${ctx.viewer.name} ${input.id ? "updated" : "added"} the key date ${keyDateLabel(input.kind, input.label)}: ${input.date}${input.done ? " (done)" : ""}`, ip: ctx.ip });
         return { id };
       });
     }),
@@ -679,9 +689,10 @@ export const keyDatesRouter = router({
     .input(z.object({ id: z.uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction(async (tx) => {
-        const [d] = await tx.delete(schema.keyDate).where(and(eq(schema.keyDate.id, input.id), eq(schema.keyDate.projectId, input.projectId))).returning();
+        const hideMoney = ctx.project.can("financials.view") ? undefined : notInArray(schema.keyDate.kind, [...FINANCIAL_KEY_DATE_KINDS]);
+        const [d] = await tx.delete(schema.keyDate).where(and(eq(schema.keyDate.id, input.id), eq(schema.keyDate.projectId, input.projectId), hideMoney)).returning();
         if (!d) throw new TRPCError({ code: "NOT_FOUND" });
-        await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: "delete", entityType: "key_date", entityId: d.id, projectId: input.projectId, summary: `${ctx.viewer.name} removed the key date ${keyDateLabel(d.kind, d.label)} (${d.date})`, ip: ctx.ip });
+        await recordAudit(tx, { actorId: ctx.viewer.id, actorName: ctx.viewer.name, action: "delete", entityType: isFinancialKeyDate(d.kind) ? "financial_key_date" : "key_date", entityId: d.id, projectId: input.projectId, summary: `${ctx.viewer.name} removed the key date ${keyDateLabel(d.kind, d.label)} (${d.date})`, ip: ctx.ip });
       });
       return { ok: true };
     }),

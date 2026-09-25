@@ -3,6 +3,7 @@ import { manpowerTotal } from "@/core/field";
 import { formatIsoDate, isIsoDate, todayET } from "@/core/time";
 import { renderPdf, pdfResponse, type PdfSection } from "@/server/services/pdf";
 import { authedContextFrom } from "@/server/request-context";
+import { recordAudit } from "@/server/services/audit";
 import { createCaller } from "@/server/trpc/root";
 
 /** Module D: daily logs as a dated PDF for lender draws and claims (the project team only). */
@@ -52,5 +53,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/export/projects/
     sections,
     footer: `${project.name} site log, generated ${todayET()}`,
   });
+  // Every export is on the audit log (brief §4).
+  await recordAudit(c.db, { actorId: c.viewer.id, actorName: c.viewer.name, action: "export", entityType: "site_log", entityId: id, projectId: id, summary: `${c.viewer.name} downloaded the daily site log (${from}${from === to ? "" : ` to ${to}`}) as a PDF`, ip: c.ip }).catch(() => undefined);
   return pdfResponse(bytes, `site-log-${project.name}-${from}${from === to ? "" : `-to-${to}`}.pdf`);
 }

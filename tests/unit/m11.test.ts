@@ -466,3 +466,15 @@ describe("review fixes", () => {
     ).toBe(false);
   });
 });
+
+describe("spreadsheet amounts", () => {
+  it("rounds a formula's long decimals to cents, half up, on the digits", async () => {
+    const { roundToCents } = await import("@/core/import");
+    expect(roundToCents("1080.0000000000002")).toBe("1080.00");
+    expect(roundToCents("12345.675")).toBe("12345.68");
+    expect(roundToCents("0.999")).toBe("1.00");
+    expect(roundToCents("-2.345")).toBe("-2.35");
+    expect(roundToCents("12.5")).toBe("12.5");
+    expect(roundToCents("$1,000.123")).toBe("$1,000.123");
+  });
+});

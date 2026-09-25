@@ -29,5 +29,5 @@ export const reportsRouter = router({
     }),
 
   /** The same report as things stand right now (the last seven days and the next two weeks). */
-  live: globalProcedure("reports.view").query(({ ctx }) => buildWeeklyReport(ctx.db, todayET())),
+  live: globalProcedure("reports.view").query(({ ctx }) => buildWeeklyReport(ctx.db, todayET(), new Date(), { throughToday: true })),
 });

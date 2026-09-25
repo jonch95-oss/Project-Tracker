@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { todayET } from "@/core/time";
 import { renderPdf, pdfResponse } from "@/server/services/pdf";
 import { authedContextFrom } from "@/server/request-context";
+import { recordAudit } from "@/server/services/audit";
 import { createCaller } from "@/server/trpc/root";
 
 /** Module K: a punch list PDF per sub (or any filter), open and ready items first. */
@@ -39,5 +40,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/export/projects/
     ],
     footer: `Punch list generated ${todayET()}`,
   });
+  // Every export is on the audit log (brief §4).
+  await recordAudit(c.db, { actorId: c.viewer.id, actorName: c.viewer.name, action: "export", entityType: "punch_item", entityId: id, projectId: id, summary: `${c.viewer.name} downloaded the punch list as a PDF`, ip: c.ip }).catch(() => undefined);
   return pdfResponse(bytes, `punch-${who}-${todayET()}.pdf`);
 }

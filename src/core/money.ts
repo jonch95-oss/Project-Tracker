@@ -81,8 +81,9 @@ export function formatMoneyCompact(cents: Cents): string {
   assertCents(cents);
   const sign = cents < 0 ? "-" : "";
   const dollars = Math.abs(cents) / 100;
-  if (dollars >= 1_000_000) return `${sign}$${trimZeros((dollars / 1_000_000).toFixed(2))}M`;
-  if (dollars >= 1_000) return `${sign}$${trimZeros((dollars / 1_000).toFixed(1))}K`;
+  // The unit is chosen after rounding, so $999,950 reads "$1M", not "$1000K".
+  if (dollars >= 999_950) return `${sign}$${trimZeros((dollars / 1_000_000).toFixed(2))}M`;
+  if (dollars >= 999.5) return `${sign}$${trimZeros((dollars / 1_000).toFixed(1))}K`;
   return `${sign}$${Math.round(dollars)}`;
 }
 

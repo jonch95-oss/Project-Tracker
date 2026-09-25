@@ -414,14 +414,15 @@ describe("Milestone 11", () => {
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
       // An admin not on the project sees it, but budget lines still need money access there.
       const outsiderAdmin = await callerFor((await createUser("admin")).id);
-      const refused = await outsiderAdmin.import.commit({
-        kind: "budget",
-        projectId,
-        rows: [["Soft costs", "X", "1"]],
-        mapping: { category: 0, name: 1, originalCents: 2 },
-      });
-      expect(refused).toMatchObject({ imported: 0 });
-      expect(refused.rejected[0]!.reasons[0]).toMatch(/permission/);
+      // Refused up front, before anything about the budget (even which lines exist) is looked at.
+      await expect(
+        outsiderAdmin.import.commit({
+          kind: "budget",
+          projectId,
+          rows: [["Soft costs", "X", "1"]],
+          mapping: { category: 0, name: 1, originalCents: 2 },
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
       // The same project twice (name and address) is only created once.
       const name = `Twice ${Date.now()}`;
       const once = await oc.import.commit({

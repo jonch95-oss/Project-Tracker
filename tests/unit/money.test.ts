@@ -59,6 +59,10 @@ describe("formatMoney", () => {
     expect(formatMoneyCompact(85_000_000)).toBe("$850K");
     expect(formatMoneyCompact(99_900)).toBe("$999");
     expect(formatMoneyCompact(-150_000_000)).toBe("-$1.5M");
+    // The unit is chosen after rounding.
+    expect(formatMoneyCompact(99_995_000)).toBe("$1M");
+    expect(formatMoneyCompact(99_994_000)).toBe("$999.9K");
+    expect(formatMoneyCompact(99_960)).toBe("$1K");
   });
   it("refuses non-integer input", () => {
     expect(() => formatMoney(1.5)).toThrow(MoneyError);

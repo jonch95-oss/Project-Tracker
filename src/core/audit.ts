@@ -50,6 +50,8 @@ export const FINANCIAL_ENTITY_TYPES = [
   "distribution",
   // Anything done to a file in the gated Financial folder (names included).
   "financial_file",
+  // Loan maturity and 1031 dates.
+  "financial_key_date",
 ] as const;
 
 export function isFinancialEntity(entityType: string): boolean {

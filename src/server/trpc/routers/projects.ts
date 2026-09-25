@@ -33,7 +33,7 @@ import {
 } from "@/core/phases";
 import { isToggleKey } from "@/core/toggles";
 import { PROJECT_STATUSES } from "@/core/portfolio";
-import { keyDateLabel, nextKeyDate } from "@/core/key-dates";
+import { isFinancialKeyDate, keyDateLabel, nextKeyDate } from "@/core/key-dates";
 import { nextAction, type TaskStatus } from "@/core/tasks";
 import { todayET } from "@/core/time";
 import { schema, type DbOrTx } from "../../db";
@@ -232,6 +232,8 @@ async function loadCardFacts(
   conn: DbOrTx,
   projectIds: string[],
   outsider: string | null,
+  /** Loan and 1031 dates only where the viewer sees the project's money. */
+  seesMoney: (projectId: string) => boolean = () => true,
 ): Promise<Map<string, CardFacts>> {
   const out = new Map<string, CardFacts>();
   if (projectIds.length === 0) return out;
@@ -310,7 +312,7 @@ async function loadCardFacts(
       })),
     );
     const kd = nextKeyDate(
-      dates.filter((d) => d.projectId === id),
+      dates.filter((d) => d.projectId === id && (seesMoney(id) || !isFinancialKeyDate(d.kind))),
       today,
     );
     out.set(id, {
@@ -645,15 +647,17 @@ export const projectsRouter = router({
       const photoOk = outsider
         ? await projectsWithSharedPhotos(ctx.db, outsider, ids)
         : null;
-      const [phases, heroes, mine, counts, facts] = await Promise.all([
+      const mine = await membershipsOf(ctx.db, ctx.actor.userId, ids);
+      const [phases, heroes, counts, facts] = await Promise.all([
         loadPhases(ctx.db, ids),
         loadHeroes(
           ctx.db,
           photoOk ? rows.filter((r) => photoOk.has(r.id)) : rows,
         ),
-        membershipsOf(ctx.db, ctx.actor.userId, ids),
         loadTaskCounts(ctx.db, ids, outsider),
-        loadCardFacts(ctx.db, ids, outsider),
+        loadCardFacts(ctx.db, ids, outsider, (id) =>
+          canProject(ctx.actor, mine.get(id) ?? null, "financials.view"),
+        ),
       ]);
       const finIds = ids.filter((id) =>
         canProject(ctx.actor, mine.get(id) ?? null, "financials.view"),
@@ -749,7 +753,9 @@ export const projectsRouter = router({
       loadPhases(ctx.db, [p.id]),
       loadHeroes(ctx.db, photosOk ? [p] : []),
       loadTaskCounts(ctx.db, [p.id], outsider),
-      loadCardFacts(ctx.db, [p.id], outsider),
+      loadCardFacts(ctx.db, [p.id], outsider, () =>
+        ctx.project.can("financials.view"),
+      ),
     ]);
     const canFin = ctx.project.can("financials.view");
     const h = canFin

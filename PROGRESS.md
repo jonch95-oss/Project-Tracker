@@ -1,6 +1,6 @@
 # Progress
 
-## Milestone 13 — Reports, search, polish and launch (final QA in progress)
+## Milestone 13 — Reports, search, polish and launch (done)
 
 **Live:** https://ariel-dev-projects.vercel.app · team guide at **/guide** · iPhone install guide at **/install**
 
@@ -26,8 +26,8 @@
 
 ### Pressure test (brief §13)
 
-- **Unit and integration:** 3,794 tests pass (unit coverage 99.2% lines / 95.9% branches). The permission matrix covers every procedure × role × financials flag × assigned/unassigned, including search and the report.
-- **End to end:** all 55 Playwright tests pass on a production build (Chromium), including search, the report, the guide, offline and iPhone-size flows. The iPhone WebKit profile runs in CI.
+- **Unit and integration:** 3,800 tests pass (unit coverage 99.2% lines / 95.9% branches). The permission matrix covers every procedure × role × financials flag × assigned/unassigned, including search and the report.
+- **End to end:** all 55 Playwright tests pass in one run on a production build (Chromium), including search, the report, the guide, offline and iPhone-size flows. The iPhone WebKit profile runs in CI.
 - **Load:** a separate local database with **25 projects, 3,000 tasks, 5,000 files and 50 users** (`npm run seed:load`), production build, one server process.
   - **Page loads in a real browser:** Portfolio median 0.35s (worst of 7: 0.51s); My Tasks median 0.19s (worst 0.30s). Target under 1s: **met**.
   - **50 people at once, each opening a screen every 1.5–4.5s:** Portfolio data p50 76ms / p95 148ms / max 256ms; My Tasks p50 28ms / p95 87ms; a project p50 33ms / p95 78ms; **0 errors** in 994 requests.
@@ -58,7 +58,30 @@ The independent review found 1 P1 and 6 P2, all fixed:
   - Project tab code is warmed from any page, and a tab that can't load offers a reload.
   - ⌘K and "/" are left alone for investors, who have no search.
 
+### Final gate: adversarial QA (brief §13)
+Two independent reviewers went over the **whole app**: security (OWASP top 10, access control, leaks) and correctness (data integrity, time, jobs, offline). **Neither found a P0 or P1**, so launch is not blocked. Their P2 findings were fixed as well:
+- **Recurring tasks** keep their own calendar. A date moved off a weekend or holiday no longer shifts the ones after it (monthly on the 30th stays on the 30th; a Monday series stays on Mondays after Labor Day).
+- **Offline queue:** a change the server keeps failing on is held for the person after 3 tries (Retry / Copy / Discard) instead of blocking everything behind it.
+- **Weekly report:**
+  - It can't load forever if the week list fails.
+  - "So far this week" includes today.
+  - The "ready" notice and its record are written together, so it's never sent twice.
+- **Backup alert:** at most one email a day (the job still shows red every hour).
+- **Trash purge:** it re-checks, under a lock, that a file is still in the trash, so a file restored mid-purge is never deleted.
+- **Import:**
+  - Spreadsheet amounts from formulas (1080.0000000000002, 12345.675) are rounded to cents instead of refused.
+  - A budget import needs money-edit rights before any budget line is looked at, so no line names can be probed.
+- **Compact amounts:** "$1M", not "$1000K".
+- **Money never stored on the phone:** the investor portal, units, directory and public records are no longer kept offline. Amounts inside kept screens (card headlines, RFI cost impact) are removed before saving.
+- **Audit:** every PDF download (weekly report, investor report, site log, punch list, minutes) is on the audit log.
+- **Loan-maturity and 1031 dates:** shown, set, reminded and put on cards only for people who see that project's money (as the calendar feed already did).
+- **Other:** urgent public-records pushes re-check that the person is still on the project; cached photos and file links are tied to the sign-in (`Vary: Cookie`).
+
 ### Known limitations
+- **Hardening not done (optional):**
+  - A strict script Content-Security-Policy with nonces (the app sets frame-ancestors, base-uri, form-action and object-src).
+  - A per-account sign-in lockout (limits are per network address, 10 a minute).
+  - Two-factor required for the owner (it's offered, not forced).
 - SEO stays below 90 on purpose (see above).
 - The weekly report email and PDF attachment wait for an email sender (email is off). The owner gets push and in-app, and downloads the PDF from the report page.
 - Load numbers are from one local server process against local Postgres. Production (Neon free, Vercel) adds network latency and a possible cold start on the first query after idle.

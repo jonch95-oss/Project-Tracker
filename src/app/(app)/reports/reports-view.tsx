@@ -32,7 +32,8 @@ export function ReportsView() {
   const chosen = params.get("week");
   const week = chosen ?? weeks.data?.[0]?.weekOf ?? "live";
   const isLive = week === "live";
-  const live = useQuery({ ...trpc.reports.live.queryOptions(), enabled: weeks.isSuccess && isLive });
+  // The live report doesn't wait on the week list (so a failed list can't leave the page loading forever).
+  const live = useQuery({ ...trpc.reports.live.queryOptions(), enabled: isLive && !weeks.isPending });
   const saved = useQuery({ ...trpc.reports.get.queryOptions({ weekOf: week }), enabled: !isLive });
   const report = isLive ? live : saved;
 
@@ -65,7 +66,16 @@ export function ReportsView() {
         }
       />
 
-      {(weeks.isPending || report.isPending) && !report.isError && (
+      {weeks.isError && !report.data && (
+        <div role="alert" className="rounded-card border border-border bg-surface p-8 text-center">
+          <p className="font-medium">The weekly reports didn&apos;t load.</p>
+          <p className="mt-2 text-sm text-muted">{errorMessage(weeks.error)}</p>
+          <button type="button" onClick={() => void weeks.refetch()} className={buttonClass("secondary", "sm", "mt-4")}>
+            Try again
+          </button>
+        </div>
+      )}
+      {!weeks.isError && (weeks.isPending || report.isPending) && !report.isError && (
         <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading the report">
           <Skeleton className="h-24" />
           <Skeleton className="h-72" />

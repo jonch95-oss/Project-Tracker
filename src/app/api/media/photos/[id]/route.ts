@@ -38,6 +38,8 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/photos/[id
       "Content-Type": obj.contentType,
       "Content-Length": String(obj.size),
       "Cache-Control": "private, max-age=600",
+      // Kept per sign-in: after a sign-out (a new session cookie) the browser asks again.
+      Vary: "Cookie",
       "X-Content-Type-Options": "nosniff",
       "Content-Disposition": "inline",
     },

@@ -138,7 +138,16 @@ export async function backupWatchJob(now = new Date()): Promise<JobResult> {
     .where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active")))
     .limit(1);
   const to = env().OWNER_ALERT_EMAIL || owner?.email;
-  if (to) {
+  // The job keeps failing (red on System) every hour until a backup lands, but the email goes once a day.
+  const SUBJECT = "Project Command: backups have stopped";
+  const [sentToday] = to
+    ? await db()
+        .select({ id: schema.emailOutbox.id })
+        .from(schema.emailOutbox)
+        .where(and(eq(schema.emailOutbox.subject, SUBJECT), gte(schema.emailOutbox.createdAt, startOfDayET(todayET(now)))))
+        .limit(1)
+    : [];
+  if (to && !sentToday) {
     const content = renderEmail({
       preheader: "The nightly database backup has not run",
       heading: "Backups have stopped",
@@ -148,7 +157,7 @@ export async function backupWatchJob(now = new Date()): Promise<JobResult> {
       ],
       cta: { label: "Open System page", url: `${env().APP_URL}/system` },
     });
-    await sendEmail({ to, subject: "Project Command: backups have stopped", ...content, category: "system", urgent: true });
+    await sendEmail({ to, subject: SUBJECT, ...content, category: "system", urgent: true });
   }
   throw new Error(last ? `No nightly backup since ${last.toISOString()}` : "No nightly backup has been recorded yet");
 }

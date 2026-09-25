@@ -46,7 +46,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/media/files/[id]
   }
   if (signed) {
     // The browser may reuse this redirect for 4 minutes (the link lives 5), so a folder of thumbnails isn't re-signed on every view.
-    return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, max-age=240", "Referrer-Policy": "no-referrer" } });
+    return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, max-age=240", Vary: "Cookie", "Referrer-Policy": "no-referrer" } });
   }
   const obj = await storage().get(key);
   if (!obj) return new Response("Not found", { status: 404 });

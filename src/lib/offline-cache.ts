@@ -7,7 +7,7 @@ import { keyParts, overlayQueued } from "./offline-queue";
  * What the app shows with no connection (brief §12): the answers of the
  * screens a person has opened, kept on the phone in IndexedDB under their own
  * user id and put back when the app starts. Money, audit and admin screens
- * are never kept. Everything is deleted on sign-out, and another person's
+ * are never kept, and amounts inside the screens that are kept are removed. Everything is deleted on sign-out, and another person's
  * copy is deleted as soon as someone else signs in on the phone.
  */
 
@@ -26,7 +26,26 @@ const NEVER_KEEP = [
   "calendar.",
   "reports.",
   "search.",
+  // Carry amounts, capital accounts or tax ids throughout: kept online only.
+  "portal.",
+  "units.",
+  "directory.",
+  "records.",
 ];
+
+/**
+ * Money inside screens that are kept (a card's headline figures, an RFI's
+ * cost impact): removed before saving, so no amount is ever stored on the
+ * phone. Amounts are always named "…Cents"; "headline" is the card's figures.
+ */
+export function withoutMoney(v: unknown, depth = 0): unknown {
+  if (depth > 12 || v === null || typeof v !== "object") return v;
+  if (v instanceof Date) return v;
+  if (Array.isArray(v)) return v.map((x) => withoutMoney(x, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v)) out[k] = k === "headline" || /Cents$/.test(k) ? null : withoutMoney(x, depth + 1);
+  return out;
+}
 /** Answers older than this aren't shown offline. */
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -90,7 +109,7 @@ export async function saveSnapshot(
   const state = dehydrate(qc, {
     shouldDehydrateQuery: (q) =>
       q.state.status === "success" && keepable(q.queryKey),
-    serializeData: (d) => d,
+    serializeData: (d) => withoutMoney(d),
   });
   await run("readwrite", (s) =>
     s.put({ at: Date.now(), state }, `user:${userId}`),

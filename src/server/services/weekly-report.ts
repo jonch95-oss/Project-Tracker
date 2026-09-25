@@ -95,12 +95,14 @@ export function mondayOf(date: IsoDate): IsoDate {
  * `weekOf`: what moved in the seven days before it, what's stuck today, and
  * what's due in the two weeks after. Active (non-archived) projects only.
  */
-export async function buildWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new Date()): Promise<WeeklyReportData> {
+export async function buildWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new Date(), opts: { throughToday?: boolean } = {}): Promise<WeeklyReportData> {
   const today = todayET(now);
-  const from = addDays(weekOf, -7);
+  // A Monday report looks back over the seven days before that Monday; the live one ("so far") includes today.
+  const end = opts.throughToday ? addDays(weekOf, 1) : weekOf;
+  const from = addDays(end, -7);
   const until = addDays(weekOf, 13);
   const fromTs = startOfDayET(from);
-  const toTs = startOfDayET(weekOf);
+  const toTs = startOfDayET(end);
 
   const projects = await conn
     .select({ id: schema.project.id, name: schema.project.name, address: schema.project.address, bbl: schema.project.bbl, status: schema.project.status, company: schema.company.name })
@@ -172,7 +174,7 @@ export async function buildWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new
     for (const r of counts) if (r.projectId === p.id) c[r.phaseKey] = { total: r.total, done: r.done };
     const cur = currentPhase(phases);
     const counted = phases.filter((x) => x.status !== "skipped");
-    const inWeek = (d: string | null): d is string => !!d && d >= from && d < weekOf;
+    const inWeek = (d: string | null): d is string => !!d && d >= from && d < end;
     const done = completed.filter((t) => t.projectId === p.id);
     const mine = open.filter((t) => t.projectId === p.id);
     const blocked = mine.filter((t) => t.status === "blocked");
@@ -262,8 +264,8 @@ export async function saveWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new 
  * Monday from 7am New York: build the week's report once, then tell the
  * owners (push and in-app, and email when they want it; the email goes out
  * once a sender is set up). A Monday missed entirely (no runs that day) is
- * built on the next run that week. Telling the owners is recorded separately,
- * so a failure there is retried rather than lost. No figures in the text
+ * built on the next run that week. Telling the owners is recorded with the
+ * notice itself, so a failure before it is retried and it never goes twice. No figures in the text
  * (brief §9).
  */
 export async function weeklyReportJob(now = new Date()): Promise<Record<string, unknown>> {
@@ -278,13 +280,16 @@ export async function weeklyReportJob(now = new Date()): Promise<Record<string, 
   const prefs = await settingsFor(conn, owners.map((o) => o.id));
   const href = `/reports?week=${monday}`;
   const summary = `${data.totals.projects} project${data.totals.projects === 1 ? "" : "s"}: ${data.totals.completed} task${data.totals.completed === 1 ? "" : "s"} done last week, ${data.totals.blocked} blocked, ${data.totals.overdue} overdue.`;
-  await notify(conn, null, owners.map((o) => ({ userId: o.id, kind: "report" as const, title: "Your weekly report is ready", body: summary, href })));
+  // The notice and "told" are recorded together, so a retry never announces it twice; email follows (like the overdue nudges).
+  await conn.transaction(async (tx) => {
+    await notify(tx, null, owners.map((o) => ({ userId: o.id, kind: "report" as const, title: "Your weekly report is ready", body: summary, href })));
+    await tx.update(schema.weeklyReport).set({ notifiedAt: new Date() }).where(eq(schema.weeklyReport.weekOf, monday));
+  });
   let emailed = 0;
   for (const o of owners) {
     if (!channelOn(prefs.get(o.id)?.prefs, "report", "email")) continue;
     const content = renderEmail({ preheader: summary, heading: "Your weekly report", paragraphs: [`Hello ${o.name},`, summary], cta: { label: "Open the report", url: `${env().APP_URL}${href}` }, footnote: "The PDF is on the report page." });
     if ((await sendEmail({ to: o.email, subject: "Weekly report: Project Command", ...content, category: "report", urgent: false })) === "sent") emailed++;
   }
-  await conn.update(schema.weeklyReport).set({ notifiedAt: new Date() }).where(eq(schema.weeklyReport.weekOf, monday));
   return { weekOf: monday, projects: data.totals.projects, owners: owners.length, emailed };
 }

@@ -233,3 +233,36 @@ describe("weekly owner report (brief §7.8)", () => {
     expect((await call(await signIn(member.email), "live")).status).toBe(403);
   });
 });
+
+describe("final QA fixes", () => {
+  it("a budget import needs the right to edit money before anything is looked up", async () => {
+    const owner = await createUser("owner");
+    const admin = await createUser("admin");
+    const { id: projectId } = await createProject(owner.id);
+    await expect(
+      (await callerFor(admin.id)).import.commit({ kind: "budget", projectId, rows: [["Soft costs", "Survey", "$5,000"]], mapping: { category: 0, name: 1, originalCents: 2 } }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("money-related key dates", () => {
+  it("loan and 1031 dates are only for people who see the project's money", async () => {
+    const owner = await createUser("owner");
+    const member = await createUser("member");
+    const finMember = await createUser("member");
+    const { id: projectId } = await createProject(owner.id);
+    await addMember(projectId, member.id, { canEditChecklist: true });
+    await addMember(projectId, finMember.id, { canEditChecklist: true, canViewFinancials: true });
+    const soon = addDays(todayET(), 5);
+    await db().insert(schema.keyDate).values([
+      { projectId, kind: "loan_maturity", date: soon },
+      { projectId, kind: "closing", date: soon },
+    ]);
+    const kinds = async (id: string) => (await (await callerFor(id)).keyDates.list({ projectId })).dates.map((d) => d.kind).sort();
+    expect(await kinds(member.id)).toEqual(["closing"]);
+    expect(await kinds(finMember.id)).toEqual(["closing", "loan_maturity"]);
+    await expect((await callerFor(member.id)).keyDates.save({ projectId, kind: "exchange_1031_close", date: soon })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const card = await (await callerFor(member.id)).projects.get({ projectId });
+    expect(card.facts.nextKeyDate?.label).not.toMatch(/loan/i);
+  });
+});

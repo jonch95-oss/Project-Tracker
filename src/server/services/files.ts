@@ -115,9 +115,19 @@ export async function attachedVisibleFileIds(conn: DbOrTx, projectId: string, vi
  * exactly the versions it removed, so two purges at once can't both give the
  * same bytes back to the meter; then their bytes leave storage.
  */
-export async function purgeFiles(conn: Database, fileIds: string[]): Promise<number> {
+export async function purgeFiles(conn: Database, fileIds: string[], opts: { trashedBefore?: Date } = {}): Promise<number> {
   if (fileIds.length === 0) return 0;
   const { versions, files } = await conn.transaction(async (tx) => {
+    // The trash job: only files still in the trash (and old enough) at this moment, locked so a restore can't slip in between.
+    if (opts.trashedBefore) {
+      const still = await tx
+        .select({ id: schema.file.id })
+        .from(schema.file)
+        .where(and(inArray(schema.file.id, fileIds), isNotNull(schema.file.deletedAt), lt(schema.file.deletedAt, opts.trashedBefore)))
+        .for("update");
+      fileIds = still.map((r) => r.id);
+      if (fileIds.length === 0) return { versions: [], files: [] };
+    }
     const versions = await tx.delete(schema.fileVersion).where(inArray(schema.fileVersion.fileId, fileIds)).returning();
     const files = await tx.delete(schema.file).where(inArray(schema.file.id, fileIds)).returning({ id: schema.file.id });
     return { versions, files };
@@ -136,7 +146,7 @@ export async function purgeTrashJob(conn: Database = db(), now = new Date()): Pr
     .from(schema.file)
     .where(and(isNotNull(schema.file.deletedAt), lt(schema.file.deletedAt, cutoff)))
     .limit(200);
-  return { purged: await purgeFiles(conn, old.map((r) => r.id)) };
+  return { purged: await purgeFiles(conn, old.map((r) => r.id), { trashedBefore: cutoff }) };
 }
 
 /** Live files per folder (for the folder list). */

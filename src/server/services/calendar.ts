@@ -2,13 +2,12 @@ import "server-only";
 import { and, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { expiryLabel, FINANCIAL_EXPIRY } from "@/core/expiries";
 import type { CalendarEvent } from "@/core/ics";
-import { keyDateLabel } from "@/core/key-dates";
+import { isFinancialKeyDate, keyDateLabel } from "@/core/key-dates";
 import { canGlobal, canProject, type Actor, type Membership } from "@/core/permissions";
 import { addDays, todayET } from "@/core/time";
 import { db, schema } from "../db";
 
 /** Key dates about money: only for people who see the project's financials (the feed never carries amounts either way). */
-const FINANCIAL_KEY_DATES = new Set(["loan_maturity", "exchange_1031_identify", "exchange_1031_close"]);
 
 /**
  * Module H: what one person's feed holds, from 30 days back to a year out.
@@ -61,7 +60,7 @@ export async function calendarEventsFor(actor: Actor, appUrl: string, today = to
   if (internal.length) {
     const keys = await conn.select().from(schema.keyDate).where(and(inArray(schema.keyDate.projectId, internal), gte(schema.keyDate.date, from), lte(schema.keyDate.date, to), eq(schema.keyDate.done, false)));
     for (const k of keys) {
-      if (FINANCIAL_KEY_DATES.has(k.kind) && !can(k.projectId, "financials.view")) continue;
+      if (isFinancialKeyDate(k.kind) && !can(k.projectId, "financials.view")) continue;
       events.push({ uid: `key-${k.id}`, date: k.date, title: `${k.label || keyDateLabel(k.kind)}`, location: name.get(k.projectId), url: link(k.projectId, "tab=dates") });
     }
     const meetings = await conn.select().from(schema.meeting).where(and(inArray(schema.meeting.projectId, internal), gte(schema.meeting.heldOn, from), lte(schema.meeting.heldOn, to)));
