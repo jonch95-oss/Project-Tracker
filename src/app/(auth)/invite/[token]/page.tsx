@@ -39,7 +39,12 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
         On iPhone? After you set your password, add Project Command to your Home Screen for notifications and Face ID.{" "}
         <Link href="/install" className="font-medium text-text underline underline-offset-4">
           See the 1-minute install guide
+        </Link>{" "}
+        and the{" "}
+        <Link href="/guide" className="font-medium text-text underline underline-offset-4">
+          one-page team guide
         </Link>
+        .
       </p>
     </TRPCReactProvider>
   );

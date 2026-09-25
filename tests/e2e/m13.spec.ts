@@ -51,3 +51,13 @@ test.describe("search and the weekly report", () => {
     await other.close();
   });
 });
+
+test("the team guide opens without signing in and fits a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.goto("/guide");
+  await expect(page.getByRole("heading", { name: "How to use Project Command" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Find anything" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Step-by-step pictures" })).toHaveAttribute("href", "/install");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});

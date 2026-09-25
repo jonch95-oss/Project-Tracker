@@ -30,7 +30,7 @@ export function proxy(request: NextRequest) {
   return NextResponse.next();
 }
 
-const PUBLIC_PREFIXES = ["/login", "/setup", "/forgot-password", "/reset-password", "/invite", "/install"];
+const PUBLIC_PREFIXES = ["/login", "/setup", "/forgot-password", "/reset-password", "/invite", "/install", "/guide"];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));

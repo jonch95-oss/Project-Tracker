@@ -42,6 +42,16 @@ export function SettingsView({ viewer, welcome }: { viewer: ViewerProps; welcome
           </Link>
         </div>
       )}
+      <p className="mb-8 text-[14px] text-muted">
+        New here?{" "}
+        <Link href="/guide" className="font-medium text-text underline underline-offset-4">
+          Read the one-page team guide
+        </Link>{" "}
+        ·{" "}
+        <Link href="/install" className="font-medium text-text underline underline-offset-4">
+          Install on iPhone
+        </Link>
+      </p>
       <div className="grid gap-8 xl:grid-cols-2">
         <ProfilePanel viewer={viewer} />
         <PasswordPanel />

@@ -5,7 +5,7 @@ Private development-project tracker for Ariel Development Group and Lian Develop
 - **Owner:** "Where am I on every project, and what is stuck?"
 - **Team member:** "What exactly do I have to do today?"
 
-See `PLAN.md` for the architecture and milestones, and `PROGRESS.md` for what has shipped.
+See `PLAN.md` for the architecture and milestones, and `PROGRESS.md` for what has shipped. For the people using it, the one-page **team guide** is in the app at `/guide` (and in `docs/TEAM-GUIDE.md`); the iPhone install guide is at `/install`.
 
 ## Stack
 
@@ -22,7 +22,7 @@ npm run seed:demo                 # demo data only (refuses non dev/test/demo da
 npm run dev
 ```
 
-Demo users (demo seed only): `jon@demo.test` (owner), `elias@demo.test` (admin), `ariel@demo.test` (member), `architect@demo.test` (outside collaborator). The password is `demo password 1`.
+Demo users (demo seed only): `jon@demo.test` (owner), `elias@demo.test` (admin), `ariel@demo.test` (member), `architect@demo.test` (outside collaborator), `investor@demo.test` (investor). The password is `demo password 1`.
 
 ## Test
 
@@ -34,6 +34,20 @@ npm run test:integration  # real Postgres: permission matrix, auth, invites, aud
 npm run test:e2e          # Playwright; set E2E_WEBKIT=1 for the iPhone WebKit profile
 ```
 
+### Load test (brief §13)
+
+Against a **separate** local database whose name contains `load` (the seed refuses anything else; never production):
+
+```bash
+createdb pc_load_demo
+DATABASE_URL=postgres://…/pc_load_demo npm run db:migrate
+DATABASE_URL=postgres://…/pc_load_demo npm run seed:demo
+DATABASE_URL=postgres://…/pc_load_demo npm run seed:load   # 25 projects, 3,000 tasks, 5,000 files, 50 users
+npm run build && DATABASE_URL=… DB_POOL_MAX=25 npm start -- -p 3100
+BASE=http://localhost:3100 npm run load:pages               # Portfolio and My Tasks in a real browser
+BASE=http://localhost:3100 USERS=50 npm run load:users      # 50 people at once (THINK_MS sets their pace)
+```
+
 ## Code layout
 
 - `src/core`: pure business logic (permissions, money, time, free-tier math, audit hashing). No I/O; fully unit tested.
@@ -41,7 +55,13 @@ npm run test:e2e          # Playwright; set E2E_WEBKIT=1 for the iPhone WebKit p
 - `src/app`: routes. `(auth)` holds sign-in, reset and invites; `(app)` holds the signed-in shell.
 - `src/components/ui`: the component kit, built on `src/styles/tokens.css`.
 - `drizzle/`: SQL migrations, including the audit-log protection triggers.
-- `scripts/`: migrate, bootstrap the first owner, the demo seed, and ops scripts (backup, restore drill).
+- `scripts/`: migrate, bootstrap the first owner, create an account with a temporary password, the demo and load seeds, load-test scripts, and ops scripts (backup, restore drill).
+
+## Running it
+
+- **Scheduled jobs:** one Vercel Cron call an hour (`/api/jobs/tick`) runs everything: push, the email outbox, the public-records sync (1–6am), and the daily jobs after their hour in New York (digest 7am, error summary 7am, the **weekly owner report on Mondays from 7am**, follow-ups, key dates, expiries and directory reminders 8am, due-tomorrow and overdue nudges 9am, backup watch 9am, site-log nudge 5pm). Every run is on the System page.
+- **Accounts:** invite people from **Team** (the link is shown on screen and can go by WhatsApp). For someone who signs in with a name instead of an email, run GitHub → Actions → **Create account** (name, sign-in name, role, temporary password). They must choose their own password at first sign-in. Running it again for the same name resets only the password: role and status stay, they're signed out everywhere and their old two-factor codes and passkeys are removed.
+- **Search:** ⌘K / Ctrl+K / "/" anywhere, or the Search tab on the iPhone. Results are limited to what each person can open.
 
 ## Production setup (first time)
 

@@ -22,7 +22,7 @@ function signInLabel(u: { email: string; username?: string | null }): string {
 /** The invitation message, with the iPhone install guide, for WhatsApp or text. */
 function inviteText(): string {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  return `You're invited to Project Command. On iPhone, the install guide is at ${origin}/install. Set up your account here:`;
+  return `You're invited to Project Command. How it works: ${origin}/guide. On iPhone, the install guide is at ${origin}/install. Set up your account here:`;
 }
 
 export function TeamView({ viewerId }: { viewerId: string }) {
