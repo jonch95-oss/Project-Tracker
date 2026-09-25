@@ -62,6 +62,8 @@ test("iPhone: take a photo straight into the project's photos", async ({ page })
   await page.goto("/portfolio");
   await page.getByRole("heading", { name: "Sterling Place Townhouse" }).click();
   await expect(page.getByRole("button", { name: "Take photo" })).toBeVisible();
+  // Count only once the gallery has loaded (the page itself now arrives before its photos do).
+  await expect(page.getByText("No photos yet").or(page.getByRole("button", { name: /^Open photo/ }).first())).toBeVisible();
   const before = await page.getByRole("button", { name: /^Open photo/ }).count();
   // A photo made just now (as the camera does), so it's stamped and timed as taken now.
   await page.getByLabel("Take a photo").setInputFiles({ name: "IMG_0001.png", mimeType: "image/png", buffer: readFileSync(path.join(__dirname, "fixtures", "site.png")) });
