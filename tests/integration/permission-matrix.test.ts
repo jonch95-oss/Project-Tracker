@@ -360,6 +360,18 @@ const MATRIX: Record<string, Row | "public"> = {
 
   "companies.list": { allowed: ACTIVE, call: (c) => c.companies.list() },
   "projects.list": { allowed: ACTIVE, call: (c) => c.projects.list() },
+  // Everyone may search; what each person gets back is checked in search.test.ts.
+  "search.query": { allowed: ACTIVE, call: (c) => c.search.query({ q: "a" }) },
+  "reports.list": { allowed: ["owner"], call: (c) => c.reports.list() },
+  "reports.live": { allowed: ["owner"], call: (c) => c.reports.live() },
+  "reports.get": {
+    allowed: ["owner"],
+    call: async (c) => {
+      const { saveWeeklyReport } = await import("@/server/services/weekly-report");
+      await saveWeeklyReport(db(), "2026-01-05");
+      return c.reports.get({ weekOf: "2026-01-05" });
+    },
+  },
   "projects.get": {
     allowed: [...ASSIGNED, "admin-unassigned"],
     call: (c, f) => c.projects.get({ projectId: f.projectId }),

@@ -193,7 +193,7 @@ async function loadPhases(conn: DbOrTx, projectIds: string[]) {
 const dependent = alias(schema.task, "dependent");
 
 /** Tasks an outside collaborator can see: assigned to them, shared with them as a watcher, or waiting on their approval. */
-function visibleToOutsider(userId: string) {
+export function visibleToOutsider(userId: string) {
   return or(
     eq(schema.task.assigneeId, userId),
     and(

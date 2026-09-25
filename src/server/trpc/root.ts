@@ -18,6 +18,8 @@ import { analyticsRouter } from "./routers/analytics";
 import { importRouter } from "./routers/import";
 import { meetingsRouter, scheduleRouter, siteLogsRouter } from "./routers/field";
 import { templatesRouter } from "./routers/templates";
+import { searchRouter } from "./routers/search";
+import { reportsRouter } from "./routers/reports";
 import { invitesRouter, meRouter, usersRouter } from "./routers/users";
 
 export const appRouter = router({
@@ -55,6 +57,8 @@ export const appRouter = router({
   import: importRouter,
   audit: auditRouter,
   system: systemRouter,
+  search: searchRouter,
+  reports: reportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

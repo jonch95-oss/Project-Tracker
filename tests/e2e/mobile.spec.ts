@@ -13,6 +13,12 @@ test("iPhone: sign in, bottom tab bar, settings and sign out", async ({ page }) 
   await expect(tabbar).toBeVisible();
   await tabbar.getByRole("link", { name: "Portfolio" }).click();
   await expect(page.getByRole("heading", { name: "Sterling Place Townhouse" })).toBeVisible();
+  // Search has a tab of its own; Settings sits under More.
+  await tabbar.getByRole("link", { name: "Search" }).click();
+  await page.getByRole("combobox", { name: /Search projects/ }).fill("Sterling");
+  await page.getByRole("option", { name: /Sterling Place Townhouse/ }).first().click();
+  await expect(page).toHaveURL(/\/projects\//);
+  await tabbar.getByRole("button", { name: "More" }).click();
   await tabbar.getByRole("link", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/login/);

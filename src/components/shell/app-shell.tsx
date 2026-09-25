@@ -11,6 +11,7 @@ import type { GlobalRole } from "@/core/permissions";
 import { Avatar } from "../ui/primitives";
 import { OfflineBar } from "./offline-bar";
 import { PushPrompt } from "./push-prompt";
+import { CommandBar, useCommandBar } from "./command-bar";
 import {
   IconBell,
   IconLedger,
@@ -20,6 +21,8 @@ import {
   IconSignOut,
   IconSystem,
   IconChart,
+  IconCalendar,
+  IconSearch,
   IconDirectory,
   IconTemplate,
   IconUpload,
@@ -70,6 +73,13 @@ const NAV: NavItem[] = [
     mobile: true,
   },
   {
+    href: "/search",
+    label: "Search",
+    icon: IconSearch,
+    roles: ALL,
+    mobile: true,
+  },
+  {
     href: "/notifications",
     label: "Notifications",
     icon: IconBell,
@@ -112,6 +122,13 @@ const NAV: NavItem[] = [
     mobile: false,
   },
   {
+    href: "/reports",
+    label: "Weekly report",
+    icon: IconCalendar,
+    roles: ["owner"],
+    mobile: false,
+  },
+  {
     href: "/audit",
     label: "Audit log",
     icon: IconLedger,
@@ -130,9 +147,15 @@ const NAV: NavItem[] = [
     label: "Settings",
     icon: IconSettings,
     roles: WITH_INVESTOR,
-    mobile: true,
+    // On the phone, Settings sits under More so Search gets a tab.
+    mobile: false,
   },
 ];
+
+/** The places a person can go, for search with nothing typed. */
+export function navDestinations(role: GlobalRole) {
+  return NAV.filter((n) => n.roles.includes(role) && n.href !== "/search").map((n) => ({ href: n.href, label: n.label, icon: n.icon }));
+}
 
 const ROLE_LABEL: Record<GlobalRole, string> = {
   owner: "Owner",
@@ -182,6 +205,11 @@ export function AppShell({
   const overflow = ordered.filter((n) => !n.mobile);
 
   const signOut = useSignOut();
+  const [searchOpen, setSearchOpen] = useCommandBar();
+  const canSearch = viewer.role !== "investor";
+  // The desktop rail has its own search button (⌘K); the Search screen is for the phone.
+  const railItems = ordered.filter((i) => i.href !== "/search");
+  const destinations = railItems.map((i) => ({ href: i.href, label: i.label, icon: i.icon }));
 
   return (
     <div className="min-h-dvh lg:grid lg:grid-cols-[256px_1fr]">
@@ -200,8 +228,20 @@ export function AppShell({
           </span>
           <span className="mt-2 block h-px w-10 bg-accent" aria-hidden="true" />
         </Link>
+        {canSearch && (
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            className="mb-6 flex h-10 items-center gap-3 rounded-control border border-border px-3 text-sm text-muted transition-colors duration-150 hover:border-border-strong hover:text-text"
+            aria-keyshortcuts="Meta+K Control+K"
+          >
+            <IconSearch size={18} />
+            Search
+            <kbd className="ml-auto font-mono text-[11px] text-faint">⌘K</kbd>
+          </button>
+        )}
         <nav aria-label="Main" className="flex flex-1 flex-col gap-1">
-          {ordered.map((item) => {
+          {railItems.map((item) => {
             const active = isActive(pathname, item.href);
             const I = item.icon;
             return (
@@ -260,6 +300,8 @@ export function AppShell({
           {children}
         </div>
       </main>
+
+      {canSearch && <CommandBar open={searchOpen} onClose={() => setSearchOpen(false)} destinations={destinations} />}
 
       {/* iPhone bottom tab bar */}
       <nav

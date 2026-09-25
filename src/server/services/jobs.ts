@@ -16,6 +16,7 @@ import { directoryReminderJob } from "./directory";
 import { expiryReminderJob } from "./expiries";
 import { siteLogNudgeJob } from "./field";
 import { recordsSyncJob } from "./records";
+import { weeklyReportJob } from "./weekly-report";
 
 export type JobResult = Record<string, unknown>;
 
@@ -170,6 +171,8 @@ const DAILY: { job: string; hourET: number; fn: () => Promise<JobResult> }[] = [
   { job: "expiry-reminders", hourET: 8, fn: () => expiryReminderJob() },
   { job: "directory-reminders", hourET: 8, fn: () => directoryReminderJob() },
   { job: "site-log-nudge", hourET: 17, fn: () => siteLogNudgeJob() },
+  // Checked daily from 7am; builds only on Mondays (once per week).
+  { job: "weekly-report", hourET: 7, fn: () => weeklyReportJob() },
 ];
 
 /** Push: send anything the per-request dispatch missed, release quiet-hours holds, close out stale rows. */

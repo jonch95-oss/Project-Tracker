@@ -44,7 +44,8 @@ export type GlobalAction =
   | "projects.viewAll"
   | "directory.view" // the vendor and contact directory (internal staff)
   | "directory.edit"
-  | "analytics.view"; // portfolio analytics (Module M)
+  | "analytics.view" // portfolio analytics (Module M)
+  | "reports.view"; // the weekly owner report
 
 /** Actions evaluated against one project and the actor's membership on it. */
 export type ProjectAction =
@@ -74,6 +75,7 @@ const GLOBAL_RULES: Record<GlobalAction, readonly GlobalRole[]> = {
   "directory.view": ["owner", "admin", "member"],
   "directory.edit": ["owner", "admin"],
   "analytics.view": ["owner"],
+  "reports.view": ["owner"],
 };
 
 export function isActive(actor: Actor | null | undefined): actor is Actor {

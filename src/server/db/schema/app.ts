@@ -2078,3 +2078,20 @@ export const inboundEmail = pgTable(
     index("inbound_email_project_idx").on(t.projectId),
   ],
 );
+
+/**
+ * The weekly owner report (brief §7.8): one row per week, built Monday 7am New
+ * York from the live data and kept as it stood then. Owner only; it carries
+ * headline financials.
+ */
+export const weeklyReport = pgTable(
+  "weekly_report",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The Monday it covers up to (YYYY-MM-DD, New York). */
+    weekOf: text("week_of").notNull(),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    data: jsonb("data").notNull(),
+  },
+  (t) => [uniqueIndex("weekly_report_week_idx").on(t.weekOf)],
+);

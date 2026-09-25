@@ -246,6 +246,8 @@ test("iPhone offline: signing out leaves nothing of that person on the phone", a
         queue: localStorage.getItem("pc.offline.queue.v1"),
       };
     });
+  const more = page.getByRole("button", { name: "More" });
+  if (await more.isVisible()) await more.click();
   await page.getByRole("link", { name: "Settings" }).last().click();
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/login/);

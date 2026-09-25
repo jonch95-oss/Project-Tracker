@@ -24,6 +24,8 @@ const NEVER_KEEP = [
   "import.",
   "usage.",
   "calendar.",
+  "reports.",
+  "search.",
 ];
 /** Answers older than this aren't shown offline. */
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;

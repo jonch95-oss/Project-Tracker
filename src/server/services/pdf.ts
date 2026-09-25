@@ -8,6 +8,10 @@ import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf
 
 export interface PdfSection {
   heading: string;
+  /** Start this section on a new page (e.g. one page per project). */
+  breakBefore?: boolean;
+  /** Show the heading as a title (with an optional line under it) rather than a small label. */
+  title?: { subtitle?: string };
   /** Label / value pairs. */
   rows?: [string, string][];
   paragraphs?: string[];
@@ -99,9 +103,24 @@ export async function renderPdf(input: PdfDocInput): Promise<Uint8Array> {
   y -= 18;
 
   for (const s of input.sections) {
+    if (s.breakBefore && y < PAGE.h - PAGE.margin) newPage();
     need(40);
-    text(s.heading.toUpperCase(), PAGE.margin, 9, bold, MUTED);
-    y -= 14;
+    if (s.title) {
+      for (const l of wrap(s.heading, bold, 15, width)) {
+        text(l, PAGE.margin, 15, bold);
+        y -= 19;
+      }
+      if (s.title.subtitle) {
+        for (const l of wrap(s.title.subtitle, regular, 10, width)) {
+          text(l, PAGE.margin, 10, regular, MUTED);
+          y -= 13;
+        }
+      }
+      y -= 8;
+    } else {
+      text(s.heading.toUpperCase(), PAGE.margin, 9, bold, MUTED);
+      y -= 14;
+    }
     for (const [label, value] of s.rows ?? []) {
       const lines = wrap(value || "-", regular, 10, width - 150);
       // Keep short values together; a long one (a full day's notes) flows on to the next page line by line.
