@@ -19,7 +19,8 @@ export const notifySettingsRouter = router({
       quietStart: row?.quietStart ?? null,
       quietEnd: row?.quietEnd ?? null,
       digest: row?.digest ?? true,
-      events: NOTIFY_EVENTS,
+      // The weekly report goes to owners only; nobody else sees a switch for it.
+      events: NOTIFY_EVENTS.filter((e) => !("ownerOnly" in e) || ctx.actor.role === "owner"),
       emailOn: emailEnabled(),
     };
   }),

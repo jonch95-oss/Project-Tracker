@@ -12,6 +12,8 @@ import { renderEmail, sendEmail } from "./email";
 import { projectMoney } from "./financials";
 import { slippageFor } from "./field";
 import { notify } from "./tasks";
+import { settingsFor } from "./push";
+import { channelOn } from "@/core/notify";
 
 /** How many items each list keeps (the counts are always the full numbers). */
 const LIST = 8;
@@ -50,6 +52,7 @@ export interface ReportProject {
     overdue: ReportTask[];
     overdueCount: number;
     awaitingApproval: ReportTask[];
+    awaitingApprovalCount: number;
     openViolations: number;
     ordersInForce: number;
   };
@@ -206,6 +209,7 @@ export async function buildWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new
         overdue: overdue.slice(0, LIST).map((t) => item(t, t.dueOn, TASK_STATUS_LABEL[t.status as TaskStatus])),
         overdueCount: overdue.length,
         awaitingApproval: waiting.slice(0, LIST).map((t) => item(t, t.approvalRequestedAt ? todayET(t.approvalRequestedAt) : null)),
+        awaitingApprovalCount: waiting.length,
         openViolations: violations.find((v) => v.projectId === p.id)?.n ?? 0,
         ordersInForce: orders.find((o) => o.projectId === p.id)?.n ?? 0,
       },
@@ -237,7 +241,7 @@ export async function buildWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new
       completed: out.reduce((n, p) => n + p.moved.completedCount, 0),
       blocked: out.reduce((n, p) => n + p.stuck.blockedCount, 0),
       overdue: out.reduce((n, p) => n + p.stuck.overdueCount, 0),
-      awaitingApproval: out.reduce((n, p) => n + p.stuck.awaitingApproval.length, 0),
+      awaitingApproval: out.reduce((n, p) => n + p.stuck.awaitingApprovalCount, 0),
       behind: out.filter((p) => (p.slippage ?? 0) > 0).length,
     },
     projects: out,
@@ -256,24 +260,31 @@ export async function saveWeeklyReport(conn: DbOrTx, weekOf: IsoDate, now = new 
 
 /**
  * Monday from 7am New York: build the week's report once, then tell the
- * owners (push and in-app; the email goes out too once a sender is set up).
- * No figures in the notification or email text (brief §9).
+ * owners (push and in-app, and email when they want it; the email goes out
+ * once a sender is set up). A Monday missed entirely (no runs that day) is
+ * built on the next run that week. Telling the owners is recorded separately,
+ * so a failure there is retried rather than lost. No figures in the text
+ * (brief §9).
  */
 export async function weeklyReportJob(now = new Date()): Promise<Record<string, unknown>> {
   const today = todayET(now);
-  if (dayOfWeek(today) !== 1 || hourET(now) < 7) return { skipped: "not Monday 7am yet" };
+  const monday = mondayOf(today);
+  if (today === monday && hourET(now) < 7) return { skipped: "not Monday 7am yet" };
   const conn = db();
-  const [had] = await conn.select({ id: schema.weeklyReport.id }).from(schema.weeklyReport).where(eq(schema.weeklyReport.weekOf, today));
-  if (had) return { skipped: "already built" };
-  const data = await saveWeeklyReport(conn, today, now);
+  const [had] = await conn.select({ id: schema.weeklyReport.id, notifiedAt: schema.weeklyReport.notifiedAt, data: schema.weeklyReport.data }).from(schema.weeklyReport).where(eq(schema.weeklyReport.weekOf, monday));
+  if (had?.notifiedAt) return { skipped: "already built" };
+  const data = had ? (had.data as WeeklyReportData) : await saveWeeklyReport(conn, monday, now);
   const owners = await conn.select({ id: schema.user.id, email: schema.user.email, name: schema.user.name }).from(schema.user).where(and(eq(schema.user.role, "owner"), eq(schema.user.status, "active")));
-  const href = `/reports?week=${today}`;
+  const prefs = await settingsFor(conn, owners.map((o) => o.id));
+  const href = `/reports?week=${monday}`;
   const summary = `${data.totals.projects} project${data.totals.projects === 1 ? "" : "s"}: ${data.totals.completed} task${data.totals.completed === 1 ? "" : "s"} done last week, ${data.totals.blocked} blocked, ${data.totals.overdue} overdue.`;
-  await notify(conn, null, owners.map((o) => ({ userId: o.id, kind: "digest" as const, title: "Your weekly report is ready", body: summary, href })));
+  await notify(conn, null, owners.map((o) => ({ userId: o.id, kind: "report" as const, title: "Your weekly report is ready", body: summary, href })));
+  let emailed = 0;
   for (const o of owners) {
+    if (!channelOn(prefs.get(o.id)?.prefs, "report", "email")) continue;
     const content = renderEmail({ preheader: summary, heading: "Your weekly report", paragraphs: [`Hello ${o.name},`, summary], cta: { label: "Open the report", url: `${env().APP_URL}${href}` }, footnote: "The PDF is on the report page." });
-    await sendEmail({ to: o.email, subject: "Weekly report: Project Command", ...content, category: "report", urgent: false });
+    if ((await sendEmail({ to: o.email, subject: "Weekly report: Project Command", ...content, category: "report", urgent: false })) === "sent") emailed++;
   }
-  return { weekOf: today, projects: data.totals.projects, owners: owners.length };
+  await conn.update(schema.weeklyReport).set({ notifiedAt: new Date() }).where(eq(schema.weeklyReport.weekOf, monday));
+  return { weekOf: monday, projects: data.totals.projects, owners: owners.length, emailed };
 }
-

@@ -24,6 +24,7 @@ export const NOTIFY_EVENTS = [
   { kind: "expiry", label: "Permits, policies and COIs expiring", email: false },
   { kind: "file_added", label: "Files added to folders I watch", email: false },
   { kind: "digest", label: "Daily digest (7:00am)", email: true },
+  { kind: "report", label: "Weekly report (Mondays, 7:00am)", email: true, ownerOnly: true },
 ] as const;
 export type NotifyKind = (typeof NOTIFY_EVENTS)[number]["kind"] | "system";
 

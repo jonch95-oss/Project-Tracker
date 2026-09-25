@@ -131,7 +131,9 @@ export function TRPCReactProvider({ children }: { children: ReactNode }) {
     };
     const offQueue = subscribeQueue(() => queryClient.getQueryCache().getAll().forEach(overlay));
     const offCache = queryClient.getQueryCache().subscribe((e) => {
-      if (e.type === "added") queueMicrotask(() => overlay(e.query));
+      // New from the server, or replaced by a later server answer (hydration sets state directly): show what's
+      // still queued on top. The overlay's own write is a manual "success", so this never feeds itself.
+      if (e.type === "added" || (e.type === "updated" && e.action.type === "setState")) queueMicrotask(() => overlay(e.query));
     });
     queryClient.getQueryCache().getAll().forEach(overlay);
     return () => {

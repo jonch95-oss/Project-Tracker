@@ -12,6 +12,7 @@ import { Avatar } from "../ui/primitives";
 import { OfflineBar } from "./offline-bar";
 import { PushPrompt } from "./push-prompt";
 import { CommandBar, useCommandBar } from "./command-bar";
+import { warmProjectTabs } from "@/app/(app)/projects/[id]/tab-loaders";
 import {
   IconBell,
   IconLedger,
@@ -205,11 +206,17 @@ export function AppShell({
   const overflow = ordered.filter((n) => !n.mobile);
 
   const signOut = useSignOut();
-  const [searchOpen, setSearchOpen] = useCommandBar();
   const canSearch = viewer.role !== "investor";
+  const [searchOpen, setSearchOpen] = useCommandBar(canSearch);
   // The desktop rail has its own search button (⌘K); the Search screen is for the phone.
   const railItems = ordered.filter((i) => i.href !== "/search");
   const destinations = railItems.map((i) => ({ href: i.href, label: i.label, icon: i.icon }));
+  // Once any page is idle, fetch the project tabs' code too, so they open later with no signal.
+  useEffect(() => {
+    if (viewer.role === "investor") return;
+    const t = setTimeout(warmProjectTabs, 4000);
+    return () => clearTimeout(t);
+  }, [viewer.role]);
 
   return (
     <div className="min-h-dvh lg:grid lg:grid-cols-[256px_1fr]">

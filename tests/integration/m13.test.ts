@@ -164,17 +164,44 @@ describe("weekly owner report (brief §7.8)", () => {
     expect(r.totals.projects).toBeGreaterThanOrEqual(1);
   });
 
-  it("runs Monday from 7am New York only, once, and tells the owner without any figures", async () => {
-    // A Tuesday, and a Monday at 6am: nothing.
-    expect(await weeklyReportJob(new Date("2031-03-11T15:00:00Z"))).toMatchObject({ skipped: expect.any(String) });
+  it("runs from Monday 7am New York, once a week, and tells the owner without any figures", async () => {
+    // Monday at 6am: not yet.
     expect(await weeklyReportJob(new Date("2031-03-10T10:00:00Z"))).toMatchObject({ skipped: expect.any(String) });
     // Monday 8am New York (12:00 UTC in March 2031, after the DST change).
     const r = await weeklyReportJob(new Date("2031-03-10T12:00:00Z"));
     expect(r).toMatchObject({ weekOf: "2031-03-10" });
     expect(await weeklyReportJob(new Date("2031-03-10T13:00:00Z"))).toMatchObject({ skipped: "already built" });
+    // Later that week: still the same report, nothing new.
+    expect(await weeklyReportJob(new Date("2031-03-12T13:00:00Z"))).toMatchObject({ skipped: "already built" });
     const notes = await db().select().from(schema.notification).where(and(eq(schema.notification.userId, owner.id), eq(schema.notification.href, "/reports?week=2031-03-10")));
     expect(notes).toHaveLength(1);
+    expect(notes[0]!.kind).toBe("report");
     expect(`${notes[0]!.title} ${notes[0]!.body}`).not.toMatch(/\$/);
+  });
+
+  it("a Monday with no runs is built on the next run that week", async () => {
+    // Wednesday 9am New York; nothing was built for Monday 2031-03-17.
+    expect(await weeklyReportJob(new Date("2031-03-19T13:00:00Z"))).toMatchObject({ weekOf: "2031-03-17" });
+  });
+
+  it("if telling the owners failed after the report was saved, the next run tells them", async () => {
+    await saveWeeklyReport(db(), "2031-03-24", new Date("2031-03-24T12:00:00Z"));
+    const [row] = await db().select().from(schema.weeklyReport).where(eq(schema.weeklyReport.weekOf, "2031-03-24"));
+    expect(row!.notifiedAt).toBeNull();
+    expect(await weeklyReportJob(new Date("2031-03-24T13:00:00Z"))).toMatchObject({ weekOf: "2031-03-24" });
+    const notes = await db().select().from(schema.notification).where(and(eq(schema.notification.userId, owner.id), eq(schema.notification.href, "/reports?week=2031-03-24")));
+    expect(notes).toHaveLength(1);
+    const [after] = await db().select().from(schema.weeklyReport).where(eq(schema.weeklyReport.weekOf, "2031-03-24"));
+    expect(after!.notifiedAt).not.toBeNull();
+  });
+
+  it("an owner who turned the weekly email off doesn't get it", async () => {
+    const mails = async () => (await db().select().from(schema.emailOutbox).where(and(eq(schema.emailOutbox.toAddress, owner.email), eq(schema.emailOutbox.category, "report")))).length;
+    const before = await mails();
+    expect(before).toBeGreaterThan(0); // on by default: the earlier weeks were emailed
+    await db().insert(schema.notificationSettings).values({ userId: owner.id, prefs: { report: { email: false } } }).onConflictDoUpdate({ target: schema.notificationSettings.userId, set: { prefs: { report: { email: false } } } });
+    expect(await weeklyReportJob(new Date("2031-03-31T12:00:00Z"))).toMatchObject({ weekOf: "2031-03-31" });
+    expect(await mails()).toBe(before);
   });
 
   it("the owner can open saved weeks and the live report; nobody else can", async () => {

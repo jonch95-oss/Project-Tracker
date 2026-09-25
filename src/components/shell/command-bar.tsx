@@ -5,9 +5,11 @@ import { Dialog } from "../ui/overlay";
 import { SearchPanel, type Destination } from "./search-panel";
 
 /** Opens search from anywhere: ⌘K / Ctrl+K, or "/" when not typing in a field. */
-export function useCommandBar(): [boolean, (open: boolean) => void] {
+export function useCommandBar(enabled = true): [boolean, (open: boolean) => void] {
   const [open, setOpen] = useState(false);
   useEffect(() => {
+    // Without search (investors), the browser keeps its own shortcuts.
+    if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLElement && (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -20,7 +22,7 @@ export function useCommandBar(): [boolean, (open: boolean) => void] {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [enabled]);
   return [open, setOpen];
 }
 

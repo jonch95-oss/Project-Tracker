@@ -700,6 +700,7 @@ export const NOTIFICATION_KINDS = [
   "expiry",
   "file_added",
   "digest",
+  "report",
   "system",
 ] as const;
 
@@ -2091,6 +2092,8 @@ export const weeklyReport = pgTable(
     /** The Monday it covers up to (YYYY-MM-DD, New York). */
     weekOf: text("week_of").notNull(),
     generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** When the owners were told (push, in-app, email); a failure before this is retried on the next run. */
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
     data: jsonb("data").notNull(),
   },
   (t) => [uniqueIndex("weekly_report_week_idx").on(t.weekOf)],

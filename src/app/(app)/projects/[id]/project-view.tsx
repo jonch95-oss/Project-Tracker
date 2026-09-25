@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
+import { Component } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
@@ -11,6 +12,7 @@ import { IconArrowLeft } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/overlay";
 import { Badge, Button, Skeleton, StatusPill } from "@/components/ui/primitives";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
+import { tabLoaders, warmProjectTabs } from "./tab-loaders";
 import { PROJECT_TYPE_LABEL, type ProjectTypeKey } from "@/core/labels";
 import { projectProgressBps } from "@/core/phases";
 import { PROJECT_STATUS_LABEL } from "@/core/portfolio";
@@ -33,26 +35,35 @@ function TabLoading() {
     </div>
   );
 }
-const load = {
-  ActivityTab: () => import("./activity-tab"),
-  ChecklistTab: () => import("./checklist-tab"),
-  FilesTab: () => import("./files-tab"),
-  RecordsTab: () => import("./records-tab"),
-  FieldTab: () => import("./field/field-tab"),
-  UnitsTab: () => import("./units-tab"),
-  FinancialsTab: () => import("./financials-tab"),
-  KeyDatesTab: () => import("./key-dates-tab"),
-  TeamTab: () => import("./team-tab"),
-};
-const ActivityTab = dynamic(() => load.ActivityTab().then((m) => m.ActivityTab), { loading: TabLoading });
-const ChecklistTab = dynamic(() => load.ChecklistTab().then((m) => m.ChecklistTab), { loading: TabLoading });
-const FilesTab = dynamic(() => load.FilesTab().then((m) => m.FilesTab), { loading: TabLoading });
-const RecordsTab = dynamic(() => load.RecordsTab().then((m) => m.RecordsTab), { loading: TabLoading });
-const FieldTab = dynamic(() => load.FieldTab().then((m) => m.FieldTab), { loading: TabLoading });
-const UnitsTab = dynamic(() => load.UnitsTab().then((m) => m.UnitsTab), { loading: TabLoading });
-const FinancialsTab = dynamic(() => load.FinancialsTab().then((m) => m.FinancialsTab), { loading: TabLoading });
-const KeyDatesTab = dynamic(() => load.KeyDatesTab().then((m) => m.KeyDatesTab), { loading: TabLoading });
-const TeamTab = dynamic(() => load.TeamTab().then((m) => m.TeamTab), { loading: TabLoading });
+const ActivityTab = dynamic(() => tabLoaders.ActivityTab().then((m) => m.ActivityTab), { loading: TabLoading });
+const ChecklistTab = dynamic(() => tabLoaders.ChecklistTab().then((m) => m.ChecklistTab), { loading: TabLoading });
+const FilesTab = dynamic(() => tabLoaders.FilesTab().then((m) => m.FilesTab), { loading: TabLoading });
+const RecordsTab = dynamic(() => tabLoaders.RecordsTab().then((m) => m.RecordsTab), { loading: TabLoading });
+const FieldTab = dynamic(() => tabLoaders.FieldTab().then((m) => m.FieldTab), { loading: TabLoading });
+const UnitsTab = dynamic(() => tabLoaders.UnitsTab().then((m) => m.UnitsTab), { loading: TabLoading });
+const FinancialsTab = dynamic(() => tabLoaders.FinancialsTab().then((m) => m.FinancialsTab), { loading: TabLoading });
+const KeyDatesTab = dynamic(() => tabLoaders.KeyDatesTab().then((m) => m.KeyDatesTab), { loading: TabLoading });
+const TeamTab = dynamic(() => tabLoaders.TeamTab().then((m) => m.TeamTab), { loading: TabLoading });
+
+/** A tab whose code couldn't load (no signal, or the app was updated meanwhile): say so and offer a reload. */
+class TabBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div role="alert" className="rounded-card border border-border bg-surface p-8 text-center">
+        <p className="font-medium">This section didn&apos;t load.</p>
+        <p className="mt-2 text-sm text-muted">It needs a connection the first time. Check your signal, then reload.</p>
+        <Button className="mt-4" variant="secondary" onClick={() => window.location.reload()}>
+          Reload
+        </Button>
+      </div>
+    );
+  }
+}
 
 type Project = RouterOutputs["projects"]["get"];
 const UNIT_TYPES = new Set(["ground_up_condo", "condo_conversion", "gut_renovation"]);
@@ -67,8 +78,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
   const pathname = usePathname();
   const [editing, setEditing] = useState(false);
   useEffect(() => {
-    const warm = () => Object.values(load).forEach((l) => void l().catch(() => undefined));
-    const t = setTimeout(warm, 2500);
+    const t = setTimeout(warmProjectTabs, 2500);
     return () => clearTimeout(t);
   }, []);
   const requested = params.get("tab");
@@ -160,6 +170,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
       <Tabs<TabKey> idBase="project-tabs" label="Project sections" className="mt-10" value={tab} onChange={(k) => setTab(k)} items={tabs} />
 
       <TabPanel idBase="project-tabs" tab={tab} className="mt-8 focus-visible:outline-offset-8">
+        <TabBoundary key={tab}>
         {tab === "overview" ? (
           <Overview project={p} viewerId={viewerId} onOpenTask={(id) => setTab("checklist", undefined, id)} onOpenDates={() => setTab("dates")} />
         ) : tab === "checklist" ? (
@@ -188,6 +199,7 @@ export function ProjectView({ projectId, viewerId }: { projectId: string; viewer
         ) : tab === "records" ? (
           <RecordsTab projectId={projectId} onOpenTask={(id) => setTab("checklist", undefined, id)} />
         ) : null}
+        </TabBoundary>
       </TabPanel>
 
       {p.access.canEdit && <EditProjectDialog project={p} open={editing} onClose={() => setEditing(false)} />}

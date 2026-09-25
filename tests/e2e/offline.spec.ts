@@ -51,7 +51,7 @@ async function saved(page: Page, url: string) {
     .poll(
       async () =>
         page.evaluate(
-          async (u) => !!(await (await caches.open("pc-pages-v2")).match(u)),
+          async (u) => !!(await (await caches.open("pc-pages-v3")).match(u)),
           path,
         ),
       { timeout: 20_000 },
@@ -262,8 +262,11 @@ test("iPhone offline: opening the app from its icon with no signal shows the per
   await page.goto("/");
   await expect(page).toHaveURL(/\/portfolio$/);
   await expect(page.getByRole("heading", { name: "Macon Street Auction" })).toBeVisible();
-  await expect.poll(async () => page.evaluate(async () => !!(await (await caches.open("pc-pages-v2")).match(location.origin + "/portfolio"))), { timeout: 20_000 }).toBe(true);
+  await expect.poll(async () => page.evaluate(async () => !!(await (await caches.open("pc-pages-v3")).match(location.origin + "/portfolio"))), { timeout: 20_000 }).toBe(true);
   await expect.poll(async () => page.evaluate(async () => (await (await caches.open("pc-meta")).match("/__home"))?.text() ?? null), { timeout: 20_000 }).toBe("/portfolio");
+  // The live page brings its data with it; the copy kept on the phone is the shell only (the app keeps data by its own rules).
+  expect(await (await page.request.get("/portfolio")).text()).toContain("dehydratedAt");
+  expect(await page.evaluate(async () => (await (await (await caches.open("pc-pages-v3")).match(location.origin + "/portfolio"))!.text()).includes("dehydratedAt"))).toBe(false);
 
   // …and the portfolio's data is saved on the phone a few seconds after it loads.
   await expect

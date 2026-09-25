@@ -2,7 +2,7 @@
  * Project Command service worker.
  * - Web push (brief §9).
  * - Opening the iPhone app with no connection (brief §12): the app's page
- *   shells and its script and style files are saved as they're used, and a
+ *   shells (fetched without their data) and its script and style files are saved as they're used, and a
  *   saved page is shown only when the network fails (never instead of a live
  *   answer). The data itself is kept by the app per person (see
  *   src/lib/offline-cache.ts), not here.
@@ -11,7 +11,7 @@
  */
 
 const STATIC = "pc-static-v2";
-const PAGES = "pc-pages-v2";
+const PAGES = "pc-pages-v3";
 const META = "pc-meta";
 const PRIVATE = [PAGES];
 const OFFLINE_PAGE = "/offline.html";
@@ -126,7 +126,8 @@ async function page(event, url) {
   try {
     const res = await fetch(event.request);
     if (sessionEnded(res)) event.waitUntil(clearPrivate());
-    else if (keepable(res)) event.waitUntil(storePage(pageKey(url), res.clone()).catch(() => undefined));
+    // The live page carries its data; the copy kept on the phone is fetched separately, without it.
+    else if (keepable(res)) event.waitUntil(savePageFor(url).catch(() => undefined));
     return res;
   } catch {
     const pages = await caches.open(PAGES);
@@ -153,7 +154,10 @@ async function savePageFor(url) {
   const saved = await caches.open(PAGES).then((c) => c.match(key));
   const at = saved ? Date.parse(saved.headers.get("date") || "") : NaN;
   if (saved && Number.isFinite(at) && Date.now() - at < PAGE_RESAVE_MS) return;
-  const res = await fetch(url.href, { credentials: "same-origin", headers: { Accept: "text/html" }, redirect: "manual" });
+  // "Shell only": the server leaves out the data it would otherwise send with the page (see
+  // src/server/trpc/prefetch.tsx), so nothing a screen shows (money on a report, the team list)
+  // is kept inside a saved page. The app keeps its own data, by its own rules.
+  const res = await fetch(url.href, { credentials: "same-origin", headers: { Accept: "text/html", "X-PC-Shell": "1" }, redirect: "manual" });
   if (sessionEnded(res)) return clearPrivate();
   if (keepable(res)) await storePage(key, res);
 }
